@@ -1,0 +1,26 @@
+# dshui overlay for the dsh web profile (passed via `dsh --patch`).
+#
+# Replaces the stock workspace browser and conversation plugins with the
+# dshui builds, and mounts the dshui host plugin that registers the boot
+# working directory (the VS Code workspace) as a durable dsh Workspace and
+# publishes it to the browser as `window.__DSHUI_WORKSPACE__`.
+#
+# Patches cannot rename a row (a name mismatch is skipped), so the stock rows
+# are disabled and fresh rows under the dshui package names are inserted.
+# The bare package names resolve through `$DSH_HOME/profiles/node_modules`,
+# which the extension populates on activation.
+- id: ui-workspace
+  disabled: true
+
+- id: ui-conversation
+  disabled: true
+
+- insert:
+    - id: ui-workspace-dshui
+      name: dshui-client-ui-workspace
+
+    - id: ui-conversation-dshui
+      name: dshui-client-ui-conversation
+
+    - id: dshui-host-ensure-workspace
+      name: dshui-host-ensure-workspace

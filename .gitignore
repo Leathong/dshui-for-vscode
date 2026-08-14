@@ -1,0 +1,7 @@
+node_modules/
+.pnpm-store/
+out/
+.dsh-src/
+.tools/
+*.vsix
+.DS_Store

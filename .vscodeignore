@@ -1,0 +1,11 @@
+# Development-only trees and files that must not ship in the vsix.
+.dsh-src/**
+.tools/**
+.pnpm-store/**
+.git/**
+**/*.map
+node_modules/.cache/**
+node_modules/typescript/**
+node_modules/@types/**
+# Keep: out/ (compiled extension), dshui-plugins/ (dshui plugin packages),
+# patch.yml, scripts/, media/, README.md, and node_modules/ (the bundled dsh runtime).

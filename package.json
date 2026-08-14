@@ -1,0 +1,92 @@
+{
+  "name": "dshui-for-vscode",
+  "displayName": "dsh UI for VS Code",
+  "description": "The DeepSeek Harness (dsh) web UI embedded in VS Code, scoped to the workspace you have open. No workspace selection: the opened folder IS the dsh workspace, the sidebar lists only its sessions, and the input box always stays at the bottom.",
+  "version": "0.1.0",
+  "publisher": "dshui",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "agent",
+    "chat"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "dshui",
+          "title": "dsh",
+          "icon": "media/dshui.svg"
+        }
+      ]
+    },
+    "views": {
+      "dshui": [
+        {
+          "type": "webview",
+          "id": "dshui.view",
+          "name": "dsh",
+          "icon": "media/dshui.svg"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "dshui.open",
+        "title": "dsh UI: Open",
+        "category": "dsh UI"
+      },
+      {
+        "command": "dshui.openInBrowser",
+        "title": "dsh UI: Open in Browser",
+        "category": "dsh UI"
+      }
+    ],
+    "configuration": {
+      "title": "dsh UI",
+      "properties": {
+        "dshui.autoOpen": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically open the dsh UI panel when a folder is opened."
+        },
+        "dshui.server.port": {
+          "type": "number",
+          "default": 0,
+          "minimum": 0,
+          "maximum": 65535,
+          "description": "Port for the embedded dsh web server. 0 lets the OS pick a free port (default). When set to a fixed number, the same port is reused for this workspace so browser-side state (localStorage) persists across sessions."
+        },
+        "dshui.openFilesInVscode": {
+          "type": "boolean",
+          "default": true,
+          "description": "Open files clicked in the dsh UI inside the current VS Code window (via the vscode://file scheme) instead of the OS default editor."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "copy:clients": "node scripts/copy-clients.mjs",
+    "vscode:prepublish": "npm run compile && npm run copy:clients"
+  },
+  "dependencies": {
+    "@deepseek-ai/dsh": "0.1.0-rc.6"
+  },
+  "devDependencies": {
+    "@types/node": "^26.2.0",
+    "@types/vscode": "^1.85.0",
+    "typescript": "^7.0.2"
+  }
+}
