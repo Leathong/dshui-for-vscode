@@ -14,10 +14,13 @@
 #   make clean      清理 out/ 与 vsix
 #   make help       列出目标
 
-VERSION := $(shell node -p "require('./package.json').version")
-VSIX    := dshui-for-vscode-$(VERSION).vsix
-EXT_ID  := dshui.dshui-for-vscode
-EXT_DIR := $(HOME)/.vscode/extensions/$(EXT_ID)-$(VERSION)
+# 以下均从 package.json 动态读取，改 publisher/name/version 后无需改 Makefile。
+NAME      := $(shell node -p "require('./package.json').name")
+VERSION   := $(shell node -p "require('./package.json').version")
+PUBLISHER := $(shell node -p "require('./package.json').publisher")
+VSIX      := $(NAME)-$(VERSION).vsix
+EXT_ID    := $(PUBLISHER).$(NAME)
+EXT_DIR   := $(HOME)/.vscode/extensions/$(EXT_ID)-$(VERSION)
 
 # vsce 工具：优先用全局安装的 vsce；否则退回 npx（首次自动下载）。
 # npx 的下载缓存独立放在 VSCE_CACHE（默认 ~/.cache/dshui-vsce），
@@ -27,13 +30,12 @@ VSCE      ?= $(shell command -v vsce 2>/dev/null || echo "npx --cache $(VSCE_CAC
 OVSX      ?= $(shell command -v ovsx 2>/dev/null || echo "npx --cache $(VSCE_CACHE) --yes ovsx")
 
 # 发布相关参数（均可通过命令行覆盖：make publish BUMP=minor VSCE_PAT=...）
-PUBLISHER := $(shell node -p "require('./package.json').publisher")
 BUMP      ?=                   # 非空（patch|minor|major）才递增版本；默认空 = 不递增，直接发布当前版本
 NO_GIT_TAG ?=                  # 非空则跳过 git 提交与 tag（工作树不干净时用）
 SKIP_DUPLICATE ?=              # 非空则版本已存在于市场时静默跳过（--skip-duplicate）
 
 .PHONY: all deploy package install compile sync clean help \
-        login publish publish-vsix publish-ovsx unpublish
+        login verify-pat publish publish-vsix publish-ovsx unpublish
 
 all: deploy
 
@@ -60,6 +62,11 @@ deploy: install
 #   https://code.visualstudio.com/api/working-with-extensions/publishing-extension
 login:
 	$(VSCE) login $(PUBLISHER)
+
+# 校验 PAT 是否有效（用已存储凭据，或临时用 VSCE_PAT=xxx make verify-pat）。
+# 发布前先跑一次，避免发布时才撞上过期 token。
+verify-pat:
+	$(VSCE) verify-pat $(PUBLISHER) $(if $(VSCE_PAT),-p '$(VSCE_PAT)')
 
 # 发布到 VS Code 市场：默认不递增版本，直接打包并发布当前 package.json 版本。
 # 需要递增时显式指定 BUMP=patch|minor|major，vsce 会先递增 package.json 版本、
@@ -114,6 +121,7 @@ help:
 	@echo "  make compile    只编译 TypeScript"
 	@echo "  make sync       快速同步运行产物到已安装副本（免打包）"
 	@echo "  make login      登录 VS Code 市场（发布前一次性操作，或导出 VSCE_PAT）"
+	@echo "  make verify-pat 校验 PAT 是否有效（发布前建议先跑）"
 	@echo "  make publish    发布到 VS Code 市场（默认不递增版本，BUMP=patch|minor|major 时递增）"
 	@echo "  make publish-vsix   直接上传当前 vsix（不递增版本）"
 	@echo "  make publish-ovsx   发布到 Open VSX 市场（需 OVSX_TOKEN）"
