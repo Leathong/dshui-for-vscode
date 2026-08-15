@@ -20,7 +20,35 @@ const CHECKS = [
   },
   {
     file: 'packages/client/ui-workspace/src/client/WorkspaceBrowser.tsx',
-    markers: ["const SCOPE = scopedWorkspacePath()", 'SCOPE === \'\' && directoryFlowAvailable', "SCOPE !== '' && !wide ? null"],
+    markers: ["const SCOPE = scopedWorkspacePath()", 'SCOPE === \'\' && directoryFlowAvailable', "SCOPE !== '' && !wide ? null", 'onSessionDelete', 'deletedSessionIds'],
+  },
+  {
+    file: 'packages/client/ui-workspace/src/client/contract/slots.ts',
+    markers: ['deleteSession: (sessionId: SessionId) => Promise<void>'],
+  },
+  {
+    file: 'packages/client/ui-workspace/src/client/index.ts',
+    markers: ["type: 'dshui:deleteSession'", 'requestSessionDelete'],
+  },
+  {
+    file: 'packages/client/ui-workspace/src/client/rows/Rows.tsx',
+    markers: ["t('menu.deleteSession')", "onDelete: (id: SessionNode['id']) => void"],
+  },
+  {
+    file: 'packages/client/ui-workspace/src/client/locales.ts',
+    markers: ["'menu.deleteSession': '删除会话'"],
+  },
+  {
+    file: 'packages/client/ui-workspace/tests/rows.client.spec.tsx',
+    markers: ["name: '删除会话'"],
+  },
+  {
+    file: 'packages/client/ui-workspace/tests/workspace-browser.client.spec.tsx',
+    markers: ['deleteSession'],
+  },
+  {
+    file: 'packages/client/ui-workspace/tests/tree.client.spec.ts',
+    markers: ["deleted('gone')"],
   },
   {
     file: 'packages/client/ui-workspace/tsdown.config.ts',

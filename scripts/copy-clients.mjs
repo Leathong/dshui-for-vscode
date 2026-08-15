@@ -21,6 +21,11 @@ for (const [packageDir, pluginName] of copies) {
   const from = path.join(src, packageDir, 'lib', 'client.js')
   const to = path.join(root, 'dshui-plugins', pluginName, 'client.js')
   if (!fs.existsSync(from)) {
+    if (!fs.existsSync(path.join(root, '.dsh-src'))) {
+      // 全新克隆没有 .dsh-src（不入库）：使用随包提交的预编译 bundle，跳过即可。
+      console.warn(`skipping ${pluginName}: no .dsh-src checkout (using the committed dshui-plugins bundle)`)
+      continue
+    }
     console.error(`missing built bundle: ${from} (run pnpm run build:lib:client in .dsh-src first)`)
     process.exit(1)
   }

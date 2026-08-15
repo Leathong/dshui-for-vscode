@@ -4,7 +4,16 @@
   "description": "The DeepSeek Harness (dsh) web UI embedded in VS Code, scoped to the workspace you have open. No workspace selection: the opened folder IS the dsh workspace, the sidebar lists only its sessions, and the input box always stays at the bottom.",
   "version": "0.1.0",
   "publisher": "dshui",
+  "author": "Leathong",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/leathong/dshui-for-vscode.git"
+  },
+  "homepage": "https://github.com/leathong/dshui-for-vscode",
+  "bugs": {
+    "url": "https://github.com/leathong/dshui-for-vscode/issues"
+  },
   "engines": {
     "vscode": "^1.85.0"
   },
@@ -44,15 +53,66 @@
     "commands": [
       {
         "command": "dshui.open",
-        "title": "dsh UI: Open",
+        "title": "Open",
         "category": "dsh UI"
       },
       {
         "command": "dshui.openInBrowser",
-        "title": "dsh UI: Open in Browser",
+        "title": "Open in Browser",
         "category": "dsh UI"
+      },
+      {
+        "command": "dshui.referenceFile",
+        "title": "Reference File",
+        "category": "dsh UI"
+      },
+      {
+        "command": "dshui.referenceSelection",
+        "title": "Reference Selection",
+        "category": "dsh UI"
+      },
+      {
+        "command": "dshui.restartServer",
+        "title": "Restart Server",
+        "category": "dsh UI",
+        "icon": "$(refresh)"
       }
     ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "dshui.restartServer",
+          "when": "view == dshui.view",
+          "group": "navigation"
+        }
+      ],
+      "editor/title/context": [
+        {
+          "command": "dshui.referenceFile",
+          "when": "resourceScheme == file && workspaceFolderCount > 0",
+          "group": "navigation"
+        }
+      ],
+      "explorer/context": [
+        {
+          "command": "dshui.referenceFile",
+          "when": "resourceScheme == file && !explorerResourceIsFolder && workspaceFolderCount > 0",
+          "group": "navigation"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "dshui.referenceSelection",
+          "when": "editorHasSelection && resourceScheme == file && workspaceFolderCount > 0",
+          "group": "navigation"
+        },
+        {
+          "command": "dshui.referenceFile",
+          "when": "resourceScheme == file && workspaceFolderCount > 0",
+          "group": "navigation"
+        }
+      ]
+    },
     "configuration": {
       "title": "dsh UI",
       "properties": {
@@ -63,15 +123,20 @@
         },
         "dshui.server.port": {
           "type": "number",
-          "default": 0,
+          "default": 61370,
           "minimum": 0,
           "maximum": 65535,
-          "description": "Port for the embedded dsh web server. 0 lets the OS pick a free port (default). When set to a fixed number, the same port is reused for this workspace so browser-side state (localStorage) persists across sessions."
+          "description": "Port for the embedded dsh web server. Defaults to a fixed port (61370) that doubles as the shared-backend rendezvous: all windows reuse ONE server, each scoped to its own workspace, and the same origin keeps browser-side state (localStorage, including the last opened session) across launches. Set to 0 to let the OS pick a free port (no sharing, no persistence)."
         },
         "dshui.openFilesInVscode": {
           "type": "boolean",
           "default": true,
           "description": "Open files clicked in the dsh UI inside the current VS Code window (via the vscode://file scheme) instead of the OS default editor."
+        },
+        "dshui.checkDshUpdates": {
+          "type": "boolean",
+          "default": true,
+          "description": "Check the npm registry for newer @deepseek-ai/dsh releases at startup and notify when the bundled version is outdated. Throttled to once per 24h; each new version is announced once."
         }
       }
     }

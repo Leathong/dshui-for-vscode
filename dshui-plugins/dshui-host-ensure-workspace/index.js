@@ -7,21 +7,110 @@
  * bootstrapping.
  *
  * Also injects into the served index page:
- * - the workspace path as `window.__DSHUI_WORKSPACE__` (the browser bundles
- *   read that global, falling back to the `dshui_workspace` URL query
- *   parameter, so the scope survives any client-side routing);
+ * - the workspace path as `window.__DSHUI_WORKSPACE__`, per connection: the
+ *   `dshui_workspace` URL query wins, falling back to the boot working
+ *   directory — with a shared backend every window carries its own folder in
+ *   the query, so the scope is right for each window (the bundles read the
+ *   global, so the scope survives client-side routing);
  * - the `CSS_OVERRIDES` style sheet (zero-rebuild visual seam);
  * - a clipboard/keyboard patch for the VS Code webview-iframe limitation
  *   (microsoft/vscode#129178, #180234): the workbench intercepts
  *   Cmd/Ctrl+C/V/X/A/Z for webview content and `navigator.clipboard` never
  *   settles there, so the page handles those shortcuts itself via
  *   `document.execCommand` and shims `navigator.clipboard.writeText` with
- *   the execCommand path.
+ *   the execCommand path;
+ * - a VS Code theme intake (THEME_PATCH): the dsh theme system resolves its
+ *   `system` preference via `prefers-color-scheme`, which in a webview iframe
+ *   follows the OS rather than VS Code. The patch shadows `matchMedia` for
+ *   that one query with a synthetic list driven by the VS Code color scheme —
+ *   seeded from the `dshui_theme` URL query (the extension writes the current
+ *   theme into every view URL) and updated live by { type: 'dshui:theme' }
+ *   messages the extension posts on every theme change (relayed by the
+ *   webview shell) — so `system` follows the VS Code theme, not the OS;
+ * - a Cmd/Ctrl+N new-conversation patch: the workbench would otherwise take
+ *   the chord for New Window, so the page intercepts it and clicks the
+ *   sidebar New Session button instead (startSession in the scoped
+ *   workspace, no picker);
+ * - shared-backend coordination (filesystem IPC with the extension hosts):
+ *   polls workspace-registration markers (`$DSH_HOME/dshui-workspaces/`) so
+ *   non-owner windows' folders become Workspaces, and self-exits once the
+ *   lifecycle registry (`$DSH_HOME/dshui-server.json`) holds no live window
+ *   pids — a detached server outlives its spawning window but never lingers
+ *   after the last window closes.
  */
+import * as fs from 'node:fs'
+import * as os from 'node:os'
+import * as path from 'node:path'
+
 export const name = 'dshui-host-ensure-workspace'
 
 /** Required services: the durable workspace entity registry and the HTTP server. */
 export const inject = ['workspaceRegistry', 'webServer']
+
+// ── 共享后端协调（见文件头注释）──
+const SHARED_POLL_MS = 2000
+/** 连续多少次轮询没有存活用户才自退出（吸收窗口重载的短暂空窗）。 */
+const SELF_EXIT_GRACE_POLLS = 5
+
+const dshHome = process.env.DSH_HOME || path.join(os.homedir(), '.dsh')
+const markersDir = path.join(dshHome, 'dshui-workspaces')
+const registryFile = path.join(dshHome, 'dshui-server.json')
+
+function isAlive(pid) {
+  if (typeof pid !== 'number' || pid <= 0) return false
+  try { process.kill(pid, 0); return true } catch (error) { return error !== null && error !== undefined && error.code === 'EPERM' }
+}
+
+const markerAttempts = new Map()
+
+/** 处理工作区注册 marker：workspaceRegistry.create 成功后删除，失败有限重试。 */
+function processMarkers(ctx) {
+  let files
+  try { files = fs.readdirSync(markersDir) } catch { return /* 目录尚不存在 */ }
+  for (const file of files) {
+    if (!file.endsWith('.json')) continue
+    const full = path.join(markersDir, file)
+    let parsed
+    try { parsed = JSON.parse(fs.readFileSync(full, 'utf8')) } catch { fs.rmSync(full, { force: true }); continue }
+    if (parsed === null || typeof parsed !== 'object' || typeof parsed.path !== 'string' || parsed.path === '') {
+      fs.rmSync(full, { force: true })
+      continue
+    }
+    ctx.workspaceRegistry.create(parsed.path).then(() => {
+      markerAttempts.delete(file)
+      fs.rmSync(full, { force: true })
+      console.log(`[dshui] registered shared workspace: ${parsed.path}`)
+    }).catch((error) => {
+      // 保留 marker 持续重试（注册表可能还在引导）；只在首次失败时警告一次。
+      const attempts = (markerAttempts.get(file) ?? 0) + 1
+      if (attempts === 1) {
+        console.warn(`[dshui] shared workspace registration pending for ${parsed.path}: ${String(error)}`)
+      }
+      markerAttempts.set(file, attempts)
+    })
+  }
+}
+
+let emptyPolls = 0
+
+/** 生命周期自检：注册表里没有存活窗口 pid 时自退出（最后窗口关闭后收尾）。 */
+function checkLiveness() {
+  let raw
+  try { raw = fs.readFileSync(registryFile, 'utf8') } catch { emptyPolls = 0; return }
+  let registry
+  try { registry = JSON.parse(raw) } catch { emptyPolls = 0; return }
+  if (registry === null || typeof registry !== 'object' || !Array.isArray(registry.users)) { emptyPolls = 0; return }
+  const live = registry.users.filter(isAlive)
+  if (live.length === 0) {
+    emptyPolls += 1
+    if (emptyPolls >= SELF_EXIT_GRACE_POLLS) {
+      console.log('[dshui] no live windows using the shared server; exiting')
+      process.exit(0)
+    }
+  } else {
+    emptyPolls = 0
+  }
+}
 
 /**
  * Extra CSS applied to the dsh web UI, injected as a <style> tag with the
@@ -163,6 +252,165 @@ const CLIPBOARD_PATCH = `<script>
 })();
 <\/script>`
 
+/**
+ * Cmd/Ctrl+N new-conversation patch. VS Code's workbench owns the chord
+ * (New Window), so the page must intercept it first — same capture-phase
+ * technique as the clipboard patch — and click the sidebar's New Session
+ * button (aria-label `新建会话`, rendered in both sidebar states) to run the
+ * SPA's own `startSession` flow, which creates the session in the scoped
+ * workspace without a picker. Bare Cmd/Ctrl+N is always swallowed here (no
+ * accidental New Window while the dsh view is focused); held-key repeats are
+ * ignored so one press cannot open several sessions. While the SPA is still
+ * booting there is no button yet, so the key is a no-op.
+ */
+const NEW_SESSION_PATCH = `<script>
+(function () {
+  window.addEventListener('keydown', function (event) {
+    var meta = event.metaKey || event.ctrlKey;
+    if (!meta) return;
+    var key = event.key.toLowerCase();
+    if (key !== 'n' || event.shiftKey || event.altKey || event.repeat) return;
+    event.preventDefault();
+    event.stopPropagation();
+    var button = document.querySelector('button[aria-label="新建会话"]');
+    if (button !== null) button.click();
+  }, true);
+})();
+<\/script>`
+
+/**
+ * Composer reference intake. The extension's context-menu commands
+ * (dshui.referenceFile / dshui.referenceSelection) post a
+ * { type: 'dshui:reference', text } message to the webview shell, which
+ * relays it into this iframe. The composer draft is React-controlled (the
+ * input machine owns it), so the text is written with the native textarea
+ * value setter followed by an 'input' event — the same path as user typing —
+ * which updates the machine draft and its backdrop mirror. The composer can
+ * be absent (SPA still booting) or read-only (busy/submitting), so inbound
+ * texts queue and drain once a writable composer exists (capped, so a
+ * permanently unusable composer cannot spin forever). The ready handshake
+ * tells the shell this listener is live, so references posted while the page
+ * loaded are flushed instead of dropped.
+ */
+const REFERENCE_PATCH = `<script>
+(function () {
+  var pending = [];
+  var retries = 0;
+  function insertInto(textarea, text) {
+    var draft = textarea.value;
+    var sep = draft !== '' && !draft.endsWith('\\n') ? '\\n' : '';
+    var next = draft + sep + text;
+    var setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set;
+    setter.call(textarea, next);
+    textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    try {
+      textarea.focus();
+      var end = next.length;
+      textarea.setSelectionRange(end, end);
+    } catch (error) { /* focus/selection are best-effort */ }
+  }
+  function drain() {
+    if (pending.length === 0) return;
+    var card = document.querySelector('[data-composer-card]');
+    var textarea = card === null ? null : card.querySelector('textarea');
+    if (textarea !== null && !textarea.disabled && !textarea.readOnly) {
+      pending.forEach(function (text) { insertInto(textarea, text); });
+      pending = [];
+      retries = 0;
+      return;
+    }
+    retries += 1;
+    if (retries > 100) { pending = []; retries = 0; return; }
+    setTimeout(drain, 100);
+  }
+  window.addEventListener('message', function (event) {
+    if (event.source !== window.parent) return;
+    var data = event.data;
+    if (data === null || typeof data !== 'object' || data.type !== 'dshui:reference') return;
+    if (typeof data.text !== 'string' || data.text === '') return;
+    pending.push(data.text);
+    drain();
+  });
+  window.parent.postMessage({ type: 'dshui:ready' }, '*');
+})();
+<\/script>`
+
+/**
+ * VS Code theme intake (see the file header). The dsh theme system resolves
+ * its `system` preference through `prefers-color-scheme`, which in a webview
+ * iframe follows the OS instead of VS Code. This script shadows `matchMedia`
+ * for exactly that query with a synthetic list driven by the VS Code color
+ * scheme, so the SPA keeps working unchanged — boot-theme and ui-theme's
+ * ThemeRuntime both read through the shadow, and the synthetic list fires
+ * `change` when VS Code's theme flips while the preference is `system`.
+ * The scheme comes from the `dshui_theme` URL query at boot (the extension
+ * writes the current theme into every view URL) and from
+ * { type: 'dshui:theme', colorScheme } messages afterwards (relayed by the
+ * webview shell; re-sent on SPA readiness). Any other matchMedia query, or a
+ * page without both the query and the messages (e.g. opened in a browser via
+ * dshui.openInBrowser), falls back to the real implementation — the OS scheme.
+ */
+const THEME_PATCH = `<script>
+(function () {
+  var QUERY = '(prefers-color-scheme: dark)';
+  var realMatchMedia = typeof window.matchMedia === 'function' ? window.matchMedia.bind(window) : null;
+  var scheme = (new URLSearchParams(window.location.search).get('dshui_theme')) || null;
+  if (scheme !== 'dark' && scheme !== 'light') scheme = null;
+  var listeners = [];
+  var lastMatches = null;
+
+  function dark() {
+    if (scheme !== null) return scheme === 'dark';
+    return realMatchMedia === null ? false : realMatchMedia(QUERY).matches;
+  }
+
+  function fire() {
+    var matches = dark();
+    if (matches === lastMatches) return;
+    lastMatches = matches;
+    var event = { matches: matches, media: QUERY };
+    for (var i = 0; i < listeners.length; i += 1) {
+      try { listeners[i](event); } catch (error) { /* 单个监听器出错不阻断主题中继 */ }
+    }
+  }
+
+  window.matchMedia = function (query) {
+    if (query !== QUERY) {
+      return realMatchMedia === null
+        ? { matches: false, media: query, onchange: null, addEventListener: function () {}, removeEventListener: function () {}, addListener: function () {}, removeListener: function () {}, dispatchEvent: function () { return true; } }
+        : realMatchMedia(query);
+    }
+    return {
+      media: QUERY,
+      get matches() { return dark(); },
+      onchange: null,
+      addEventListener: function (type, fn) {
+        if (type !== 'change' || typeof fn !== 'function') return;
+        if (listeners.indexOf(fn) === -1) listeners.push(fn);
+      },
+      removeEventListener: function (type, fn) {
+        if (type !== 'change') return;
+        var at = listeners.indexOf(fn);
+        if (at !== -1) listeners.splice(at, 1);
+      },
+      addListener: function (fn) { this.addEventListener('change', fn); },
+      removeListener: function (fn) { this.removeEventListener('change', fn); },
+      dispatchEvent: function () { return true; }
+    };
+  };
+
+  window.addEventListener('message', function (event) {
+    if (event.source !== window.parent) return;
+    var data = event.data;
+    if (data === null || typeof data !== 'object' || data.type !== 'dshui:theme') return;
+    if (data.colorScheme !== 'dark' && data.colorScheme !== 'light') return;
+    if (scheme === data.colorScheme) return;
+    scheme = data.colorScheme;
+    fire();
+  });
+})();
+<\/script>`
+
 export function apply(ctx) {
   const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
   const ensure = async () => {
@@ -185,10 +433,26 @@ export function apply(ctx) {
   const style = CSS_OVERRIDES.trim() === '' ? '' : `<style>${CSS_OVERRIDES}</style>`
   ctx.effect(
     () => ctx.webServer.tapIndex((html) => {
-      const injected = `${style}${CLIPBOARD_PATCH}<script>window.__DSHUI_WORKSPACE__ = ${scopeJson}<\/script>`
+      // 作用域按连接解析：URL 查询参数优先（每个窗口自己的 folder），
+      // 无查询时退回启动工作目录。
+      const injected = `${style}${CLIPBOARD_PATCH}${NEW_SESSION_PATCH}${THEME_PATCH}${REFERENCE_PATCH}<script>window.__DSHUI_WORKSPACE__ = (new URLSearchParams(window.location.search).get('dshui_workspace')) || ${scopeJson}<\/script>`
       const head = html.indexOf('<head>')
       return head === -1 ? `${injected}${html}` : `${html.slice(0, head + 6)}${injected}${html.slice(head + 6)}`
     }),
-    'dshui: workspace scope + css + clipboard patch index injection',
+    'dshui: workspace scope + css + clipboard + theme + reference intake index injection',
+  )
+
+  // 共享后端轮询：处理工作区注册 marker + 生命周期自检。
+  ctx.effect(
+    () => {
+      const timer = setInterval(() => {
+        processMarkers(ctx)
+        checkLiveness()
+      }, SHARED_POLL_MS)
+      processMarkers(ctx)
+      checkLiveness()
+      return () => { clearInterval(timer) }
+    },
+    'dshui: shared-backend workspace markers + lifecycle self-check',
   )
 }

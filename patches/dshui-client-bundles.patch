@@ -1,0 +1,1261 @@
+diff --git a/packages/client/ui-conversation/src/client/skeleton/ConversationRoot.module.css b/packages/client/ui-conversation/src/client/skeleton/ConversationRoot.module.css
+index 6146d42810..ebdac94c44 100644
+--- a/packages/client/ui-conversation/src/client/skeleton/ConversationRoot.module.css
++++ b/packages/client/ui-conversation/src/client/skeleton/ConversationRoot.module.css
+@@ -358,6 +358,13 @@
+   overflow-y: auto;
+ }
+ 
++/* dshui scope: no centered hero chrome — the input card is pinned to the
++   bottom of the column in the hero phase too, so the input box always sits
++   at the very bottom. */
++.root[data-dshui-scope='true'][data-phase='hero'] .scrollBody {
++  justify-content: flex-end;
++}
++
+ /* Settling (session replaying, hero/docked unknown): keep the composer seat
+    mounted but invisible so no wrong layout flashes before the phase lands. */
+ .root[data-phase='settling'] .composerSeat {
+diff --git a/packages/client/ui-conversation/src/client/skeleton/ConversationRoot.tsx b/packages/client/ui-conversation/src/client/skeleton/ConversationRoot.tsx
+index ef1221cd99..5150221057 100644
+--- a/packages/client/ui-conversation/src/client/skeleton/ConversationRoot.tsx
++++ b/packages/client/ui-conversation/src/client/skeleton/ConversationRoot.tsx
+@@ -9,6 +9,21 @@ import type { ConversationSlotProps, InputZone } from '../contract/slots.ts'
+ import { HeroGlow, HeroShell, WorkspaceChip, workspaceLabel } from './EmptyHero.tsx'
+ import css from './ConversationRoot.module.css'
+ 
++/**
++ * The dshui workspace scope: the VS Code workspace root published by the
++ * dshui host plugin as `window.__DSHUI_WORKSPACE__` (with a fallback to the
++ * boot URL's `dshui_workspace` query parameter). When set, the conversation
++ * treats that Workspace as fixed: no picker, hero chrome pinned to the
++ * bottom like the docked composer.
++ */
++const SCOPE = ((): string => {
++  const global = (window as unknown as { __DSHUI_WORKSPACE__?: unknown }).__DSHUI_WORKSPACE__
++  const fromGlobal = typeof global === 'string' ? global : ''
++  const value = fromGlobal !== '' ? fromGlobal : (new URLSearchParams(window.location.search).get('dshui_workspace') ?? '')
++  if (value === '') return ''
++  try { return decodeURIComponent(value) } catch { return value }
++})()
++
+ /** Full props composed from the slot contract. */
+ export type ConversationRootProps = ConversationSlotProps
+ 
+@@ -54,6 +69,9 @@ export function ConversationRoot({
+   const pendingWorkspace = workspaces.items.find(
+     workspace => workspace.workspaceId === pendingWorkspaceId,
+   )
++  const scopedWorkspace = SCOPE === ''
++    ? undefined
++    : workspaces.items.find(workspace => workspace.path === SCOPE)
+ 
+   // Clear the pending pick once the session lands in it, or when the picked
+   // workspace disappears from a ready list (deleted from the sidebar).
+@@ -89,24 +107,30 @@ export function ConversationRoot({
+   //      flash on refresh (empty cwd → placeholder);
+   //   5. list ready but no owning workspace (deleted from the sidebar) →
+   //      placeholder, never the deleted folder's name via cwd.
+-  const chipTitle = pendingWorkspace?.title
+-    ?? (sessionId === undefined
+-      ? undefined
+-      : sessionWorkspace?.title
+-        ?? (workspaces.phase === 'ready' || cwd === undefined || cwd === ''
+-          ? undefined
+-          : workspaceLabel(cwd)))
++  // Under the dshui scope the workspace is fixed: the chip always shows the
++  // scoped Workspace's title (falling back to the folder basename until the
++  // list baseline lands), and nothing offers a choice.
++  const chipTitle = SCOPE !== ''
++    ? scopedWorkspace?.title ?? workspaceLabel(SCOPE)
++    : pendingWorkspace?.title
++      ?? (sessionId === undefined
++        ? undefined
++        : sessionWorkspace?.title
++          ?? (workspaces.phase === 'ready' || cwd === undefined || cwd === ''
++            ? undefined
++            : workspaceLabel(cwd)))
+ 
+   const heroWorkspaceRow = (
+     <div className={css.heroWorkspaceRow}>
+       <WorkspaceChip
+         buttonRef={pickerAnchor}
+         label={chipTitle}
++        staticChip={SCOPE !== ''}
+         menuOpen={pickerOpen}
+-        onClick={() => { setPickerOpen(open => !open) }}
++        {...(SCOPE === '' ? { onClick: () => { setPickerOpen(open => !open) } } : {})}
+         t={t}
+       />
+-      {renderSlot('conversation.hero.workspace', {
++      {SCOPE === '' && renderSlot('conversation.hero.workspace', {
+         open: pickerOpen,
+         anchorRef: pickerAnchor,
+         selectedId: pendingWorkspaceId ?? sessionWorkspace?.workspaceId,
+@@ -128,7 +152,11 @@ export function ConversationRoot({
+   // blank session whose workspace vanished (deleted from the sidebar). The
+   // bar is ONE session-maybe slot rendered unconditionally — inert is a prop,
+   // not a different tree, so the textarea DOM survives the transition.
+-  const inert = sessionId === undefined || (hero && chipTitle === undefined)
++  // Under the dshui scope the chip always has a label, so the bar is only
++  // inert while no session exists at all.
++  const inert = SCOPE !== ''
++    ? sessionId === undefined
++    : sessionId === undefined || (hero && chipTitle === undefined)
+   // A raised block is the same inert posture with the blocker's own reason:
+   // one disabled textarea, never a second tree. The no-workspace state wins
+   // when both hold — picking a workspace is the earlier prerequisite.
+@@ -138,9 +166,9 @@ export function ConversationRoot({
+     ...(inert
+       ? {
+         disabled: true,
+-        placeholder: t('placeholder.workspace'),
++        placeholder: SCOPE === '' ? t('placeholder.workspace') : t('placeholder.hero'),
+         workspacePickerOpen: pickerOpen,
+-        onRequestWorkspace: () => { setPickerOpen(true) },
++        ...(SCOPE === '' ? { onRequestWorkspace: () => { setPickerOpen(true) } } : {}),
+       }
+       : blocked
+         // `blocked`, not `disabled`: the bar refuses input either way, but a
+@@ -158,8 +186,8 @@ export function ConversationRoot({
+ 
+   const composerBar = (
+     <div className={clsx(css.composerStack, hero && css.composerHero)}>
+-      {hero && <HeroGlow className={css.heroGlow} />}
+-      {hero && <HeroShell t={t} />}
++      {hero && SCOPE === '' && <HeroGlow className={css.heroGlow} />}
++      {hero && SCOPE === '' && <HeroShell t={t} />}
+       {hero && heroWorkspaceRow}
+       {zone !== undefined && renderSlot('conversation.input.dock', zone)}
+       {inputBar}
+@@ -184,7 +212,7 @@ export function ConversationRoot({
+   )
+ 
+   return (
+-    <div className={css.root} data-phase={phase}>
++    <div className={css.root} data-phase={phase} data-dshui-scope={SCOPE === '' ? undefined : 'true'}>
+       {renderSlot('conversation.session.header', {})}
+       <div className={css.scrollBody} data-conversation-scroll="">
+         {renderSlot('conversation.session', {})}
+diff --git a/packages/client/ui-conversation/src/client/skeleton/EmptyHero.tsx b/packages/client/ui-conversation/src/client/skeleton/EmptyHero.tsx
+index 4865ceecfa..1a78ce6e0d 100644
+--- a/packages/client/ui-conversation/src/client/skeleton/EmptyHero.tsx
++++ b/packages/client/ui-conversation/src/client/skeleton/EmptyHero.tsx
+@@ -32,19 +32,32 @@ export function workspaceLabel(cwd: string): string {
+  * the first message the workspace stays switchable — picking another one
+  * moves the New Session flow to that workspace's blank session. Without a
+  * label the chip renders its placeholder state: closed folder + the
+- * "Choose workspace" call to action.
++ * "Choose workspace" call to action. Under the dshui scope the chip is a
++ * static label (`staticChip`): the workspace is fixed, so the chevron and
++ * interactivity disappear.
+  * @param props.label - chip label (see {@link workspaceLabel}); omitted → placeholder.
++ * @param props.staticChip - render as a non-interactive label (dshui scope).
+  * @param props.menuOpen - menu expansion echo.
+  * @param props.onClick - menu toggle.
+- * @returns the chip button element.
++ * @returns the chip element.
+  */
+-export function WorkspaceChip({ buttonRef, label, menuOpen = false, onClick, t }: {
++export function WorkspaceChip({ buttonRef, label, staticChip = false, menuOpen = false, onClick, t }: {
+   buttonRef?: RefObject<HTMLButtonElement>
+   label?: string | undefined
++  staticChip?: boolean
+   menuOpen?: boolean
+   onClick?: () => void
+   t: HeroTranslate
+ }) {
++  const chipLabel = label === undefined ? t('hero.chooseWorkspace') : label
++  if (staticChip) {
++    return (
++      <span className={css.workspaceStatic} aria-label={chipLabel}>
++        <IconFolderOpen16 className={css.folder} size={16} />
++        <span className={css.workspaceLabel}>{chipLabel}</span>
++      </span>
++    )
++  }
+   return (
+     <button
+       ref={buttonRef}
+@@ -58,7 +71,7 @@ export function WorkspaceChip({ buttonRef, label, menuOpen = false, onClick, t }
+       {label === undefined
+         ? <IconFolderClose16 className={css.folder} size={16} />
+         : <IconFolderOpen16 className={css.folder} size={16} />}
+-      <span className={css.workspaceLabel}>{label ?? t('hero.chooseWorkspace')}</span>
++      <span className={css.workspaceLabel}>{chipLabel}</span>
+       <IconChevronDownOutline14 className={css.chevron} size={12} />
+     </button>
+   )
+diff --git a/packages/client/ui-conversation/src/client/skeleton/HeroShell.module.css b/packages/client/ui-conversation/src/client/skeleton/HeroShell.module.css
+index 91dfb4a8a3..c6142ec8e7 100644
+--- a/packages/client/ui-conversation/src/client/skeleton/HeroShell.module.css
++++ b/packages/client/ui-conversation/src/client/skeleton/HeroShell.module.css
+@@ -142,6 +142,23 @@
+   cursor: pointer;
+ }
+ 
++/* dshui scope: the workspace is fixed, so the chip is a static echo — same
++   geometry and label contrast, no pointer affordance and no chevron. */
++.workspaceStatic {
++  display: inline-flex;
++  align-items: center;
++  gap: 4px;
++  max-width: min(100%, 360px);
++  min-height: 28px;
++  padding: 0 8px;
++  border-radius: 16px;
++  color: var(--dsw-alias-label-primary);
++  font-size: 13px;
++  line-height: 20px;
++  font-weight: 500;
++  cursor: default;
++}
++
+ .workspace:not(:disabled):hover,
+ .workspace[aria-expanded='true'] {
+   background: var(--dsw-alias-interactive-bg-hover);
+diff --git a/packages/client/ui-conversation/tsdown.config.ts b/packages/client/ui-conversation/tsdown.config.ts
+index 3a2c2da24d..27b1570b44 100644
+--- a/packages/client/ui-conversation/tsdown.config.ts
++++ b/packages/client/ui-conversation/tsdown.config.ts
+@@ -1,3 +1,3 @@
+ import { clientBundle } from '../tsdown.client.ts'
+ 
+-export default clientBundle('@deepseek-ai/dsh-client-ui-conversation', ['lib/types/index.js', 'lib/types/invariant.js'])
++export default clientBundle('dshui-client-ui-conversation', ['lib/types/index.js', 'lib/types/invariant.js'])
+diff --git a/packages/client/ui-workspace/src/client/WorkspaceBrowser.tsx b/packages/client/ui-workspace/src/client/WorkspaceBrowser.tsx
+index d0f6835472..e7e9005166 100644
+--- a/packages/client/ui-workspace/src/client/WorkspaceBrowser.tsx
++++ b/packages/client/ui-workspace/src/client/WorkspaceBrowser.tsx
+@@ -20,7 +20,7 @@ import type {
+ } from '@deepseek-ai/dsh-client-runtime/client'
+ import type { WorkspaceBrowserProps } from './contract/slots.ts'
+ import type { SessionNode, SessionOrderBy } from './tree.ts'
+-import { deriveFlat, deriveGroups, deriveSearchResults, UNGROUPED_KEY } from './tree.ts'
++import { deriveFlat, deriveGroups, deriveSearchResults, scopedWorkspacePath, UNGROUPED_KEY } from './tree.ts'
+ import { ProjectRowItem, SearchResultItem, SessionNodeItem } from './rows/Rows.tsx'
+ import { FLAT_SESSION_ORDER_KEY } from './stores.ts'
+ import { WorkspacePickFlow } from './WorkspacePicker.tsx'
+@@ -38,6 +38,9 @@ const SEARCH_QUERY_MAX_CODE_UNITS = 500
+ /** Session rows visible per Workspace before the local overflow control. */
+ const COLLAPSED_SESSION_LIMIT = 5
+ 
++/** The dshui workspace scope (VSCode workspace root), resolved once at load. */
++const SCOPE = scopedWorkspacePath()
++
+ /** Keep controlled input and RPC payload inside the session.search wire contract. */
+ function sanitizeSearchQuery(value: string): string {
+   const withoutNul = value.replaceAll('\0', '')
+@@ -233,22 +236,24 @@ type SessionTreeProps = Pick<
+   setSessionOrder: (accountKey: string, order: string[]) => void
+   /** Registry-global archive set (hidden rows). */
+   archivedSessionIds: readonly SessionNode['id'][]
++  /** Locally hidden sessions: the host confirmed their log files are gone. */
++  deletedSessionIds: readonly SessionNode['id'][]
+   /** Open the browser-owned rename dialog for a real Workspace group. */
+   onRenameRequest: (workspaceId: WorkspaceId, currentTitle: string) => void
+   /** Open the browser-owned delete-confirmation dialog for a real Workspace group. */
+   onDeleteRequest: (workspaceId: WorkspaceId, currentTitle: string) => void
+   /** Open the browser-owned session rename dialog. */
+   onSessionRename: (sessionId: SessionNode['id'], currentTitle: string) => void
+-  /** Archive a session (row menu action; the row disappears on the state echo). */
+-  onSessionArchive: (sessionId: SessionNode['id']) => void
++  /** Delete a session (row menu action; the row hides once the host confirms). */
++  onSessionDelete: (sessionId: SessionNode['id']) => void
+   /** Session order behavior: fixed after edits, or additionally promoted by user activity. */
+   orderBy: SessionOrderBy
+ }
+ 
+ /** The scrolling session tree; unmounting drops the sessions subscription and expand-all state. */
+ function SessionTree({
+-  useSessions, startSession, open, forkSession, workspaces, archivedSessionIds,
+-  onRenameRequest, onDeleteRequest, onSessionRename, onSessionArchive,
++  useSessions, startSession, open, forkSession, workspaces, archivedSessionIds, deletedSessionIds,
++  onRenameRequest, onDeleteRequest, onSessionRename, onSessionDelete,
+   insertWorkspaceBefore, insertSessionBefore, orderBy,
+   groupExpansion, setGroupExpanded,
+   sessionOrderByAccount, sessionUpdatedAtByAccount, syncSessionOrderAccount, setSessionOrder, t,
+@@ -278,7 +283,10 @@ function SessionTree({
+   )
+   const ungroupedSessionIds = useMemo(() => {
+     const accounted = new Set(workspaces.flatMap(workspace => workspace.sessionIds))
+-    return list.ids.filter(id => list.byId[id] !== undefined && !accounted.has(id))
++    return list.ids.filter(id => {
++      const summary = list.byId[id]
++      return summary !== undefined && !accounted.has(id) && (SCOPE === '' || summary.cwd === SCOPE)
++    })
+   }, [list, workspaces])
+   useEffect(() => {
+     if (list.phase !== 'ready') return
+@@ -324,8 +332,8 @@ function SessionTree({
+       ...(sessionOrderByAccount[UNGROUPED_KEY] === undefined
+         ? {}
+         : { ungroupedOrder: sessionOrderByAccount[UNGROUPED_KEY] }),
+-    }),
+-    [list, orderedWorkspaces, archivedSessionIds, expandedGroups, sessionOrderByAccount],
++    }, SCOPE, deletedSessionIds),
++    [list, orderedWorkspaces, archivedSessionIds, deletedSessionIds, expandedGroups, sessionOrderByAccount],
+   )
+   const now = Date.now()
+   const commitSessionDrag = (activeDrag: DragState, over: NonNullable<DragState['over']>): void => {
+@@ -515,7 +523,7 @@ function SessionTree({
+                     onOpen={open}
+                     onRename={onSessionRename}
+                     onFork={forkSession}
+-                    onArchive={onSessionArchive}
++                    onDelete={onSessionDelete}
+                     drag={dragProps}
+                     t={t}
+                   />
+@@ -544,7 +552,7 @@ function SessionTree({
+ 
+ /** The flat "In one list" body: every session is one draggable top-level row. */
+ function FlatList({
+-  useSessions, open, forkSession, onSessionRename, onSessionArchive, archivedSessionIds,
++  useSessions, open, forkSession, onSessionRename, onSessionDelete, archivedSessionIds, deletedSessionIds,
+   orderBy, sessionOrderByAccount, sessionUpdatedAtByAccount, syncSessionOrderAccount, setSessionOrder, t,
+ }: Pick<
+   SessionTreeProps,
+@@ -552,8 +560,9 @@ function FlatList({
+   | 'open'
+   | 'forkSession'
+   | 'onSessionRename'
+-  | 'onSessionArchive'
++  | 'onSessionDelete'
+   | 'archivedSessionIds'
++  | 'deletedSessionIds'
+   | 'orderBy'
+   | 'sessionOrderByAccount'
+   | 'sessionUpdatedAtByAccount'
+@@ -563,8 +572,8 @@ function FlatList({
+ >) {
+   const list = useSessions(s => s)
+   const baseRows = useMemo(
+-    () => deriveFlat(list, archivedSessionIds),
+-    [list, archivedSessionIds],
++    () => deriveFlat(list, archivedSessionIds, SCOPE, deletedSessionIds),
++    [list, archivedSessionIds, deletedSessionIds],
+   )
+   const sessionIds = useMemo(() => baseRows.map(row => row.id), [baseRows])
+   const previousOrderBy = useRef(orderBy)
+@@ -631,7 +640,7 @@ function FlatList({
+               onOpen={open}
+               onRename={onSessionRename}
+               onFork={forkSession}
+-              onArchive={onSessionArchive}
++              onDelete={onSessionDelete}
+               flat
+               drag={{
+                 start: () => {
+@@ -675,6 +684,7 @@ function SearchResults({
+   open,
+   workspaces,
+   archivedSessionIds,
++  deletedSessionIds,
+   query,
+   remote,
+   resultLimit,
+@@ -682,6 +692,7 @@ function SearchResults({
+ }: Pick<SessionTreeProps, 'useSessions' | 'open' | 't'> & {
+   workspaces: readonly WorkspaceView[]
+   archivedSessionIds: readonly SessionNode['id'][]
++  deletedSessionIds: readonly SessionNode['id'][]
+   query: string
+   remote: RemoteSearchState
+   resultLimit: number
+@@ -691,8 +702,8 @@ function SearchResults({
+     ? remote
+     : { query, status: 'loading' as const, items: [], hasMore: false }
+   const results = useMemo(
+-    () => deriveSearchResults(list, workspaces, query, archivedSessionIds, currentRemote, resultLimit),
+-    [list, workspaces, query, archivedSessionIds, currentRemote, resultLimit],
++    () => deriveSearchResults(list, workspaces, query, archivedSessionIds, currentRemote, resultLimit, SCOPE, deletedSessionIds),
++    [list, workspaces, query, archivedSessionIds, currentRemote, resultLimit, deletedSessionIds],
+   )
+   const pending = currentRemote.status === 'loading'
+   const failed = currentRemote.status === 'error'
+@@ -752,7 +763,7 @@ export function WorkspaceBrowser({
+   renameWorkspace,
+   deleteWorkspace,
+   insertWorkspaceBefore,
+-  archiveSession,
++  deleteSession,
+   insertSessionBefore,
+   createWorkspace,
+   searchSessions,
+@@ -761,7 +772,12 @@ export function WorkspaceBrowser({
+   renderSlot,
+   t,
+ }: WorkspaceBrowserProps) {
+-  const workspaces = useWorkspaces(state => state.items)
++  const allWorkspaces = useWorkspaces(state => state.items)
++  // dshui scope: only the current Workspace's Sessions are listed; the
++  // workspace itself is fixed by the host (the VSCode workspace root).
++  const workspaces = SCOPE === ''
++    ? allWorkspaces
++    : allWorkspaces.filter(workspace => workspace.path === SCOPE)
+   const workspacePhase = useWorkspaces(state => state.phase)
+   const archivedSessionIds = useWorkspaces(state => state.archivedSessionIds)
+   // Live occupancy of this surface's directory-flow hole (the same source the
+@@ -774,12 +790,15 @@ export function WorkspaceBrowser({
+   const sessionUpdatedAtByAccount = useStore(s => s.sessionUpdatedAtByAccount)
+   useEffect(() => {
+     if (workspacePhase !== 'ready') return
++    // Retain against the FULL workspace set: the dshui scope is a viewing
++    // filter, and pruning to the filtered list would drop the persisted
++    // expansion/order state of every other Workspace.
+     actions.retainAccountKeys([
+       UNGROUPED_KEY,
+       FLAT_SESSION_ORDER_KEY,
+-      ...workspaces.map(workspace => workspace.workspaceId as string),
++      ...allWorkspaces.map(workspace => workspace.workspaceId as string),
+     ])
+-  }, [actions.retainAccountKeys, workspacePhase, workspaces])
++  }, [actions.retainAccountKeys, workspacePhase, allWorkspaces])
+   // The query outlives the tree and the input (both wide-only) so collapsing
+   // does not silently drop an in-progress filter.
+   const [query, setQuery] = useState('')
+@@ -927,13 +946,16 @@ export function WorkspaceBrowser({
+     setSessionRenameError(null)
+   }
+ 
+-  // Archive is dialog-free: not destructive (the log and the accounting slot
+-  // remain), so the menu action commits directly; the row disappears when the
+-  // archive-set echo lands. Failures are non-fatal console diagnostics, the
+-  // same posture as reorder rejections.
+-  const onSessionArchive = (sessionId: SessionNode['id']) => {
+-    archiveSession(sessionId).catch((reason: unknown) => {
+-      console.warn('session archive rejected:', reason)
++  // Delete commits through the hosting VS Code (the extension removes the
++  // session's log file). The row is hidden locally only after the host
++  // confirms, so a rejected delete keeps the row; failures are non-fatal
++  // console diagnostics, the same posture as archive rejections used to be.
++  const [deletedSessionIds, setDeletedSessionIds] = useState<SessionNode['id'][]>([])
++  const onSessionDelete = (sessionId: SessionNode['id']) => {
++    deleteSession(sessionId).then(() => {
++      setDeletedSessionIds(ids => ids.includes(sessionId) ? ids : [...ids, sessionId])
++    }).catch((reason: unknown) => {
++      console.warn('session delete rejected:', reason)
+     })
+   }
+ 
+@@ -974,6 +996,10 @@ export function WorkspaceBrowser({
+ 
+   return (
+     <div className={clsx(css.root, !wide && css.rail)}>
++      {/* Under the dshui scope the rail section header holds nothing (the add
++          action is hidden), so it would render as a blank 36px column between
++          New Session and the rail search — skip it entirely. */}
++      {SCOPE !== '' && !wide ? null : (
+       <div className={css.sectionHeader}>
+         {wide && (
+           <span className={clsx(css.sectionLabel, css.wide, searchExpanded && css.sectionLabelHidden)}>
+@@ -1038,7 +1064,7 @@ export function WorkspaceBrowser({
+           </div>
+         )}
+         <div className={clsx(css.headerActions, wide && searchExpanded && css.headerActionsHidden)}>
+-          {wide && (
++          {wide && SCOPE === '' && (
+             <ViewOptionsMenu
+               groupBy={groupBy}
+               orderBy={orderBy}
+@@ -1049,8 +1075,9 @@ export function WorkspaceBrowser({
+           )}
+           {/* Adding is the button's one action, so a composition with no
+               picking affordance has nothing to offer here: the region hides the
+-              button rather than leaving a dead one in the header. */}
+-          {directoryFlowAvailable && (
++              button rather than leaving a dead one in the header. Under the
++              dshui scope the workspace is fixed, so the add action is hidden. */}
++          {SCOPE === '' && directoryFlowAvailable && (
+             <Tooltip label={t('workspace.add')} side="bottom" delayMs={500}>
+               <button
+                 ref={wsPlusRef}
+@@ -1084,6 +1111,7 @@ export function WorkspaceBrowser({
+           onClose={() => { setWsPickerOpen(false) }}
+         />
+       </div>
++      )}
+ 
+       {/* The collapsed rail keeps search as its own 36px control. */}
+       {!wide && <div className={css.search}>
+@@ -1113,6 +1141,7 @@ export function WorkspaceBrowser({
+               open={open}
+               workspaces={workspaces}
+               archivedSessionIds={archivedSessionIds}
++              deletedSessionIds={deletedSessionIds}
+               query={normalizedQuery}
+               remote={remoteSearch}
+               resultLimit={searchResultLimit}
+@@ -1123,8 +1152,9 @@ export function WorkspaceBrowser({
+             ? (
+               <FlatList
+                 useSessions={useSessions} open={open} forkSession={forkSession}
+-                onSessionRename={onSessionRename} onSessionArchive={onSessionArchive}
++                onSessionRename={onSessionRename} onSessionDelete={onSessionDelete}
+                 archivedSessionIds={archivedSessionIds}
++                deletedSessionIds={deletedSessionIds}
+                 orderBy={orderBy}
+                 sessionOrderByAccount={sessionOrderByAccount}
+                 sessionUpdatedAtByAccount={sessionUpdatedAtByAccount}
+@@ -1137,7 +1167,7 @@ export function WorkspaceBrowser({
+               <SessionTree
+                 useSessions={useSessions}
+                 onSessionRename={onSessionRename}
+-                onSessionArchive={onSessionArchive}
++                onSessionDelete={onSessionDelete}
+                 forkSession={forkSession}
+                 workspaces={workspaces}
+                 groupExpansion={groupExpansion}
+@@ -1147,6 +1177,7 @@ export function WorkspaceBrowser({
+                 syncSessionOrderAccount={actions.syncSessionOrderAccount}
+                 setSessionOrder={actions.setSessionOrder}
+                 archivedSessionIds={archivedSessionIds}
++                deletedSessionIds={deletedSessionIds}
+                 startSession={startSession}
+                 open={open}
+                 insertWorkspaceBefore={insertWorkspaceBefore}
+diff --git a/packages/client/ui-workspace/src/client/contract/slots.ts b/packages/client/ui-workspace/src/client/contract/slots.ts
+index 8027a3623a..976c5f1ea9 100644
+--- a/packages/client/ui-workspace/src/client/contract/slots.ts
++++ b/packages/client/ui-workspace/src/client/contract/slots.ts
+@@ -122,11 +122,13 @@ export type WorkspaceBrowserInjected = DirectoryPickingInjected & {
+    */
+   insertWorkspaceBefore: (workspaceId: WorkspaceId, beforeWorkspaceId?: WorkspaceId) => Promise<void>
+   /**
+-   * Archive a Session into the registry-global set: hidden from grouping
+-   * surfaces, log and accounting slot retained. Archiving the current
+-   * session clears the selection into the New Session view state.
++   * Delete a Session: ask the hosting VS Code (through the webview shell) to
++   * remove the session's persisted log from disk. dsh's own registry and
++   * archive state are untouched; the row is hidden locally once the host
++   * confirms the file is gone, and a later session.list re-pull finds the
++   * session gone entirely.
+    */
+-  archiveSession: (sessionId: SessionId) => Promise<void>
++  deleteSession: (sessionId: SessionId) => Promise<void>
+   /**
+    * Reorder a session inside its Workspace account (DOM-insertBefore
+    * semantics: omitted anchor appends to the end). The view refreshes from
+diff --git a/packages/client/ui-workspace/src/client/index.ts b/packages/client/ui-workspace/src/client/index.ts
+index 6b14243ecf..8f23d5c28f 100644
+--- a/packages/client/ui-workspace/src/client/index.ts
++++ b/packages/client/ui-workspace/src/client/index.ts
+@@ -10,6 +10,7 @@
+  */
+ import type { HostObservable } from '@deepseek-ai/dsh-client-ui-slots'
+ import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
++import type { SessionId } from '@deepseek-ai/dsh-client-runtime/client'
+ // Type-only: pulls the locale plugin's Context merge (ctx.locale).
+ import type {} from '@deepseek-ai/dsh-client-locale/client'
+ import type { WorkspaceBrowserInjected, WorkspacePickerInjected } from './contract/slots.ts'
+@@ -34,6 +35,15 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
+ /** Dictionary namespace owned by this plugin. */
+ const NS = 'workspace'
+ 
++/** One session-delete request's host-reply timeout (ms). */
++const DELETE_TIMEOUT_MS = 15_000
++
++/** A delete request awaiting the hosting VS Code's confirmation. */
++interface PendingDelete {
++  resolve: (ok: boolean, error: string | undefined) => void
++  timer: ReturnType<typeof setTimeout>
++}
++
+ /**
+  * Required services (cordis fiber inject). The target slots are declared by
+  * the ui-sidebar / ui-conversation applies, whose activation order relative
+@@ -53,6 +63,52 @@ export const inject = ['slots', 'sessions', 'workspaces', 'locale']
+ export function apply(ctx: ClientContext): void {
+   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'ui-workspace: dictionaries')
+ 
++  // ── Session deletion through the hosting VS Code ──────────────────────────
++  // The browser cannot delete a dsh session file (dsh exposes no delete RPC).
++  // The plugin posts { type: 'dshui:deleteSession', sessionId, cwd } to the
++  // webview shell, which relays it to the extension host; the host removes
++  // $DSH_HOME/sessions/<projectKey(cwd)>/<sessionId> via the VS Code
++  // workspace.fs API and answers { type: 'dshui:sessionDeleted', ok }. The
++  // reply resolves the matching pending request; timeouts and a missing host
++  // (plain browser tab) reject so the caller surfaces the failure.
++  const pendingDeletes = new Map<SessionId, PendingDelete>()
++  const onHostMessage = (event: MessageEvent): void => {
++    if (event.source !== window.parent) return
++    const data = event.data as { type?: unknown; sessionId?: unknown; ok?: unknown; error?: unknown } | null
++    if (data === null || typeof data !== 'object' || data.type !== 'dshui:sessionDeleted') return
++    if (typeof data.sessionId !== 'string') return
++    const sessionId = data.sessionId as SessionId
++    const pending = pendingDeletes.get(sessionId)
++    if (pending === undefined) return
++    clearTimeout(pending.timer)
++    pendingDeletes.delete(sessionId)
++    pending.resolve(data.ok === true, typeof data.error === 'string' ? data.error : undefined)
++  }
++  ctx.effect(() => {
++    window.addEventListener('message', onHostMessage)
++    return () => {
++      window.removeEventListener('message', onHostMessage)
++      for (const pending of pendingDeletes.values()) clearTimeout(pending.timer)
++      pendingDeletes.clear()
++    }
++  }, 'ui-workspace: host session-delete listener')
++
++  const requestSessionDelete = (sessionId: SessionId, cwd: string): Promise<void> =>
++    new Promise((resolve, reject) => {
++      const timer = setTimeout(() => {
++        pendingDeletes.delete(sessionId)
++        reject(new Error(`session deletion timed out for "${sessionId}"`))
++      }, DELETE_TIMEOUT_MS)
++      pendingDeletes.set(sessionId, {
++        resolve: (ok, error) => {
++          if (ok) resolve()
++          else reject(new Error(error ?? `session deletion failed for "${sessionId}"`))
++        },
++        timer,
++      })
++      window.parent.postMessage({ type: 'dshui:deleteSession', sessionId, cwd }, '*')
++    })
++
+   const searchSessions: WorkspaceBrowserInjected['searchSessions'] = async (query, signal) => {
+     const result = await ctx.sessions.search(query, signal)
+     if (!result.ok) throw new Error(result.error.message)
+@@ -94,7 +150,17 @@ export function apply(ctx: ClientContext): void {
+     insertWorkspaceBefore: async (workspaceId, beforeWorkspaceId) => {
+       await ctx.workspaces.insertBefore(workspaceId, beforeWorkspaceId)
+     },
+-    archiveSession: async (sessionId) => { await ctx.workspaces.archiveSession(sessionId) },
++    deleteSession: async (sessionId) => {
++      const summary = ctx.sessions.list.getSnapshot().byId[sessionId]
++      if (summary === undefined) throw new Error(`unknown session "${sessionId}"`)
++      if (summary.cwd === undefined) throw new Error(`session "${sessionId}" has no workspace directory`)
++      if (window.parent === window) throw new Error('session deletion is only available inside VS Code')
++      await requestSessionDelete(sessionId, summary.cwd)
++      // A deleted session can no longer be current: clear the selection into
++      // the New Session view state (the same rule as an archived current
++      // session, so the conversation view does not linger on a gone session).
++      if (ctx.sessions.list.getSnapshot().current === sessionId) ctx.sessions.clear()
++    },
+     insertSessionBefore: async (workspaceId, sessionId, beforeSessionId) => {
+       await ctx.workspaces.insertSessionBefore(workspaceId, sessionId, beforeSessionId)
+     },
+diff --git a/packages/client/ui-workspace/src/client/locales.ts b/packages/client/ui-workspace/src/client/locales.ts
+index c08fd931de..2806212bed 100644
+--- a/packages/client/ui-workspace/src/client/locales.ts
++++ b/packages/client/ui-workspace/src/client/locales.ts
+@@ -44,7 +44,7 @@ export const zh = {
+   'delete.desc': '将把“{name}”从工作区列表中移除。文件夹与会话记录会保留，其会话将显示在“未分组”下。',
+   'delete.pending': '正在删除工作区…',
+   'menu.fork': '分叉会话',
+-  'menu.archiveSession': '归档会话',
++  'menu.deleteSession': '删除会话',
+   'sessions.count.one': '{n} 个会话',
+   'sessions.count.other': '{n} 个会话',
+   'actions.workspace.aria': '工作区“{name}”的操作',
+@@ -113,7 +113,7 @@ export const en = {
+   'delete.desc': 'This removes “{name}” from the workspace list. The folder and session logs will be kept. Its sessions will appear under Ungrouped.',
+   'delete.pending': 'Deleting workspace…',
+   'menu.fork': 'Fork session',
+-  'menu.archiveSession': 'Archive session',
++  'menu.deleteSession': 'Delete session',
+   'sessions.count.one': '{n} session',
+   'sessions.count.other': '{n} sessions',
+   'actions.workspace.aria': 'Workspace actions for {name}',
+diff --git a/packages/client/ui-workspace/src/client/rows/Rows.tsx b/packages/client/ui-workspace/src/client/rows/Rows.tsx
+index 481e0f0e47..a92ce1a313 100644
+--- a/packages/client/ui-workspace/src/client/rows/Rows.tsx
++++ b/packages/client/ui-workspace/src/client/rows/Rows.tsx
+@@ -2,13 +2,13 @@
+  * Workspace browser tree row components (figma Cell set 14:3080): pure presentational —
+  * all data and callbacks arrive via props. Hover swaps (folder->chevron,
+  * time->ellipsis, action buttons) are CSS-only. Row ... menus are visual-only
+- * except workspace Rename/Delete and session Rename/Fork/Archive; the session
++ * except workspace Rename/Delete and session Rename/Fork/Delete; the session
+  * and workspace hover cards are suppressed while a menu is open.
+  */
+ import { useState } from 'react'
+ import clsx from 'clsx'
+ import {
+-  HoverCard, IconArchiveOutline20, IconBranchOutline16, IconEditOutline16,
++  HoverCard, IconBranchOutline16, IconEditOutline16,
+   IconEllipsisOutline16, IconFolderClose16, IconFolderOpen16, IconPlusOutline16,
+   IconTrashOutline16, IconTriangleRightFill14, Menu, StateDot,
+ } from '@deepseek-ai/dsh-client-ui-primitives'
+@@ -344,13 +344,13 @@ export function SearchResultItem({ result, currentId, onOpen, t }: {
+  * @param props.onOpen - open a session by id.
+  * @param props.onRename - open the session rename dialog (id + current title).
+  * @param props.onFork - fork a session at its last completed turn.
+- * @param props.onArchive - archive a session by id.
++ * @param props.onDelete - delete a session (its log file is removed by the host).
+  * @param props.drag - optional draggable-row wiring.
+  * @param props.flat - omit the empty status slot in the hierarchy-free flat list.
+  * @param props.t - the browser root's locale seat.
+  * @returns the session row.
+  */
+-export function SessionNodeItem({ node, currentId, now, onOpen, onRename, onFork, onArchive, drag, flat = false, t }: {
++export function SessionNodeItem({ node, currentId, now, onOpen, onRename, onFork, onDelete, drag, flat = false, t }: {
+   node: SessionNode
+   currentId: string | undefined
+   now: number
+@@ -359,8 +359,8 @@ export function SessionNodeItem({ node, currentId, now, onOpen, onRename, onFork
+   onRename: (id: SessionNode['id'], currentTitle: string) => void
+   /** Fork a session at its last completed turn (row menu action). */
+   onFork: (id: SessionNode['id']) => void
+-  /** Archive this session (row menu action; commits without a dialog). */
+-  onArchive: (id: SessionNode['id']) => void
++  /** Delete this session (row menu action; the host removes the log file). */
++  onDelete: (id: SessionNode['id']) => void
+   /** Present only on draggable rows (workspace-group sessions outside search). */
+   drag?: RowDragProps | undefined
+   /** The row is rendered without a parent Workspace header. */
+@@ -374,14 +374,13 @@ export function SessionNodeItem({ node, currentId, now, onOpen, onRename, onFork
+   const primaryStatus = statuses[0]
+   const showStatus = primaryStatus.state !== 'done' || row.completed
+   const [menuOpen, setMenuOpen] = useState(false)
+-  // Archive hides the row through the registry-global archive set and never
+-  // touches the session log, so it is not styled as destructive and needs no
+-  // confirmation dialog.
++  // Delete removes the session's persisted log through the hosting VS Code
++  // and hides the row on confirmation, so it is styled as destructive but
++  // commits without a confirmation dialog (the row menu click is the gesture).
+   const sessionMenuItems = [
+     { id: 'rename', label: t('rename'), icon: <IconEditOutline16 /> },
+     { id: 'fork', label: t('menu.fork'), icon: <IconBranchOutline16 /> },
+-    // 20-native glyph in the menu's 16px icon slot (Menu.module.css .itemIcon).
+-    { id: 'archive', label: t('menu.archiveSession'), icon: <IconArchiveOutline20 size={16} /> },
++    { id: 'delete', label: t('menu.deleteSession'), icon: <IconTrashOutline16 />, danger: true },
+   ]
+   // Figma session cell: pad 8, status slot 16, then a 4px title gap.
+   const ownRow = (
+@@ -430,7 +429,7 @@ export function SessionNodeItem({ node, currentId, now, onOpen, onRename, onFork
+       <span className={css.title}>{title}</span>
+       {/* A blank New Session row is a provisional placeholder: nothing has
+           happened in it yet, so a "now" timestamp and the row verbs
+-          (rename/fork/archive) would all act on content that does not
++          (rename/fork/delete) would all act on content that does not
+           exist — both trailing cells stay off until the first prompt. */}
+       {!row.blank && <span className={css.time}>{timeLabel(row.updatedAt, now, t)}</span>}
+       {!row.blank && (
+@@ -443,7 +442,7 @@ export function SessionNodeItem({ node, currentId, now, onOpen, onRename, onFork
+               setMenuOpen(false)
+               if (id === 'rename') onRename(node.id, row.title)
+               if (id === 'fork') onFork(node.id)
+-              if (id === 'archive') onArchive(node.id)
++              if (id === 'delete') onDelete(node.id)
+             }}
+             portal
+             closeOnPointerLeave
+diff --git a/packages/client/ui-workspace/src/client/tree.ts b/packages/client/ui-workspace/src/client/tree.ts
+index 23649a24f7..4ace13d5a3 100644
+--- a/packages/client/ui-workspace/src/client/tree.ts
++++ b/packages/client/ui-workspace/src/client/tree.ts
+@@ -12,6 +12,21 @@ import {
+ /** Group key for Sessions outside every Workspace. */
+ export const UNGROUPED_KEY = ''
+ 
++/**
++ * The dshui workspace scope: an absolute directory path the dshui host
++ * plugin publishes as `window.__DSHUI_WORKSPACE__` (the VS Code workspace
++ * root), with a fallback to the boot URL's `dshui_workspace` query
++ * parameter. When set, the browser lists only that Workspace's Sessions; an
++ * empty string keeps the stock cross-workspace behavior.
++ */
++export function scopedWorkspacePath(): string {
++  const global = (window as unknown as { __DSHUI_WORKSPACE__?: unknown }).__DSHUI_WORKSPACE__
++  const fromGlobal = typeof global === 'string' ? global : ''
++  const value = fromGlobal !== '' ? fromGlobal : (new URLSearchParams(window.location.search).get('dshui_workspace') ?? '')
++  if (value === '') return ''
++  try { return decodeURIComponent(value) } catch { return value }
++}
++
+ /** Display label for the ungrouped bucket row. */
+ export const UNGROUPED_LABEL = 'Ungrouped'
+ 
+@@ -113,11 +128,19 @@ function byRecency(a: SessionSummary, b: SessionSummary): number {
+  * Ordinary sessions are visible; among blank sessions, only the current one
+  * is visible. Subagent children use their parent header catalog; archived
+  * sessions are visible nowhere, while their accounting slots remain so
+- * unarchiving restores position.
++ * unarchiving restores position. Locally deleted sessions (the dshui host
++ * confirmed their log file is gone) are hidden too — the row cannot return
++ * because the next session.list re-pull no longer finds the session.
+  */
+-function sessionVisible(session: SessionSummary, current: SessionId | undefined, archived: ReadonlySet<SessionId>): boolean {
++function sessionVisible(
++  session: SessionSummary,
++  current: SessionId | undefined,
++  archived: ReadonlySet<SessionId>,
++  deleted: ReadonlySet<SessionId>,
++): boolean {
+   return session.origin !== 'subagent'
+     && !archived.has(session.id)
++    && !deleted.has(session.id)
+     && (!session.blank || session.id === current)
+ }
+ 
+@@ -175,7 +198,9 @@ function groupByWorkspace(
+   list: SessionListState,
+   workspaces: readonly WorkspaceView[],
+   archived: ReadonlySet<SessionId>,
++  deleted: ReadonlySet<SessionId>,
+   ungroupedOrder: readonly string[] | undefined,
++  scope: string,
+ ): Group[] {
+   const groups: Group[] = []
+   const accounted = new Set<SessionId>()
+@@ -185,7 +210,7 @@ function groupByWorkspace(
+       const summary = list.byId[id]
+       if (summary === undefined) continue // account may lead the list pull; the row appears when the summary lands
+       accounted.add(id)
+-      if (!sessionVisible(summary, list.current, archived)) continue
++      if (!sessionVisible(summary, list.current, archived, deleted)) continue
+       members.push(summary)
+     }
+     groups.push(buildGroup(
+@@ -196,7 +221,8 @@ function groupByWorkspace(
+   const stray = list.ids
+     .map(id => list.byId[id])
+     .filter((s): s is SessionSummary =>
+-      s !== undefined && !accounted.has(s.id) && sessionVisible(s, list.current, archived))
++      s !== undefined && !accounted.has(s.id) && sessionVisible(s, list.current, archived, deleted)
++      && (scope === '' || s.cwd === scope))
+   if (stray.length > 0) {
+     groups.push(buildGroup(
+       UNGROUPED_KEY,
+@@ -238,6 +264,7 @@ function sessionNode(
+  * @param list - sessions list snapshot (`current` feeds containsCurrent).
+  * @param workspaces - real workspaces in stable Host order.
+  * @param archivedSessionIds - registry-global archive set.
++ * @param deletedSessionIds - locally hidden sessions (host-confirmed log removal).
+  * @param view - local expansion arrays.
+  * @returns group sections in render order.
+  */
+@@ -246,8 +273,11 @@ export function deriveGroups(
+   workspaces: readonly WorkspaceView[],
+   archivedSessionIds: readonly SessionId[],
+   view: TreeView,
++  scope: string = '',
++  deletedSessionIds: readonly SessionId[] = [],
+ ): GroupNode[] {
+   const archived = new Set(archivedSessionIds)
++  const deleted = new Set(deletedSessionIds)
+   const expandedGroups = new Set(view.expandedGroups)
+   const descendants = indexSubagentDescendants(list.byId)
+   const currentGroup = list.current === undefined
+@@ -255,7 +285,7 @@ export function deriveGroups(
+     : (workspaces.find(w => w.sessionIds.includes(list.current as SessionId))?.workspaceId as string | undefined)
+         ?? UNGROUPED_KEY
+   const groups: GroupNode[] = []
+-  for (const g of groupByWorkspace(list, workspaces, archived, view.ungroupedOrder)) {
++  for (const g of groupByWorkspace(list, workspaces, archived, deleted, view.ungroupedOrder, scope)) {
+     const expanded = expandedGroups.has(g.key)
+     groups.push({
+       key: g.key,
+@@ -279,18 +309,23 @@ export function deriveGroups(
+  * (see {@link deriveSearchResults}).
+  * @param list - sessions list snapshot.
+  * @param archivedSessionIds - registry-global archive set.
++ * @param deletedSessionIds - locally hidden sessions (host-confirmed log removal).
+  * @returns flat rows in render order.
+  */
+ export function deriveFlat(
+   list: SessionListState,
+   archivedSessionIds: readonly SessionId[],
++  scope: string = '',
++  deletedSessionIds: readonly SessionId[] = [],
+ ): SessionNode[] {
+   const archived = new Set(archivedSessionIds)
++  const deleted = new Set(deletedSessionIds)
+   const descendants = indexSubagentDescendants(list.byId)
+   const rows: SessionSummary[] = []
+   for (const id of list.ids) {
+     const s = list.byId[id]
+-    if (s === undefined || !sessionVisible(s, list.current, archived)) continue
++    if (s === undefined || !sessionVisible(s, list.current, archived, deleted)) continue
++    if (scope !== '' && s.cwd !== scope) continue
+     rows.push(s)
+   }
+   rows.sort(byRecency)
+@@ -316,6 +351,8 @@ export interface RelativeTime {
+  * @param archivedSessionIds - registry-global archive set (members never match).
+  * @param content - ranked Host content-search page.
+  * @param limit - protocol-owned maximum merged row count.
++ * @param scope - optional workspace scope filter.
++ * @param deletedSessionIds - locally hidden sessions (host-confirmed log removal).
+  * @returns bounded deduplicated flat rows and a refine-query hint bit.
+  */
+ export function deriveSearchResults(
+@@ -325,10 +362,13 @@ export function deriveSearchResults(
+   archivedSessionIds: readonly SessionId[],
+   content: { items: readonly SessionSearchResultItem[]; hasMore: boolean },
+   limit: number,
++  scope: string = '',
++  deletedSessionIds: readonly SessionId[] = [],
+ ): SearchResultSet {
+   const q = query.trim().toLowerCase()
+   if (q === '') return { items: [], hasMore: false }
+   const archived = new Set(archivedSessionIds)
++  const deleted = new Set(deletedSessionIds)
+   const descendants = indexSubagentDescendants(list.byId)
+ 
+   const workspaceBySession = new Map<SessionId, string>()
+@@ -349,7 +389,8 @@ export function deriveSearchResults(
+     const summary = list.byId[id]
+     // Blank placeholders never match a query (their canonical title displays
+     // localized, so matching it would tie search to one language).
+-    if (summary === undefined || summary.blank || !sessionVisible(summary, list.current, archived)) continue
++    if (summary === undefined || summary.blank || !sessionVisible(summary, list.current, archived, deleted)) continue
++    if (scope !== '' && summary.cwd !== scope) continue
+     if (
+       sessionTitle(summary).toLowerCase().includes(q)
+       || labelOf(summary).toLowerCase().includes(q)
+@@ -369,7 +410,8 @@ export function deriveSearchResults(
+   for (const summary of local) include(summary)
+   for (const item of content.items) {
+     const summary = list.byId[item.sessionId]
+-    if (summary !== undefined && !summary.blank && sessionVisible(summary, list.current, archived)) include(summary)
++    if (summary !== undefined && !summary.blank && sessionVisible(summary, list.current, archived, deleted)
++      && (scope === '' || summary.cwd === scope)) include(summary)
+   }
+ 
+   return {
+diff --git a/packages/client/ui-workspace/tests/rows.client.spec.tsx b/packages/client/ui-workspace/tests/rows.client.spec.tsx
+index c7a153ff5f..cbbc955a5b 100644
+--- a/packages/client/ui-workspace/tests/rows.client.spec.tsx
++++ b/packages/client/ui-workspace/tests/rows.client.spec.tsx
+@@ -63,12 +63,12 @@ describe('workspace browser rows', () => {
+       runningSubagentCount: 0, completed: false, updatedAt: 0,
+     }
+     const view = render(<SessionNodeItem node={idle} currentId={undefined} now={0} onOpen={vi.fn()}
+-      onRename={vi.fn()} onFork={vi.fn()} onArchive={vi.fn()} flat t={t} />)
++      onRename={vi.fn()} onFork={vi.fn()} onDelete={vi.fn()} flat t={t} />)
+     const title = screen.getByText('Flat Session')
+     expect(title.previousElementSibling).toBeNull()
+ 
+     view.rerender(<SessionNodeItem node={{ ...idle, running: true }} currentId={undefined} now={0}
+-      onOpen={vi.fn()} onRename={vi.fn()} onFork={vi.fn()} onArchive={vi.fn()} flat t={t} />)
++      onOpen={vi.fn()} onRename={vi.fn()} onFork={vi.fn()} onDelete={vi.fn()} flat t={t} />)
+     expect(screen.getByText('Flat Session').previousElementSibling?.querySelector('[data-state="ongoing"]')).toBeTruthy()
+   })
+ 
+@@ -136,7 +136,7 @@ describe('workspace browser rows', () => {
+     const onOpen = vi.fn()
+     render(
+       <SessionNodeItem node={node} currentId={node.id} now={0} onOpen={onOpen}
+-        onRename={vi.fn()} onFork={vi.fn()} onArchive={vi.fn()} t={t} />,
++        onRename={vi.fn()} onFork={vi.fn()} onDelete={vi.fn()} t={t} />,
+     )
+ 
+     const row = screen.getByRole('treeitem')
+@@ -155,7 +155,7 @@ describe('workspace browser rows', () => {
+           runningSubagentCount: 0, completed: false, updatedAt: 0, ...over,
+         }}
+         currentId={undefined} now={0} onOpen={vi.fn()}
+-        onRename={vi.fn()} onFork={vi.fn()} onArchive={vi.fn()} t={t}
++        onRename={vi.fn()} onFork={vi.fn()} onDelete={vi.fn()} t={t}
+       />,
+     )
+     const stateDot = (view: ReturnType<typeof renderRow>) =>
+@@ -187,7 +187,7 @@ describe('workspace browser rows', () => {
+         runningSubagentCount: 2, completed: false, updatedAt: 0,
+       }
+       render(<SessionNodeItem node={node} currentId={undefined} now={0} onOpen={vi.fn()}
+-        onRename={vi.fn()} onFork={vi.fn()} onArchive={vi.fn()} t={t} />)
++        onRename={vi.fn()} onFork={vi.fn()} onDelete={vi.fn()} t={t} />)
+       const row = screen.getByRole('treeitem')
+       expect(row.querySelector('[data-state="ongoing"]')).not.toBeNull()
+       expect(screen.getByText('2 个子代理运行中')).toBeTruthy()
+@@ -209,7 +209,7 @@ describe('workspace browser rows', () => {
+         runningSubagentCount: 1, completed: false, updatedAt: 0,
+       }
+       render(<SessionNodeItem node={node} currentId={undefined} now={0} onOpen={vi.fn()}
+-        onRename={vi.fn()} onFork={vi.fn()} onArchive={vi.fn()} t={t} />)
++        onRename={vi.fn()} onFork={vi.fn()} onDelete={vi.fn()} t={t} />)
+       const row = screen.getByRole('treeitem')
+       expect(row.querySelectorAll('[data-state="ongoing"]')).toHaveLength(1)
+       expect(screen.getByText('进行中')).toBeTruthy()
+@@ -230,7 +230,7 @@ describe('workspace browser rows', () => {
+       running: false, runningSubagentCount: 1, completed: false, updatedAt: 0,
+     }
+     render(<SessionNodeItem node={node} currentId={undefined} now={0} onOpen={vi.fn()}
+-      onRename={vi.fn()} onFork={vi.fn()} onArchive={vi.fn()} t={t} />)
++      onRename={vi.fn()} onFork={vi.fn()} onDelete={vi.fn()} t={t} />)
+     const row = screen.getByRole('treeitem')
+     expect(row.querySelector('[data-state="warning"]')).not.toBeNull()
+     expect(row.querySelector('[data-state="ongoing"]')).toBeNull()
+@@ -321,7 +321,7 @@ describe('workspace browser rows', () => {
+         runningSubagentCount: 0, completed: false, updatedAt: 0,
+       }
+       render(<SessionNodeItem node={node} currentId={node.id} now={0} onOpen={vi.fn()}
+-        onRename={vi.fn()} onFork={vi.fn()} onArchive={vi.fn()} t={t} />)
++        onRename={vi.fn()} onFork={vi.fn()} onDelete={vi.fn()} t={t} />)
+       // The placeholder has no content yet: no row verbs, no "now" stamp.
+       expect(screen.queryByRole('button', { name: /会话.*的操作/ })).toBeNull()
+       expect(screen.queryByText('刚刚')).toBeNull()
+@@ -338,21 +338,21 @@ describe('workspace browser rows', () => {
+     }
+   })
+ 
+-  it('session row menu opens without opening the session and dispatches rename, fork, and archive', () => {
++  it('session row menu opens without opening the session and dispatches rename, fork, and delete', () => {
+     const onOpen = vi.fn()
+     const onRename = vi.fn()
+     const onFork = vi.fn()
+-    const onArchive = vi.fn()
++    const onDelete = vi.fn()
+     const node: SessionNode = {
+       id: sid('s1'), title: 'One', blank: false, running: false,
+       runningSubagentCount: 0, completed: false, updatedAt: 0,
+     }
+     render(<SessionNodeItem node={node} currentId={undefined} now={0} onOpen={onOpen}
+-      onRename={onRename} onFork={onFork} onArchive={onArchive} t={t} />)
++      onRename={onRename} onFork={onFork} onDelete={onDelete} t={t} />)
+     fireEvent.click(screen.getByRole('button', { name: '会话“One”的操作' }))
+     expect(onOpen).not.toHaveBeenCalled()
+-    // Archive is not destructive (log and accounting slot remain): no danger styling.
+-    expect(screen.getByRole('menuitem', { name: '归档会话' }).className).not.toMatch(/danger/)
++    // Delete removes the session's log through the host: destructive styling.
++    expect(screen.getByRole('menuitem', { name: '删除会话' }).className).toMatch(/danger/)
+     // Rename dispatches with the current display title (dialog prefill).
+     fireEvent.click(screen.getByRole('menuitem', { name: '重命名' }))
+     expect(screen.queryByRole('menu')).toBeNull()
+@@ -361,10 +361,10 @@ describe('workspace browser rows', () => {
+     fireEvent.click(screen.getByRole('button', { name: '会话“One”的操作' }))
+     fireEvent.click(screen.getByRole('menuitem', { name: '分叉会话' }))
+     expect(onFork).toHaveBeenCalledWith(node.id)
+-    // Archive dispatches without opening the session.
++    // Delete dispatches without opening the session.
+     fireEvent.click(screen.getByRole('button', { name: '会话“One”的操作' }))
+-    fireEvent.click(screen.getByRole('menuitem', { name: '归档会话' }))
+-    expect(onArchive).toHaveBeenCalledWith(node.id)
++    fireEvent.click(screen.getByRole('menuitem', { name: '删除会话' }))
++    expect(onDelete).toHaveBeenCalledWith(node.id)
+     expect(onRename).toHaveBeenCalledOnce()
+     expect(onOpen).not.toHaveBeenCalled()
+     // Escape closes without selecting (Menu onClose path).
+@@ -382,7 +382,7 @@ describe('workspace browser rows', () => {
+         runningSubagentCount: 0, completed: false, updatedAt: 0,
+       }
+       render(<SessionNodeItem node={node} currentId={undefined} now={60_000} onOpen={vi.fn()}
+-        onRename={vi.fn()} onFork={vi.fn()} onArchive={vi.fn()} t={t} />)
++        onRename={vi.fn()} onFork={vi.fn()} onDelete={vi.fn()} t={t} />)
+       const wrapper = screen.getByRole('treeitem').parentElement as HTMLElement
+       fireEvent.pointerEnter(wrapper)
+       act(() => { vi.advanceTimersByTime(500) })
+@@ -413,14 +413,14 @@ describe('workspace browser rows', () => {
+         pendingInteraction, running: true, runningSubagentCount: 0, completed: false, updatedAt: 0,
+       }
+       const view = render(<SessionNodeItem node={node} currentId={undefined} now={0} onOpen={vi.fn()}
+-        onRename={vi.fn()} onFork={vi.fn()} onArchive={vi.fn()} t={t} />)
++        onRename={vi.fn()} onFork={vi.fn()} onDelete={vi.fn()} t={t} />)
+       const row = screen.getByRole('treeitem')
+       expect(row.querySelector('[data-state="warning"]')).toBeTruthy()
+       expect(row.querySelector('[data-state="ongoing"]')).toBeNull()
+       expect(screen.getByText(label)).toBeTruthy()
+ 
+       view.rerender(<SessionNodeItem node={{ ...node, running: false }} currentId={undefined} now={0}
+-        onOpen={vi.fn()} onRename={vi.fn()} onFork={vi.fn()} onArchive={vi.fn()} t={t} />)
++        onOpen={vi.fn()} onRename={vi.fn()} onFork={vi.fn()} onDelete={vi.fn()} t={t} />)
+       expect(screen.getByRole('treeitem').querySelector('[data-state="warning"]')).toBeTruthy()
+ 
+       fireEvent.pointerEnter(screen.getByRole('treeitem').parentElement as HTMLElement)
+@@ -440,7 +440,7 @@ describe('workspace browser rows', () => {
+         runningSubagentCount: 0, completed: false, updatedAt: 0,
+       }
+       render(<SessionNodeItem node={node} currentId={undefined} now={0} onOpen={vi.fn()}
+-        onRename={vi.fn()} onFork={vi.fn()} onArchive={vi.fn()} t={t} />)
++        onRename={vi.fn()} onFork={vi.fn()} onDelete={vi.fn()} t={t} />)
+       fireEvent.pointerEnter(screen.getByRole('treeitem').parentElement as HTMLElement)
+       act(() => { vi.advanceTimersByTime(500) })
+       expect(screen.getByText('空闲')).toBeTruthy()
+@@ -458,7 +458,7 @@ describe('workspace browser rows', () => {
+         runningSubagentCount: 0, completed: true, updatedAt: 0,
+       }
+       render(<SessionNodeItem node={node} currentId={undefined} now={0} onOpen={vi.fn()}
+-        onRename={vi.fn()} onFork={vi.fn()} onArchive={vi.fn()} t={t} />)
++        onRename={vi.fn()} onFork={vi.fn()} onDelete={vi.fn()} t={t} />)
+       fireEvent.pointerEnter(screen.getByRole('treeitem').parentElement as HTMLElement)
+       act(() => { vi.advanceTimersByTime(500) })
+       // Row's visually-hidden reminder label plus the hover card's status line.
+@@ -476,7 +476,7 @@ describe('workspace browser rows', () => {
+     const inactive = dragProps()
+     const { rerender } = render(
+       <SessionNodeItem node={node} currentId={undefined} now={0} onOpen={vi.fn()}
+-        onRename={vi.fn()} onFork={vi.fn()} onArchive={vi.fn()} drag={inactive} t={t} />,
++        onRename={vi.fn()} onFork={vi.fn()} onDelete={vi.fn()} drag={inactive} t={t} />,
+     )
+     const row = screen.getByRole('treeitem')
+     stubRect(row)
+@@ -494,7 +494,7 @@ describe('workspace browser rows', () => {
+     const active = dragProps({ active: true, marker: 'before' })
+     rerender(
+       <SessionNodeItem node={node} currentId={undefined} now={0} onOpen={vi.fn()}
+-        onRename={vi.fn()} onFork={vi.fn()} onArchive={vi.fn()} drag={active} t={t} />,
++        onRename={vi.fn()} onFork={vi.fn()} onDelete={vi.fn()} drag={active} t={t} />,
+     )
+     stubRect(screen.getByRole('treeitem'))
+     // Top half hovers/drops 'before'; bottom half 'after' (row mid = 117).
+@@ -508,7 +508,7 @@ describe('workspace browser rows', () => {
+     const after = dragProps({ active: true, marker: 'after' })
+     rerender(
+       <SessionNodeItem node={node} currentId={undefined} now={0} onOpen={vi.fn()}
+-        onRename={vi.fn()} onFork={vi.fn()} onArchive={vi.fn()} drag={after} t={t} />,
++        onRename={vi.fn()} onFork={vi.fn()} onDelete={vi.fn()} drag={after} t={t} />,
+     )
+     expect(screen.getByRole('treeitem').className).toMatch(/dropAfter/)
+   })
+diff --git a/packages/client/ui-workspace/tests/tree.client.spec.ts b/packages/client/ui-workspace/tests/tree.client.spec.ts
+index f2e069de43..aa368cb94d 100644
+--- a/packages/client/ui-workspace/tests/tree.client.spec.ts
++++ b/packages/client/ui-workspace/tests/tree.client.spec.ts
+@@ -30,6 +30,7 @@ const view = (expandedGroups: readonly string[] = [], ungroupedOrder?: readonly
+ })
+ const noArchive: readonly SessionId[] = []
+ const archived = (...ids: string[]): readonly SessionId[] => ids.map(sid)
++const deleted = (...ids: string[]): readonly SessionId[] => ids.map(sid)
+ 
+ describe('deriveGroups', () => {
+   it('keeps Host Workspace and sessionIds order without Client recency sorting', () => {
+@@ -194,6 +195,22 @@ describe('deriveGroups', () => {
+     expect(groups[0]!.sessionCount).toBe(1)
+   })
+ 
++  it('hides locally deleted sessions from workspace groups and Ungrouped', () => {
++    const kept = summary('kept', 1, '/projects/first')
++    const gone = summary('gone', 2, '/projects/first')
++    const looseGone = summary('loose-gone', 3, '/other')
++    const sessions = list(kept, gone, looseGone)
++    const groups = deriveGroups(
++      sessions, [workspace('first', ['kept', 'gone'])], noArchive,
++      view(['first', UNGROUPED_KEY]), '', deleted('gone', 'loose-gone'),
++    )
++    // The host-confirmed deletion hides the member from its group AND the
++    // stray never surfaces an Ungrouped bucket; counts follow visible rows.
++    expect(groups.map(group => group.key)).toEqual(['first'])
++    expect(groups[0]!.sessions.map(node => node.id)).toEqual([kept.id])
++    expect(groups[0]!.sessionCount).toBe(1)
++  })
++
+   it('marks selected Workspace and Ungrouped sessions without relying on an Intent', () => {
+     const owned = summary('owned', 1)
+     const loose = summary('loose', 2)
+@@ -249,6 +266,12 @@ describe('deriveFlat', () => {
+     const gone = summary('gone', 2)
+     expect(deriveFlat(list(kept, gone), archived('gone')).map(row => row.id)).toEqual([kept.id])
+   })
++
++  it('hides locally deleted sessions in flat mode', () => {
++    const kept = summary('kept', 1)
++    const gone = summary('gone', 2)
++    expect(deriveFlat(list(kept, gone), noArchive, '', deleted('gone')).map(row => row.id)).toEqual([kept.id])
++  })
+ })
+ 
+ describe('deriveSearchResults archive filtering', () => {
+@@ -267,6 +290,24 @@ describe('deriveSearchResults archive filtering', () => {
+     )
+     expect(result.items.map(item => item.id)).toEqual([hit.id])
+   })
++
++  it('locally deleted sessions never match — not by title and not via a backend content hit', () => {
++    const hit = summary('hit', 2)
++    hit.displayTitle = 'Needle row'
++    const gone = summary('gone', 1)
++    gone.displayTitle = 'Needle deleted'
++    const result = deriveSearchResults(
++      list(hit, gone),
++      [],
++      'needle',
++      noArchive,
++      { items: [{ sessionId: gone.id, snippet: 'needle body' }], hasMore: false },
++      10,
++      '',
++      deleted('gone'),
++    )
++    expect(result.items.map(item => item.id)).toEqual([hit.id])
++  })
+ })
+ 
+ describe('deriveSearchResults', () => {
+diff --git a/packages/client/ui-workspace/tests/workspace-browser.client.spec.tsx b/packages/client/ui-workspace/tests/workspace-browser.client.spec.tsx
+index fbe42fc279..bf2c0fe899 100644
+--- a/packages/client/ui-workspace/tests/workspace-browser.client.spec.tsx
++++ b/packages/client/ui-workspace/tests/workspace-browser.client.spec.tsx
+@@ -75,7 +75,7 @@ function mount(overrides: Partial<WorkspaceBrowserProps> = {}) {
+     forkSession: vi.fn(),
+     renameWorkspace: vi.fn(async () => {}),
+     deleteWorkspace: vi.fn(async () => {}),
+-    archiveSession: vi.fn(async () => {}),
++    deleteSession: vi.fn(async () => {}),
+     insertWorkspaceBefore: vi.fn(async () => {}),
+     insertSessionBefore: vi.fn(async () => {}),
+     createWorkspace: vi.fn(async () => workspace('created', [])),
+@@ -314,43 +314,46 @@ describe('WorkspaceBrowser', () => {
+     expect(screen.getAllByRole('treeitem').slice(1)[0]?.textContent).toContain('two')
+   })
+ 
+-  it('archives a session from the row menu and hides archived rows in both modes', async () => {
+-    const archiveSession = vi.fn(async () => {})
+-    const b = mount({
++  it('deletes a session from the row menu and hides the row once the host confirms', async () => {
++    const deleteSession = vi.fn(async () => {})
++    mount({
+       useSessions: hook(sessionState([summary('kept-s', 2), summary('gone-s', 1)])),
+       useWorkspaces: hook(workspaceState([workspace('alpha', ['kept-s', 'gone-s'])])),
+-      archiveSession,
++      deleteSession,
+     })
+     fireEvent.click(screen.getByText('alpha'))
+     fireEvent.click(screen.getByRole('button', { name: '会话“gone-s”的操作' }))
+-    fireEvent.click(screen.getByRole('menuitem', { name: '归档会话' }))
+-    expect(archiveSession).toHaveBeenCalledWith(sid('gone-s'))
++    fireEvent.click(screen.getByRole('menuitem', { name: '删除会话' }))
++    expect(deleteSession).toHaveBeenCalledWith(sid('gone-s'))
+ 
+-    // The archive-set echo hides the row in grouped and flat modes.
+-    rerender(b, { useWorkspaces: hook(workspaceState([workspace('alpha', ['kept-s', 'gone-s'])], [sid('gone-s')])) })
+-    expect(screen.queryByText('gone-s')).toBeNull()
++    // The host-confirmed deletion hides the row locally in grouped and flat
++    // modes (the next session.list re-pull finds the log gone anyway).
++    await waitFor(() => {
++      expect(screen.queryByText('gone-s')).toBeNull()
++    })
++    expect(screen.getByText('kept-s')).toBeTruthy()
+     fireEvent.click(screen.getByRole('button', { name: '视图选项' }))
+     fireEvent.click(screen.getByRole('menuitem', { name: '单列表' }))
+     expect(screen.getByText('kept-s')).toBeTruthy()
+     expect(screen.queryByText('gone-s')).toBeNull()
+   })
+ 
+-  it('logs and keeps the tree when the archive call rejects', async () => {
+-    const rejection = new Error('archive exploded')
+-    const archiveSession = vi.fn(async () => { throw rejection })
++  it('logs and keeps the tree when the delete call rejects', async () => {
++    const rejection = new Error('delete exploded')
++    const deleteSession = vi.fn(async () => { throw rejection })
+     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+     try {
+       mount({
+         useSessions: hook(sessionState([summary('alpha-s', 1)])),
+         useWorkspaces: hook(workspaceState([workspace('alpha', ['alpha-s'])])),
+-        archiveSession,
++        deleteSession,
+       })
+       fireEvent.click(screen.getByText('alpha'))
+       fireEvent.click(screen.getByRole('button', { name: '会话“alpha-s”的操作' }))
+-      fireEvent.click(screen.getByRole('menuitem', { name: '归档会话' }))
++      fireEvent.click(screen.getByRole('menuitem', { name: '删除会话' }))
+       await Promise.resolve()
+       await Promise.resolve()
+-      expect(warn).toHaveBeenCalledWith('session archive rejected:', rejection)
++      expect(warn).toHaveBeenCalledWith('session delete rejected:', rejection)
+       expect(screen.getByText('alpha-s')).toBeTruthy()
+     } finally {
+       warn.mockRestore()
+diff --git a/packages/client/ui-workspace/tsdown.config.ts b/packages/client/ui-workspace/tsdown.config.ts
+index 084fe49266..ad37f47671 100644
+--- a/packages/client/ui-workspace/tsdown.config.ts
++++ b/packages/client/ui-workspace/tsdown.config.ts
+@@ -1,3 +1,3 @@
+ import { clientBundle } from '../tsdown.client.ts'
+ 
+-export default clientBundle('@deepseek-ai/dsh-client-ui-workspace', ['lib/types/index.js', 'lib/types/invariant.js'])
++export default clientBundle('dshui-client-ui-workspace', ['lib/types/index.js', 'lib/types/invariant.js'])

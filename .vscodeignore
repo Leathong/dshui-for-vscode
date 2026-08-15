@@ -4,6 +4,7 @@
 .pnpm-store/**
 .git/**
 **/*.map
+Makefile
 node_modules/.cache/**
 node_modules/typescript/**
 node_modules/@types/**

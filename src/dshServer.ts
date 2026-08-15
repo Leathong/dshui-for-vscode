@@ -4,9 +4,16 @@
  * opened folder (that directory IS the dsh workspace), on a port passed
  * through the `--port` flag; the actual bound port is read back from the
  * `dsh web: http://127.0.0.1:<port>` URL line dsh prints once it binds.
+ *
+ * Shared-backend mode: with a fixed port, several windows may use ONE server.
+ * A window can `attach()` to a server another window spawned (detected by
+ * probing the port); a spawn that loses a fixed-port race adopts the winner
+ * instead of failing; and the child is detached so it survives its spawning
+ * window and keeps serving the other windows until the last one closes.
  */
 import { spawn, type ChildProcess } from 'node:child_process'
 import * as fs from 'node:fs'
+import * as http from 'node:http'
 import * as path from 'node:path'
 
 export interface DshServerOptions {
@@ -29,6 +36,29 @@ export interface DshServerOptions {
 }
 
 const URL_LINE = /dsh web:\s+http:\/\/127\.0\.0\.1:(\d+)/
+
+/**
+ * True when a dshui-managed dsh web server is already serving on the port:
+ * the index page carries the injected `__DSHUI_WORKSPACE__` marker, so a
+ * random non-dsh process occupying the port is not mistaken for one.
+ */
+export function probeDshuiServer(port: number, timeoutMs = 2500): Promise<boolean> {
+  return new Promise((resolve) => {
+    const req = http.get({ host: '127.0.0.1', port, path: '/', timeout: timeoutMs }, (res) => {
+      if (res.statusCode !== 200) {
+        res.resume()
+        resolve(false)
+        return
+      }
+      res.setEncoding('utf8')
+      let body = ''
+      res.on('data', (chunk: string) => { body += chunk })
+      res.on('end', () => { resolve(body.includes('__DSHUI_WORKSPACE__')) })
+    })
+    req.on('timeout', () => { req.destroy(); resolve(false) })
+    req.on('error', () => { resolve(false) })
+  })
+}
 
 /** Maximum automatic restarts before the server stays down. */
 const MAX_RESTARTS = 2
@@ -75,6 +105,23 @@ export class DshServer {
     this.options = options
   }
 
+  /**
+   * Attach to an already-running dshui server on the port (spawned by another
+   * window). No child process is owned: `stop()` is a no-op and the server
+   * keeps serving other windows.
+   * @param port - the shared server's port.
+   * @param cwd - this window's workspace root (used for the reuse check).
+   * @returns an attached server handle.
+   */
+  static attach(port: number, cwd: string): DshServer {
+    const server = new DshServer({
+      cwd, dshHome: '', patchPath: '', cliPath: '', port,
+      onReady: () => {}, onExit: () => {},
+    })
+    server.boundPort = port
+    return server
+  }
+
   get port(): number | undefined {
     return this.boundPort
   }
@@ -84,14 +131,21 @@ export class DshServer {
     return this.options.cwd
   }
 
+  /** True when this handle adopted another window's server (no child owned). */
+  get shared(): boolean {
+    return this.child === null && this.boundPort !== undefined
+  }
+
   /** Subscribe to the child's stdout lines (diagnostics). */
   onOutput(listener: (line: string) => void): void {
     this.onData = listener
   }
 
-  /** Boot the server (or restart it after a crash). */
+  /** Boot the server (or restart it after a crash); resolve with the bound port. */
   start(): Promise<number> {
-    if (this.child !== null && this.boundPort !== undefined) return Promise.resolve(this.boundPort)
+    if (this.boundPort !== undefined && (this.child === null || this.child.exitCode === null)) {
+      return Promise.resolve(this.boundPort)
+    }
     return this.spawn(this.options.port)
   }
 
@@ -108,6 +162,10 @@ export class DshServer {
     ]
     const child = spawn(process.execPath, args, {
       cwd: this.options.cwd,
+      // Detached: the server must survive its spawning window (a shared
+      // backend outlives the owner while other windows still use it). The
+      // host plugin self-exits once the lifecycle registry has no live users.
+      detached: true,
       env: {
         ...process.env,
         // In the VS Code extension host `process.execPath` is the Electron
@@ -118,6 +176,9 @@ export class DshServer {
       },
       stdio: ['ignore', 'pipe', 'pipe'],
     })
+    // Unref so the extension host never waits on the server at exit; the
+    // stdout pipe keeps the URL-read listener alive while this host lives.
+    child.unref()
     this.child = child
     child.stdout?.on('data', (chunk: Buffer) => {
       for (const line of chunk.toString('utf8').split('\n')) {
@@ -147,16 +208,26 @@ export class DshServer {
       })
       return port
     }).catch(async (error) => {
+      if (this.restarts >= MAX_RESTARTS) throw error
+      this.restarts += 1
       if (this.child !== null && this.child.exitCode === null) {
-        // Never bound; likely a port conflict. Kill and retry on port 0.
+        // Never bound and still alive: kill before any retry/adoption.
         try { child.kill('SIGTERM') } catch { /* already gone */ }
-        if (requestedPort !== 0 && this.restarts < MAX_RESTARTS) {
-          this.restarts += 1
-          return this.spawn(0).then((port) => {
-            this.boundPort = port
-            return port
-          })
-        }
+      }
+      // Fixed-port race: another window's dshui server may now hold the port
+      // (this child exited with EADDRINUSE). Adopt it instead of failing.
+      if (requestedPort !== 0 && await probeDshuiServer(requestedPort)) {
+        this.child = null
+        this.boundPort = requestedPort
+        return requestedPort
+      }
+      // The port is held by a non-dsh process (or the server died): fall back
+      // to an OS-picked port, at most MAX_RESTARTS times.
+      if (requestedPort !== 0) {
+        return this.spawn(0).then((port) => {
+          this.boundPort = port
+          return port
+        })
       }
       throw error
     })
@@ -180,9 +251,9 @@ export class DshServer {
     })
   }
 
-  /** True when the child process is alive and bound. */
+  /** True when the server is bound and usable (owned child alive, or adopted). */
   get running(): boolean {
-    return this.child !== null && this.child.exitCode === null && this.boundPort !== undefined
+    return this.boundPort !== undefined && (this.child === null || this.child.exitCode === null)
   }
 }
 
