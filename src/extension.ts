@@ -17,7 +17,7 @@ import { OpenBridge } from './openBridge'
 import { patchFileOpener } from './openPatch'
 import { installPlugins, resolveDshHome, type InstalledPlugin } from './plugins'
 import {
-  bridgesPath, hasOtherLiveUsers, registerBridge, registerServerUser, unregisterBridge,
+  bridgesPath, isAlive, readRegistry, registerBridge, registerServerUser, unregisterBridge,
   unregisterServerUser, writeWorkspaceMarker,
 } from './sharedBackend'
 import {
@@ -301,6 +301,24 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     try { return fs.realpathSync(raw) } catch { return raw }
   }
 
+  /**
+   * True when an owned server may be stopped without harming other windows.
+   * Non-shared mode (port 0 — no lifecycle registry exists) always stops.
+   * Shared mode stops only when the registry exists and tracks no live user
+   * besides this window. A missing registry in shared mode means no window's
+   * registration has landed yet — another window may have just attached, and
+   * stopping would disconnect it (the attach-before-register race); the
+   * detached server's host-plugin self-check reaps it instead
+   * (unregisterServerUser materializes an empty registry for that check).
+   */
+  function canStopOwnedServer(): boolean {
+    const configPort = vscode.workspace.getConfiguration('dshui').get<number>('server.port') ?? 0
+    if (configPort <= 0) return true
+    const registry = readRegistry(dshHome)
+    if (registry === null) return false
+    return !registry.users.some((pid) => pid !== process.pid && isAlive(pid))
+  }
+
   /** The dsh UI color scheme matching VS Code's active color theme (high-contrast maps to its dark/light base). */
   function activeColorScheme(): 'dark' | 'light' {
     switch (vscode.window.activeColorTheme.kind) {
@@ -324,11 +342,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }
     if (serverStart !== null) return serverStart
     // A live server bound to a different folder must be retired before the
-    // new one spawns (the cwd is the workspace identity).
+    // new one spawns (the cwd is the workspace identity) — unless another
+    // window still uses it: the shared server keeps serving the other
+    // windows, and the probe below attaches this window to it instead.
     if (server !== null) {
       const old = server
       server = null
-      void old.stop()
+      if (!old.shared && canStopOwnedServer()) {
+        void old.stop()
+      }
     }
     const configPort = vscode.workspace.getConfiguration('dshui').get<number>('server.port') ?? 0
     const shared = configPort > 0
@@ -811,11 +833,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   context.subscriptions.push({
     dispose: () => {
-      // 共享后端：采纳的服务器不归本窗口管；自己启动的服务器只在没有其他
-      // 存活用户时才停掉（其余情况由 detached 服务器自检退出）。注册表条目
+      // 共享后端：采纳的服务器不归本窗口管；自己启动的服务器只在确认没有
+      // 其他存活用户时才停掉。注册表缺失时不停——另一窗口可能刚附加上而
+      // 登记尚未落盘，停了会断掉它；该情形由 detached 服务器的自检退出
+      // （unregisterServerUser 会补落一个空注册表供自检识别）。注册表条目
       // 尽力摘除——即使没跑完，服务器自检也会把死 pid 当不存在。
       if (server !== null) {
-        if (!server.shared && !hasOtherLiveUsers(dshHome)) {
+        if (!server.shared && canStopOwnedServer()) {
           void server.stop()
         }
         server = null

@@ -129,7 +129,7 @@
           "default": 61370,
           "minimum": 0,
           "maximum": 65535,
-          "description": "Port for the embedded dsh web server. Defaults to a fixed port (61370) that doubles as the shared-backend rendezvous: all windows reuse ONE server, each scoped to its own workspace, and the same origin keeps browser-side state (localStorage, including the last opened session) across launches. Set to 0 to let the OS pick a free port (no sharing, no persistence)."
+          "description": "Port for the embedded dsh web server. Defaults to a fixed port (61370) that doubles as the shared-backend rendezvous: all windows reuse ONE server, each scoped to its own workspace, and localStorage is scoped per workspace so each folder remembers its own last-opened session across launches. Set to 0 to let the OS pick a free port (no sharing, no persistence)."
         },
         "dshui.openFilesInVscode": {
           "type": "boolean",

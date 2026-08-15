@@ -141,7 +141,7 @@ For development, press **F5** (the repo ships `.vscode/launch.json`), or run
 | Setting | Default | Description |
 | --- | --- | --- |
 | `dshui.autoOpen` | `true` | Automatically show the sidebar view when a folder is opened |
-| `dshui.server.port` | `61370` | Port of the embedded server. The fixed port doubles as the shared-backend rendezvous: all windows reuse ONE server (each scoped via `?dshui_workspace`), and the shared origin lets localStorage (including the last opened session) survive across launches. Set to `0` for an OS-assigned port (no sharing, no persistence). Falls back to a random port when the port is taken |
+| `dshui.server.port` | `61370` | Port of the embedded server. The fixed port doubles as the shared-backend rendezvous: all windows reuse ONE server (each scoped via `?dshui_workspace`), and localStorage is scoped per workspace so each folder remembers its own last-opened session across launches. Set to `0` for an OS-assigned port (no sharing, no persistence). Falls back to a random port when the port is taken |
 | `dshui.openFilesInVscode` | `true` | Open file links from chat in **the current VS Code** window (via the extension's bridge, no system popup) instead of the OS default editor |
 | `dshui.checkDshUpdates` | `true` | Check the npm registry for newer dsh releases at startup and notify when the bundled version is outdated (throttled to once per 24h; each new version is announced once; can be disabled) |
 
@@ -200,7 +200,11 @@ its own folder through a marker in `$DSH_HOME/dshui-workspaces/`, and the webvie
 `?dshui_workspace=<folder>`; the host plugin resolves scope per connection. Lifecycle:
 `$DSH_HOME/dshui-server.json` records the pid of the window using the server, the server starts
 detached (it outlives the window that started it), the host plugin polls the registry and exits when no
-window is alive. As a result, windows over the same or different workspaces share one backend, only one
+window is alive. An adopter that finds no registry yet (the owner window is still registering during
+startup) creates it and registers itself instead of being silently dropped, and the owner's close-time
+check decides by the registry whether other windows are still using the server — the startup race no
+longer stops the shared server under the other windows. As a result, windows over the same or different
+workspaces share one backend, only one
 process ever writes to `~/.dsh`, there are no more EADDRINUSE conflicts, and the multi-process shared
 disk-state warning from dsh's upstream README is avoided.
 
@@ -213,10 +217,11 @@ Notes:
   the most recently registered one wins). When the owner closes and its bridge is gone, the fallback is
   the `code` CLI (opens in the **most recently focused** VS Code window, no popup), then
   `vscode://file` (with a confirmation popup).
-- **Shared-origin localStorage:** while multiple windows coexist, browser-side state such as
-  `dsh.sessions.current` is visible to all of them; across workspaces, a failed restore validation
-  naturally falls back to a blank session (never opens the wrong session). "Restore last session" is
-  degraded while windows coexist; single-window usage is unaffected.
+- **Per-workspace localStorage:** an injected patch namespaces every localStorage key by the
+  workspace scope (resolved from `?dshui_workspace`), so each workspace remembers its own last-opened
+  session and view state and never sees another workspace's. Windows on the same folder still share
+  (reload restores within the workspace); a plain browser hit on the server root without a workspace
+  query keeps stock unscoped behavior.
 - Sharing only applies on the fixed port (the default); with `dshui.server.port = 0`, every window
   starts its own server on a random port.
 
@@ -231,10 +236,9 @@ VS Code sidebar view (webview)
 - **Server:** the extension bundles the real `@deepseek-ai/dsh` CLI as a runtime dependency and starts
   `dsh --profile web` with the opened folder as cwd (port: see `dshui.server.port`, fixed 61370 by
   default; pre-started at activation to avoid a blank view while loading).
-- **Restoring the last session:** the fixed port reuses one origin, so the client writes the current
-  session into localStorage (`dsh.sessions.current`) and the stock SPA restores it on the next launch —
-  you land on the last session you used; with no history, it falls back to a blank new session. When
-  the port is taken, it falls back to a random port (no persistence that run).
+- **Restoring the last session:** localStorage keys are scoped per workspace (see the note above), so
+  each folder restores its own last session on the next launch; with no history, it falls back to a
+  blank new session. When the port is taken, it falls back to a random port (no persistence that run).
 - **Plugin loading:** on activation, three dshui plugins are installed into
   `$DSH_HOME/profiles/node_modules` (with the extension's own `node_modules` as a loader fallback) and
   wired in through the `--patch` overlay (see `patch.yml`):

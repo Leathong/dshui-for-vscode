@@ -93,9 +93,15 @@ function writeRegistry(dshHome: string, registry: ServerRegistry): void {
 }
 
 /**
- * Register this extension host as a user of the shared server. When no
- * registry exists yet (adopting a server started by an older extension
- * version), leave it alone — the old owner manages that server's lifecycle.
+ * Register this extension host as a user of the shared server. Adopting a
+ * server whose registry does not exist yet (the spawning window has not
+ * written it, or an older extension version started the server) creates the
+ * registry with this window as its only user instead of silently skipping:
+ * a dropped registration would make the owner's close-time check see "no
+ * other live users" and stop the server right under this window (the
+ * attach-before-register race). The unknown owner is a sentinel `0` — the
+ * host plugin's self-check only reads `users`, and every later write
+ * replaces `owner` with a real pid.
  * @param dshHome - the dsh home the shared server runs under.
  * @param port - the rendezvous port.
  * @param owner - true when this window spawned the server.
@@ -103,8 +109,13 @@ function writeRegistry(dshHome: string, registry: ServerRegistry): void {
 export async function registerServerUser(dshHome: string, port: number, owner: boolean): Promise<void> {
   await withRegistryLock(dshHome, () => {
     const existing = readRegistry(dshHome)
-    // 采纳旧版本窗口启动的服务器（尚无注册表）：不创建注册表，交还原主管理。
-    if (existing === null && !owner) return
+    // 采纳服务器但注册表尚不存在（owner 窗口还没登记，或服务器由旧版本
+    // 窗口启动）：创建注册表并登记自己——绝不能静默跳过，否则 owner 关闭
+    // 时会把本窗口误判为不存在而停掉共享服务器（见文件头注释的竞态）。
+    if (existing === null && !owner) {
+      writeRegistry(dshHome, { port, owner: 0, users: [process.pid] })
+      return
+    }
     const users = [...new Set([...(existing?.users ?? []), process.pid])]
     // Prune pids of crashed windows so the server self-check stays accurate.
     const live = users.filter((pid) => pid === process.pid || isAlive(pid))
@@ -116,11 +127,20 @@ export async function registerServerUser(dshHome: string, port: number, owner: b
   })
 }
 
-/** Remove this extension host from the shared server's user list. */
+/**
+ * Remove this extension host from the shared server's user list. A missing
+ * registry (nobody's registration ever landed — the same attach-before-
+ * register race) is materialized as an empty registry so the detached
+ * server's host-plugin self-check can reap it; without a registry file the
+ * self-check idles forever and the server would leak.
+ */
 export async function unregisterServerUser(dshHome: string): Promise<void> {
   await withRegistryLock(dshHome, () => {
     const existing = readRegistry(dshHome)
-    if (existing === null) return
+    if (existing === null) {
+      writeRegistry(dshHome, { port: 0, owner: process.pid, users: [] })
+      return
+    }
     writeRegistry(dshHome, {
       ...existing,
       users: existing.users.filter((pid) => pid !== process.pid && isAlive(pid)),

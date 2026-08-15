@@ -31,6 +31,10 @@
  *   the chord for New Window, so the page intercepts it and clicks the
  *   sidebar New Session button instead (startSession in the scoped
  *   workspace, no picker);
+ * - per-workspace localStorage scoping (STORAGE_SCOPE_PATCH): keys are
+ *   namespaced by the workspace scope so each workspace remembers its own
+ *   last-opened session and view state instead of sharing one origin-wide
+ *   store;
  * - shared-backend coordination (filesystem IPC with the extension hosts):
  *   polls workspace-registration markers (`$DSH_HOME/dshui-workspaces/`) so
  *   non-owner windows' folders become Workspaces, and self-exits once the
@@ -452,6 +456,71 @@ const EXTERNAL_LINK_PATCH = `<script>
 })();
 <\/script>`
 
+/**
+ * Per-workspace localStorage scoping. Every dsh window shares one origin
+ * (`http://127.0.0.1:<port>`), so browser-side persistence — the last opened
+ * session (`dsh.sessions.current`), the workspace-browser view, composer
+ * drafts, locale, … — is shared across workspaces by default: a session
+ * opened in window A would resurface in window B's different folder. This
+ * script namespaces every localStorage key with a short hash of the
+ * workspace scope, so each workspace remembers its own state across
+ * launches. The scope comes from `window.__DSHUI_WORKSPACE__` (set by the
+ * adjacent injected script); a page without a workspace scope (a plain
+ * browser hit on the server root) keeps stock unscoped behavior. Only
+ * localStorage is wrapped — the SPA's persistence reads and writes through
+ * it exclusively.
+ */
+const STORAGE_SCOPE_PATCH = `<script>
+(function () {
+  var scope = '';
+  try {
+    var g = window.__DSHUI_WORKSPACE__;
+    if (typeof g === 'string' && g !== '') scope = g;
+  } catch (error) { /* scope-less page: keep stock behavior */ }
+  if (scope === '') return;
+  var hash = 0;
+  for (var i = 0; i < scope.length; i += 1) {
+    hash = ((hash << 5) - hash + scope.charCodeAt(i)) | 0;
+  }
+  var prefix = 'dshui:' + (hash >>> 0).toString(36) + ':';
+  try {
+    var real = window.localStorage;
+    if (real === null || real === undefined || real.__dshuiScopePrefix === prefix) return;
+    var wrapper = {
+      __dshuiScopePrefix: prefix,
+      getItem: function (key) { return real.getItem(prefix + key); },
+      setItem: function (key, value) { return real.setItem(prefix + key, value); },
+      removeItem: function (key) { return real.removeItem(prefix + key); },
+      key: function (index) {
+        var count = 0;
+        for (var i = 0; i < real.length; i += 1) {
+          var k = real.key(i);
+          if (k === null || k.indexOf(prefix) !== 0) continue;
+          if (count === index) return k.slice(prefix.length);
+          count += 1;
+        }
+        return null;
+      },
+      get length() {
+        var count = 0;
+        for (var i = 0; i < real.length; i += 1) {
+          var k = real.key(i);
+          if (k !== null && k.indexOf(prefix) === 0) count += 1;
+        }
+        return count;
+      },
+      clear: function () {
+        for (var i = real.length - 1; i >= 0; i -= 1) {
+          var k = real.key(i);
+          if (k !== null && k.indexOf(prefix) === 0) real.removeItem(k);
+        }
+      }
+    };
+    Object.defineProperty(window, 'localStorage', { value: wrapper, configurable: true, writable: true });
+  } catch (error) { /* scoping must never break the page */ }
+})();
+<\/script>`
+
 export function apply(ctx) {
   const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
   const ensure = async () => {
@@ -476,7 +545,7 @@ export function apply(ctx) {
     () => ctx.webServer.tapIndex((html) => {
       // 作用域按连接解析：URL 查询参数优先（每个窗口自己的 folder），
       // 无查询时退回启动工作目录。
-      const injected = `${style}${CLIPBOARD_PATCH}${NEW_SESSION_PATCH}${THEME_PATCH}${EXTERNAL_LINK_PATCH}${REFERENCE_PATCH}<script>window.__DSHUI_WORKSPACE__ = (new URLSearchParams(window.location.search).get('dshui_workspace')) || ${scopeJson}<\/script>`
+      const injected = `${style}${CLIPBOARD_PATCH}${NEW_SESSION_PATCH}${THEME_PATCH}${EXTERNAL_LINK_PATCH}${REFERENCE_PATCH}<script>window.__DSHUI_WORKSPACE__ = (new URLSearchParams(window.location.search).get('dshui_workspace')) || ${scopeJson}<\/script>${STORAGE_SCOPE_PATCH}`
       const head = html.indexOf('<head>')
       return head === -1 ? `${injected}${html}` : `${html.slice(0, head + 6)}${injected}${html.slice(head + 6)}`
     }),
