@@ -112,7 +112,7 @@ npx @vscode/vsce package              # 产出 dshui-for-vscode-<version>.vsix
 | `dshui.openInBrowser` | 在系统浏览器中打开同一个 scoped 服务器 |
 | `dshui.referenceFile` | 将文件引用插入 dsh 输入框（资源管理器 / 编辑器 / 编辑器标签页右键菜单） |
 | `dshui.referenceSelection` | 将选中代码片段（含行号）插入 dsh 输入框（编辑器右键菜单） |
-| `dshui.restartServer` | 重启内嵌 dsh 服务器并刷新侧边栏视图（亦为视图标题栏的 ⟳ 按钮；服务器未运行时等同启动） |
+| `dshui.restartServer` | 重启内嵌 dsh 服务器并刷新侧边栏视图（仅命令面板调用，无视图按钮以防误触；服务器未运行时等同启动） |
 
 > 重启服务器会中断正在进行的 agent 任务（会话数据持久化于 `~/.dsh`，不会丢失）。共享后端下若
 > 服务器由**另一个窗口**启动，会先弹出确认框说明对其他窗口的影响；确认后本窗口接管：终止原监听

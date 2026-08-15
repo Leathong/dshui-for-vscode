@@ -33,6 +33,12 @@ OVSX      ?= $(shell command -v ovsx 2>/dev/null || echo "npx --cache $(VSCE_CAC
 BUMP      ?=                   # 非空（patch|minor|major）才递增版本；默认空 = 不递增，直接发布当前版本
 NO_GIT_TAG ?=                  # 非空则跳过 git 提交与 tag（工作树不干净时用）
 SKIP_DUPLICATE ?=              # 非空则版本已存在于市场时静默跳过（--skip-duplicate）
+AZURE     ?=                   # 非空则用 Microsoft Entra ID 认证（--azure-credential），与 VSCE_PAT 互斥。
+                               # 需已 az login（或用 AZURE_CLIENT_ID/AZURE_TENANT_ID/AZURE_FEDERATED_TOKEN_FILE
+                               # 环境变量走工作负载身份），且该身份是市场 publisher 的 Contributor 成员。
+
+# 认证参数拼接：AZURE=1 → --azure-credential；否则 VSCE_PAT 非空 → --pat。
+AUTH_FLAG := $(if $(AZURE),--azure-credential,$(if $(VSCE_PAT),--pat '$(VSCE_PAT)',))
 
 .PHONY: all deploy package install compile sync clean help \
         login verify-pat publish publish-vsix publish-ovsx unpublish
@@ -63,10 +69,10 @@ deploy: install
 login:
 	$(VSCE) login $(PUBLISHER)
 
-# 校验 PAT 是否有效（用已存储凭据，或临时用 VSCE_PAT=xxx make verify-pat）。
-# 发布前先跑一次，避免发布时才撞上过期 token。
+# 校验认证是否有效：默认用已存储凭据；VSCE_PAT=xxx 用临时 PAT；AZURE=1 用 Entra ID 身份。
+# 发布前先跑一次，避免发布时才撞上过期 token / 身份权限问题。
 verify-pat:
-	$(VSCE) verify-pat $(PUBLISHER) $(if $(VSCE_PAT),-p '$(VSCE_PAT)')
+	$(VSCE) verify-pat $(PUBLISHER) $(AUTH_FLAG)
 
 # 发布到 VS Code 市场：默认不递增版本，直接打包并发布当前 package.json 版本。
 # 需要递增时显式指定 BUMP=patch|minor|major，vsce 会先递增 package.json 版本、
@@ -76,14 +82,14 @@ publish:
 	$(VSCE) publish $(if $(BUMP),$(BUMP),) \
 		$(if $(NO_GIT_TAG),--no-git-tag-version) \
 		$(if $(SKIP_DUPLICATE),--skip-duplicate) \
-		$(if $(VSCE_PAT),--pat '$(VSCE_PAT)')
+		$(AUTH_FLAG)
 
 # 直接上传已打包好的 $(VSIX)，不递增版本（版本需尚未发布；重复时报错，
 # 可加 SKIP_DUPLICATE=1 容忍）。
 publish-vsix: package
 	$(VSCE) publish --packagePath $(VSIX) \
 		$(if $(SKIP_DUPLICATE),--skip-duplicate) \
-		$(if $(VSCE_PAT),--pat '$(VSCE_PAT)')
+		$(AUTH_FLAG)
 
 # 发布到 Open VSX 市场（open-vsx.org），需要 OVSX_TOKEN 环境变量。
 publish-ovsx: package
@@ -93,7 +99,7 @@ publish-ovsx: package
 # 从 VS Code 市场下架，不可撤销，需显式 FORCE=1 确认。
 unpublish:
 	@test "$(FORCE)" = "1" || (echo "危险：将下架 $(EXT_ID)，不可撤销。确认请用 FORCE=1 make unpublish" && exit 1)
-	$(VSCE) unpublish $(EXT_ID) $(if $(VSCE_PAT),-p '$(VSCE_PAT)')
+	$(VSCE) unpublish $(EXT_ID) $(AUTH_FLAG)
 
 # 开发期快速同步：把运行产物拷入已安装副本，免重新打包 vsix。
 # 同步内容：out/（扩展主程序）、dshui-plugins/（host 插件 + 客户端 bundle）、
@@ -121,8 +127,9 @@ help:
 	@echo "  make compile    只编译 TypeScript"
 	@echo "  make sync       快速同步运行产物到已安装副本（免打包）"
 	@echo "  make login      登录 VS Code 市场（发布前一次性操作，或导出 VSCE_PAT）"
-	@echo "  make verify-pat 校验 PAT 是否有效（发布前建议先跑）"
+	@echo "  make verify-pat 校验认证是否有效（PAT 或 AZURE=1 的 Entra ID 身份）"
 	@echo "  make publish    发布到 VS Code 市场（默认不递增版本，BUMP=patch|minor|major 时递增）"
+	@echo "                  认证：默认已存 PAT；VSCE_PAT=xxx 临时 PAT；AZURE=1 用 Entra ID"
 	@echo "  make publish-vsix   直接上传当前 vsix（不递增版本）"
 	@echo "  make publish-ovsx   发布到 Open VSX 市场（需 OVSX_TOKEN）"
 	@echo "  make unpublish  从市场下架（危险，需 FORCE=1 确认）"

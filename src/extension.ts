@@ -678,8 +678,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }
   }
 
-  // Command: restart the embedded dsh server (also the view header refresh
-  // button, see the view/title menu contribution in package.json).
+  // Command: restart the embedded dsh server (Command Palette only — no
+  // view/title button, to avoid accidental clicks).
   context.subscriptions.push(
     vscode.commands.registerCommand('dshui.restartServer', () => {
       void restartServer()

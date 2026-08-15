@@ -75,18 +75,10 @@
       {
         "command": "dshui.restartServer",
         "title": "Restart Server",
-        "category": "dsh UI",
-        "icon": "$(refresh)"
+        "category": "dsh UI"
       }
     ],
     "menus": {
-      "view/title": [
-        {
-          "command": "dshui.restartServer",
-          "when": "view == dshui.view",
-          "group": "navigation"
-        }
-      ],
       "editor/title/context": [
         {
           "command": "dshui.referenceFile",
