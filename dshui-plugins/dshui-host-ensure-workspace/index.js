@@ -186,10 +186,13 @@ const CSS_OVERRIDES = `
  * Cmd/Ctrl+C/V/X/A/Z for webview content (microsoft/vscode#129178, #180234),
  * so the page's own document must perform these actions and stop the event
  * from reaching the workbench. Runs in the capture phase to act first.
- * `document.execCommand('copy'/'paste'/'cut'/'selectAll'/'undo')` works
+ * `document.execCommand('copy'/'paste'/'cut'/'selectAll'/'undo'/'redo')` works
  * inside a user gesture here (the same technique the Flutter devtools
  * extension uses); `navigator.clipboard.writeText` never settles in this
- * environment, so it is replaced with the execCommand path.
+ * environment, so it is replaced with the execCommand path. Undo/redo follow
+ * the same interception: bare Cmd/Ctrl+Z is undo, Shift+Cmd/Ctrl+Z and
+ * Cmd/Ctrl+Y are redo — the workbench owns those chords for webview content
+ * too, so without this the SPA's own redo handler never sees them.
  */
 const CLIPBOARD_PATCH = `<script>
 (function () {
@@ -245,8 +248,11 @@ const CLIPBOARD_PATCH = `<script>
       try { document.execCommand('cut'); event.preventDefault(); event.stopPropagation(); } catch (e) {}
     } else if (key === 'a') {
       try { document.execCommand('selectAll'); event.preventDefault(); event.stopPropagation(); } catch (e) {}
-    } else if (key === 'z' && !event.shiftKey) {
-      try { document.execCommand('undo'); event.preventDefault(); event.stopPropagation(); } catch (e) {}
+    } else if (key === 'z' || key === 'y') {
+      // 平台撤销/重做：bare Cmd/Ctrl+Z 撤销，Shift+Cmd/Ctrl+Z 与 Cmd/Ctrl+Y 重做。
+      // workbench 也会抢占这些组合键，所以在这里用 execCommand 执行并阻止事件外传。
+      var redo = event.shiftKey || key === 'y';
+      try { document.execCommand(redo ? 'redo' : 'undo'); event.preventDefault(); event.stopPropagation(); } catch (e) {}
     }
   }, true);
 })();

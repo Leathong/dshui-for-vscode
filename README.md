@@ -206,10 +206,11 @@ VS Code 侧边栏视图（webview）
   `node_modules` 作为 loader 回退），并经 `--patch` 覆盖层接入（见 `patch.yml`）：
   - `dshui-host-ensure-workspace`——host 插件：启动时把工作目录注册为 Workspace，并向页面注入
     `window.__DSHUI_WORKSPACE__`（scope 路径）、`CSS_OVERRIDES` 免重建样式覆盖层（含字号收敛）、
-    VS Code 主题接管补丁（影子 `matchMedia`，详见本节「主题跟随」）、Cmd/Ctrl+C 复制
-    处理器（VS Code webview 会拦截 iframe 内的复制快捷键，见
+    VS Code 主题接管补丁（影子 `matchMedia`，详见本节「主题跟随」）、Cmd/Ctrl+C/V/X/A/Z
+    剪贴板与撤销/重做处理器（VS Code webview 会拦截 iframe 内的这些快捷键，见
     [microsoft/vscode#129178](https://github.com/microsoft/vscode/issues/129178) 与
-    [microsoft/vscode#180234](https://github.com/microsoft/vscode/issues/180234)）、Cmd/Ctrl+N 新建
+    [microsoft/vscode#180234](https://github.com/microsoft/vscode/issues/180234)；
+    重做 = Shift+Cmd/Ctrl+Z 或 Cmd/Ctrl+Y）、Cmd/Ctrl+N 新建
     会话处理器（拦截 workbench 的「新窗口」快捷键，改走侧边栏「新建会话」按钮），以及文件/代码
     引用写入处理器（接收扩展右键菜单经 webview 外壳转发的引用消息，写入 composer 草稿）；
   - `dshui-client-ui-workspace` / `dshui-client-ui-conversation`——两个原版客户端包的**重新构建产物**，
@@ -249,10 +250,11 @@ webview 渲染的是**原版 dsh SPA**（deepseek-harness 仓库的上游代码�
 | **视觉调整**（间距、颜色、贴底、隐藏元素） | `dshui-plugins/dshui-host-ensure-workspace/index.js` → `CSS_OVERRIDES` 列表 | **无需**——重载窗口即可 |
 | 客户端行为（过滤、hero 流程、组件逻辑） | `.dsh-src/packages/client/ui-workspace` / `ui-conversation`（TypeScript，需先按 `patches/README.md` 获取源码） | 完整客户端重建（见下） |
 
-修改 `dshui-host-ensure-workspace/index.js` 中注入页面的浏览器脚本（引用写入 / 主题接管）后，可先
-运行自带的行为冒烟测试再重载窗口：
+修改 `dshui-host-ensure-workspace/index.js` 中注入页面的浏览器脚本（剪贴板/撤销重做、引用写入、
+主题接管）后，可先运行自带的行为冒烟测试再重载窗口：
 
 ```sh
+node scripts/check-clipboard-patch.mjs && node scripts/test-clipboard-patch.mjs
 node scripts/check-reference-patch.mjs && node scripts/test-reference-patch.mjs
 node scripts/check-theme-patch.mjs && node scripts/test-theme-patch.mjs
 ```
