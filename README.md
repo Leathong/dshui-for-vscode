@@ -13,6 +13,7 @@
   - [设置](#设置)
   - [引用文件与代码片段](#引用文件与代码片段)
   - [文件打开](#文件打开)
+  - [消息里的网络链接](#消息里的网络链接)
   - [多窗口（共享后端）](#多窗口共享后端)
 - [工作原理](#工作原理)
 - [开发流程](#开发流程)
@@ -155,6 +156,14 @@ npx @vscode/vsce package              # 产出 dshui-for-vscode-<version>.vsix
 - 桥不可用时依次回退：`code` CLI（应用内路径经 `DSHUI_CODE_CLI` 传给服务器，走 CLI socket 协议
   打开正在运行的 VS Code，同样无确认弹窗）→ `open vscode://file/...`（带确认弹窗）；
 - `.html` / `.pdf` 仍走系统浏览器打开；可用 `dshui.openFilesInVscode` 关闭（恢复系统默认程序）。
+
+### 消息里的网络链接
+
+聊天消息里的 **http/https 链接**（含 `mailto:`）默认在**系统浏览器**中打开。dsh 把这类链接渲染成
+`<a target="_blank">`，在普通浏览器里会开新标签页，但 VS Code webview 会拦截 `window.open`/弹窗，
+点击原本无反应——host 插件注入的捕获阶段点击拦截器把这类链接改为：点击 → 经 webview 外壳转发给
+扩展宿主 → `vscode.env.openExternal` 打开系统浏览器。修饰键点击（Cmd/Ctrl/Shift/Alt+点击）放行给
+VS Code 自身处理；非 http(s) 目的地（如 `javascript:`）不做拦截。
 
 ### 多窗口（共享后端）
 

@@ -411,6 +411,41 @@ const THEME_PATCH = `<script>
 })();
 <\/script>`
 
+/**
+ * External-link opener. The SPA renders http(s) markdown links as
+ * `<a target="_blank">`, which in a normal browser opens a new tab — but the
+ * VS Code webview blocks `window.open`/popups, so such clicks do nothing
+ * here. This script intercepts clicks on those anchors in the capture phase
+ * and posts the URL to the webview shell, which forwards it to the extension
+ * host to open via `vscode.env.openExternal` (the system browser). Modifier
+ * clicks are left alone (VS Code handles Cmd/Ctrl+click itself), and only
+ * http/https/mailto destinations are routed; everything else keeps its
+ * default behavior.
+ */
+const EXTERNAL_LINK_PATCH = `<script>
+(function () {
+  window.addEventListener('click', function (event) {
+    if (event.defaultPrevented) return;
+    if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    var anchor = null;
+    var node = event.target;
+    while (node !== null && node !== document) {
+      if (node.tagName === 'A') { anchor = node; break; }
+      node = node.parentNode;
+    }
+    if (anchor === null) return;
+    var href = anchor.getAttribute('href');
+    if (href === null || href === '') return;
+    var url;
+    try { url = new URL(href, window.location.href); } catch (error) { return; }
+    if (url.protocol !== 'http:' && url.protocol !== 'https:' && url.protocol !== 'mailto:') return;
+    event.preventDefault();
+    event.stopPropagation();
+    window.parent.postMessage({ type: 'dshui:openExternal', url: url.href }, '*');
+  }, true);
+})();
+<\/script>`
+
 export function apply(ctx) {
   const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
   const ensure = async () => {
@@ -435,11 +470,11 @@ export function apply(ctx) {
     () => ctx.webServer.tapIndex((html) => {
       // 作用域按连接解析：URL 查询参数优先（每个窗口自己的 folder），
       // 无查询时退回启动工作目录。
-      const injected = `${style}${CLIPBOARD_PATCH}${NEW_SESSION_PATCH}${THEME_PATCH}${REFERENCE_PATCH}<script>window.__DSHUI_WORKSPACE__ = (new URLSearchParams(window.location.search).get('dshui_workspace')) || ${scopeJson}<\/script>`
+      const injected = `${style}${CLIPBOARD_PATCH}${NEW_SESSION_PATCH}${THEME_PATCH}${EXTERNAL_LINK_PATCH}${REFERENCE_PATCH}<script>window.__DSHUI_WORKSPACE__ = (new URLSearchParams(window.location.search).get('dshui_workspace')) || ${scopeJson}<\/script>`
       const head = html.indexOf('<head>')
       return head === -1 ? `${injected}${html}` : `${html.slice(0, head + 6)}${injected}${html.slice(head + 6)}`
     }),
-    'dshui: workspace scope + css + clipboard + theme + reference intake index injection',
+    'dshui: workspace scope + css + clipboard + theme + external links + reference intake index injection',
   )
 
   // 共享后端轮询：处理工作区注册 marker + 生命周期自检。

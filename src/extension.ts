@@ -464,6 +464,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         vscode.postMessage(data);
         return;
       }
+      // SPA → extension: open an external link (http/https/mailto clicked in
+      // a message) in the system browser — the webview blocks target=_blank.
+      if (event.source === frame.contentWindow && data.type === 'dshui:openExternal' && typeof data.url === 'string') {
+        vscode.postMessage({ type: 'openExternal', url: data.url });
+        return;
+      }
       if (data.type === 'navigate') {
         frame.src = data.url;
         spaReady = false; // the fresh page must re-announce readiness
@@ -523,8 +529,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         // through the VS Code file API and answers with
         // { type: 'dshui:sessionDeleted', sessionId, ok, error? }.
         webviewView.webview.onDidReceiveMessage((message: unknown) => {
-          const data = message as { type?: unknown; sessionId?: unknown; cwd?: unknown } | null
-          if (data === null || typeof data !== 'object' || data.type !== 'dshui:deleteSession') return
+          const data = message as { type?: unknown; sessionId?: unknown; cwd?: unknown; url?: unknown } | null
+          if (data === null || typeof data !== 'object' || typeof data.type !== 'string') return
+          // External link clicked in a message: open in the system browser.
+          if (data.type === 'openExternal' && typeof data.url === 'string' && data.url !== '') {
+            void vscode.env.openExternal(vscode.Uri.parse(data.url))
+            return
+          }
+          if (data.type !== 'dshui:deleteSession') return
           if (typeof data.sessionId !== 'string' || data.sessionId === ''
             || typeof data.cwd !== 'string' || data.cwd === '') {
             void webviewView.webview.postMessage({
