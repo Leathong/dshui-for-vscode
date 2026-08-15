@@ -64,12 +64,12 @@
       },
       {
         "command": "dshui.referenceFile",
-        "title": "Reference File",
+        "title": "Add File to dsh",
         "category": "dsh UI"
       },
       {
         "command": "dshui.referenceSelection",
-        "title": "Reference Selection",
+        "title": "Add Selection to dsh",
         "category": "dsh UI"
       },
       {

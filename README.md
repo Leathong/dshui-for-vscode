@@ -131,8 +131,8 @@ npx @vscode/vsce package              # 产出 dshui-for-vscode-<version>.vsix
 
 ### 引用文件与代码片段
 
-在**资源管理器**中右键文件、或在**编辑器标签页**上右键 → **Reference File**；在**编辑器**
-中选中代码后右键 → **Reference Selection**。引用以消息文本插入侧边栏输入框（自动聚焦侧边栏
+在**资源管理器**中右键文件、或在**编辑器标签页**上右键 → **Add File to dsh**；在**编辑器**
+中选中代码后右键 → **Add Selection to dsh**。引用以消息文本插入侧边栏输入框（自动聚焦侧边栏
 视图）：
 
 - 文件引用：`[src/extension.ts](src/extension.ts)`——标准 markdown 链接（相对路径），智能体以自带

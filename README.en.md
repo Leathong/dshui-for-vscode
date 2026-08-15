@@ -13,6 +13,7 @@
   - [Settings](#settings)
   - [Referencing Files and Code Selections](#referencing-files-and-code-selections)
   - [Opening Files](#opening-files)
+  - [Network Links in Messages](#network-links-in-messages)
   - [Multiple Windows (Shared Backend)](#multiple-windows-shared-backend)
 - [How It Works](#how-it-works)
 - [Development](#development)
@@ -145,8 +146,8 @@ For development, press **F5** (the repo ships `.vscode/launch.json`), or run
 
 ### Referencing Files and Code Selections
 
-Right-click a file in the **Explorer**, or right-click an **editor tab** → **Reference File**;
-or select code in the **editor** and right-click → **Reference Selection**. The reference is
+Right-click a file in the **Explorer**, or right-click an **editor tab** → **Add File to dsh**;
+or select code in the **editor** and right-click → **Add Selection to dsh**. The reference is
 inserted into the sidebar input box as message text (the sidebar view is focused automatically):
 
 - File reference: `[src/extension.ts](src/extension.ts)` — a standard markdown link (relative path).
@@ -177,6 +178,16 @@ popup**:
   without a confirmation popup) → `open vscode://file/...` (with a confirmation popup).
 - `.html` / `.pdf` still open in the system browser; disable with `dshui.openFilesInVscode` (restores
   the OS default handler).
+
+### Network Links in Messages
+
+**http/https links** (including `mailto:`) in chat messages open in the **system browser** by default.
+dsh renders these links as `<a target="_blank">`, which opens a new tab in a normal browser but is
+blocked by the VS Code webview (no `window.open`/popups), so clicks used to do nothing. A capture-phase
+click interceptor in the injected host-plugin script now routes such clicks: click → relayed through the
+webview shell → extension host → `vscode.env.openExternal` opens the system browser. Modifier clicks
+(Cmd/Ctrl/Shift/Alt+click) are left to VS Code's own handling; non-http(s) destinations (e.g.
+`javascript:`) are not intercepted.
 
 ### Multiple Windows (Shared Backend)
 
