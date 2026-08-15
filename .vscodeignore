@@ -8,5 +8,38 @@ Makefile
 node_modules/.cache/**
 node_modules/typescript/**
 node_modules/@types/**
+
+# Extension host 自身的开发文件（已编译进 out/，运行时不需要）。
+src/**
+patches/**
+.vscode/**
+tsconfig.json
+
+# node_modules 内运行时绝不会加载的内容（node 只解析编译后的 .js/.mjs/.cjs）：
+# 1) 类型声明 .d.ts/.d.mts/.d.cts —— 仅编译期使用；
+# 2) TypeScript 源码 .ts/.mts/.cts —— 各包运行时入口均指向 dist/lib/esm 的编译产物，
+#    src/ 目录只是随 npm 包发布的源码副本（dsh 包的 "./src/*" exports 在发布包里没有
+#    对应文件，纯属上游残留，已验证无运行时代码引用 .ts）；
+# 3) 测试与文档。
+node_modules/**/*.d.ts
+node_modules/**/*.d.mts
+node_modules/**/*.d.cts
+node_modules/**/*.ts
+node_modules/**/*.mts
+node_modules/**/*.cts
+node_modules/**/test/**
+node_modules/**/tests/**
+node_modules/**/__tests__/**
+node_modules/**/*.spec.*
+node_modules/**/*.test.*
+node_modules/**/README*
+node_modules/**/CHANGELOG*
+node_modules/**/.github/**
+node_modules/**/.eslintrc*
+node_modules/**/.nycrc*
+node_modules/**/.npmignore
+node_modules/**/.gitignore
+# 保留 node_modules/**/LICENSE*（各包许可证，法律合规要求）。
+
 # Keep: out/ (compiled extension), dshui-plugins/ (dshui plugin packages),
 # patch.yml, scripts/, media/, README.md, and node_modules/ (the bundled dsh runtime).
