@@ -370,40 +370,40 @@ window.__ModuleLoader__.load({
 			document.head.appendChild(tag);
 		}
 		var Rows_module_css_default = {
-			"folder": "JKg95G_folder",
-			"searchResultHeading": "JKg95G_searchResultHeading",
 			"searchResultRow": "JKg95G_searchResultRow",
-			"title": "JKg95G_title",
+			"hoverTitle": "JKg95G_hoverTitle",
+			"row-in": "JKg95G_row-in",
+			"menuOpen": "JKg95G_menuOpen",
+			"hoverContent": "JKg95G_hoverContent",
+			"arrow": "JKg95G_arrow",
+			"arrowOpen": "JKg95G_arrowOpen",
+			"dropAfter": "JKg95G_dropAfter",
+			"searchResultMeta": "JKg95G_searchResultMeta",
 			"dot": "JKg95G_dot",
-			"hoverPath": "JKg95G_hoverPath",
-			"selected": "JKg95G_selected",
+			"searchResultSnippet": "JKg95G_searchResultSnippet",
 			"renameInput": "JKg95G_renameInput",
 			"hoverStatus": "JKg95G_hoverStatus",
-			"dropAfter": "JKg95G_dropAfter",
+			"selected": "JKg95G_selected",
 			"projectText": "JKg95G_projectText",
-			"visuallyHidden": "JKg95G_visuallyHidden",
-			"searchResultTitle": "JKg95G_searchResultTitle",
-			"rowActions": "JKg95G_rowActions",
-			"arrowOpen": "JKg95G_arrowOpen",
-			"chevron": "JKg95G_chevron",
-			"row-in": "JKg95G_row-in",
-			"searchResultMeta": "JKg95G_searchResultMeta",
-			"folderActive": "JKg95G_folderActive",
-			"dropBefore": "JKg95G_dropBefore",
-			"hoverTime": "JKg95G_hoverTime",
-			"hoverTitle": "JKg95G_hoverTitle",
-			"arrow": "JKg95G_arrow",
-			"hoverContent": "JKg95G_hoverContent",
-			"slot": "JKg95G_slot",
-			"sessionRow": "JKg95G_sessionRow",
-			"searchResultWorkspace": "JKg95G_searchResultWorkspace",
-			"projectRow": "JKg95G_projectRow",
+			"folder": "JKg95G_folder",
 			"meta": "JKg95G_meta",
-			"searchResultSnippet": "JKg95G_searchResultSnippet",
-			"menuOpen": "JKg95G_menuOpen",
+			"chevron": "JKg95G_chevron",
+			"rowActions": "JKg95G_rowActions",
+			"searchResultWorkspace": "JKg95G_searchResultWorkspace",
 			"iconButton": "JKg95G_iconButton",
+			"folderActive": "JKg95G_folderActive",
 			"time": "JKg95G_time",
-			"flatSessionRowWithoutStatus": "JKg95G_flatSessionRowWithoutStatus"
+			"slot": "JKg95G_slot",
+			"hoverTime": "JKg95G_hoverTime",
+			"flatSessionRowWithoutStatus": "JKg95G_flatSessionRowWithoutStatus",
+			"searchResultHeading": "JKg95G_searchResultHeading",
+			"visuallyHidden": "JKg95G_visuallyHidden",
+			"title": "JKg95G_title",
+			"projectRow": "JKg95G_projectRow",
+			"searchResultTitle": "JKg95G_searchResultTitle",
+			"dropBefore": "JKg95G_dropBefore",
+			"hoverPath": "JKg95G_hoverPath",
+			"sessionRow": "JKg95G_sessionRow"
 		};
 		//#endregion
 		//#region lib/types/client/rows/Rows.js
@@ -1005,42 +1005,42 @@ window.__ModuleLoader__.load({
 			document.head.appendChild(tag);
 		}
 		var WorkspaceBrowser_module_css_default = {
-			"headerActionsHidden": "Cb1vNq_headerActionsHidden",
-			"treeBody": "Cb1vNq_treeBody",
 			"searchExpanded": "Cb1vNq_searchExpanded",
-			"workspaceDropAfter": "Cb1vNq_workspaceDropAfter",
-			"searchSlot": "Cb1vNq_searchSlot",
-			"fade": "Cb1vNq_fade",
-			"clearButton": "Cb1vNq_clearButton",
-			"rail": "Cb1vNq_rail",
-			"listTopDropIndicator": "Cb1vNq_listTopDropIndicator",
-			"deleteAction": "Cb1vNq_deleteAction",
-			"sectionHeader": "Cb1vNq_sectionHeader",
-			"sectionLabel": "Cb1vNq_sectionLabel",
-			"headerActions": "Cb1vNq_headerActions",
-			"renameError": "Cb1vNq_renameError",
-			"searchInput": "Cb1vNq_searchInput",
-			"sessionOverflowButton": "Cb1vNq_sessionOverflowButton",
-			"root": "Cb1vNq_root",
-			"iconButton": "Cb1vNq_iconButton",
-			"listArea": "Cb1vNq_listArea",
-			"sectionLabelHidden": "Cb1vNq_sectionLabelHidden",
-			"searchTree": "Cb1vNq_searchTree",
-			"wide": "Cb1vNq_wide",
-			"list": "Cb1vNq_list",
-			"wide-in": "Cb1vNq_wide-in",
-			"flatList": "Cb1vNq_flatList",
-			"renameInput": "Cb1vNq_renameInput",
-			"searchStatus": "Cb1vNq_searchStatus",
-			"deleteStatus": "Cb1vNq_deleteStatus",
-			"empty": "Cb1vNq_empty",
-			"searchSlotExpanded": "Cb1vNq_searchSlotExpanded",
-			"searchButton": "Cb1vNq_searchButton",
 			"listTopDropActive": "Cb1vNq_listTopDropActive",
+			"rail": "Cb1vNq_rail",
+			"headerActionsHidden": "Cb1vNq_headerActionsHidden",
+			"searchInput": "Cb1vNq_searchInput",
+			"workspaceDropAfter": "Cb1vNq_workspaceDropAfter",
+			"wide-in": "Cb1vNq_wide-in",
+			"empty": "Cb1vNq_empty",
+			"sectionLabel": "Cb1vNq_sectionLabel",
+			"searchButton": "Cb1vNq_searchButton",
+			"clearButton": "Cb1vNq_clearButton",
+			"listArea": "Cb1vNq_listArea",
+			"fade": "Cb1vNq_fade",
+			"searchStatus": "Cb1vNq_searchStatus",
+			"sectionHeader": "Cb1vNq_sectionHeader",
+			"searchSlot": "Cb1vNq_searchSlot",
 			"workspaceDropBefore": "Cb1vNq_workspaceDropBefore",
+			"searchWarning": "Cb1vNq_searchWarning",
+			"deleteAction": "Cb1vNq_deleteAction",
+			"searchTree": "Cb1vNq_searchTree",
+			"sessionOverflowButton": "Cb1vNq_sessionOverflowButton",
+			"deleteStatus": "Cb1vNq_deleteStatus",
+			"renameInput": "Cb1vNq_renameInput",
+			"sectionLabelHidden": "Cb1vNq_sectionLabelHidden",
 			"search": "Cb1vNq_search",
+			"root": "Cb1vNq_root",
 			"groupSection": "Cb1vNq_groupSection",
-			"searchWarning": "Cb1vNq_searchWarning"
+			"listTopDropIndicator": "Cb1vNq_listTopDropIndicator",
+			"searchSlotExpanded": "Cb1vNq_searchSlotExpanded",
+			"wide": "Cb1vNq_wide",
+			"flatList": "Cb1vNq_flatList",
+			"headerActions": "Cb1vNq_headerActions",
+			"list": "Cb1vNq_list",
+			"renameError": "Cb1vNq_renameError",
+			"iconButton": "Cb1vNq_iconButton",
+			"treeBody": "Cb1vNq_treeBody"
 		};
 		//#endregion
 		//#region lib/types/client/WorkspaceBrowser.js
@@ -1067,7 +1067,7 @@ window.__ModuleLoader__.load({
 		/** Session rows visible per Workspace before the local overflow control. */
 		const COLLAPSED_SESSION_LIMIT = 5;
 		/** The dshui workspace scope (VSCode workspace root), resolved once at load. */
-		const SCOPE = scopedWorkspacePath();
+		const SCOPE = typeof window === "undefined" ? "" : scopedWorkspacePath();
 		/** Keep controlled input and RPC payload inside the session.search wire contract. */
 		function sanitizeSearchQuery(value) {
 			const withoutNul = value.replaceAll("\0", "");
@@ -2362,6 +2362,15 @@ window.__ModuleLoader__.load({
 		//#region lib/types/client/index.js
 		/** Dictionary namespace owned by this plugin. */
 		const NS = "workspace";
+		/**
+		* The dshui workspace scope (same value the browser derives): the VS Code
+		* workspace root published by the host plugin. Empty in a plain browser tab.
+		* Resolved lazily inside the effect so importing this module never touches
+		* `window` (the apply spec runs in a node environment).
+		*/
+		function workspaceScope() {
+			return typeof window === "undefined" ? "" : scopedWorkspacePath();
+		}
 		/** One session-delete request's host-reply timeout (ms). */
 		const DELETE_TIMEOUT_MS = 15e3;
 		/**
@@ -2389,6 +2398,40 @@ window.__ModuleLoader__.load({
 				zh,
 				en
 			}), "ui-workspace: dictionaries");
+			ctx.effect(() => {
+				const scope = workspaceScope();
+				if (scope === "") return () => {};
+				const service = ctx.workspaces;
+				const originalConnect = service.connectWorkspace.bind(service);
+				const scopedWorkspaceId = () => service.list.getSnapshot().items.find((item) => item.path === scope)?.workspaceId;
+				const connectScoped = () => {
+					const id = scopedWorkspaceId();
+					if (id !== void 0) return originalConnect(id);
+					return new Promise((resolve, reject) => {
+						const timer = window.setTimeout(() => {
+							unsubscribe();
+							reject(/* @__PURE__ */ new Error(`dshui: scoped workspace "${scope}" was not registered within 15s`));
+						}, 15e3);
+						const unsubscribe = service.list.subscribe(() => {
+							const now = scopedWorkspaceId();
+							if (now === void 0) return;
+							unsubscribe();
+							window.clearTimeout(timer);
+							originalConnect(now).then(resolve, reject);
+						});
+						const now = scopedWorkspaceId();
+						if (now !== void 0) {
+							unsubscribe();
+							window.clearTimeout(timer);
+							originalConnect(now).then(resolve, reject);
+						}
+					});
+				};
+				service.connectWorkspace = () => connectScoped();
+				return () => {
+					service.connectWorkspace = originalConnect;
+				};
+			}, "ui-workspace: scoped session-connect routing");
 			const pendingDeletes = /* @__PURE__ */ new Map();
 			const onHostMessage = (event) => {
 				if (event.source !== window.parent) return;
@@ -2403,6 +2446,7 @@ window.__ModuleLoader__.load({
 				pending.resolve(data.ok === true, typeof data.error === "string" ? data.error : void 0);
 			};
 			ctx.effect(() => {
+				if (typeof window === "undefined") return () => {};
 				window.addEventListener("message", onHostMessage);
 				return () => {
 					window.removeEventListener("message", onHostMessage);

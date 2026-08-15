@@ -125,6 +125,7 @@ For development, press **F5** (the repo ships `.vscode/launch.json`), or run
 | `dshui.open` | Show the dsh UI view in the sidebar |
 | `dshui.openInBrowser` | Open the same scoped server in the system browser |
 | `dshui.referenceFile` | Insert a file reference into the dsh input box (Explorer / editor / editor tab context menus) |
+| `dshui.referenceFolder` | Insert a folder reference into the dsh input box (Explorer context menu) |
 | `dshui.referenceSelection` | Insert the selected code (with line numbers) into the dsh input box (editor context menu) |
 | `dshui.restartServer` | Restart the embedded dsh server and refresh the sidebar view (also the ⟳ button in the view title bar; equivalent to starting when the server is not running) |
 
@@ -146,12 +147,14 @@ For development, press **F5** (the repo ships `.vscode/launch.json`), or run
 
 ### Referencing Files and Code Selections
 
-Right-click a file in the **Explorer**, or right-click an **editor tab** → **Add File to dsh**;
-or select code in the **editor** and right-click → **Add Selection to dsh**. The reference is
-inserted into the sidebar input box as message text (the sidebar view is focused automatically):
+Right-click a file or **folder** in the **Explorer**, or right-click an **editor tab** →
+**Add File to dsh** / **Add Folder to dsh**; or select code in the **editor** and right-click →
+**Add Selection to dsh**. The reference is inserted into the sidebar input box as message text (the
+sidebar view is focused automatically):
 
-- File reference: `[src/extension.ts](src/extension.ts)` — a standard markdown link (relative path).
-  The agent reads it with its own tools, so it costs no input-box space.
+- File / folder reference: `[src/extension.ts](src/extension.ts)` / `[src/components/](src/components/)` —
+  a standard markdown link (relative path). The agent reads or lists the target with its own tools, so it
+  costs no input-box space.
 - Code selection reference: `[src/extension.ts#L10-L20](src/extension.ts#L10-L20)` + a code block —
   the path, line numbers (GitHub-style `#Lx-Ly` anchors), and the selected code are handed to the
   agent together. Very long selections (> 20,000 characters) are truncated with a note pointing to the

@@ -1,6 +1,7 @@
 /**
  * Builders for the dsh composer "reference" payloads, driven by the VS Code
- * context-menu commands (`dshui.referenceFile` / `dshui.referenceSelection`).
+ * context-menu commands (`dshui.referenceFile` / `dshui.referenceFolder` /
+ * `dshui.referenceSelection`).
  *
  * The payload travels extension → webview shell → dsh SPA iframe, where the
  * dshui host plugin's injected intake script inserts `text` into the composer
@@ -10,7 +11,7 @@
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 
-export type ReferenceKind = 'file' | 'snippet'
+export type ReferenceKind = 'file' | 'folder' | 'snippet'
 
 /** The message the extension posts to the webview shell (forwarded to the SPA iframe). */
 export interface ReferencePayload {
@@ -67,20 +68,33 @@ function markdownLink(label: string, href: string): string {
 }
 
 /**
- * Build a whole-file reference: the display path as a standard markdown link
- * (`[path](path)`). The agent reads the file itself with its own tools —
- * embedding whole-file content would flood the draft.
- * @param filePath - absolute filesystem path of the referenced file.
+ * Build a path reference for a file **or folder**: the display path as a
+ * standard markdown link (`[path](path)`). Folders carry a trailing `/` so
+ * reader and agent alike can tell them apart from files at a glance. The
+ * agent reads or lists the target itself with its own tools — embedding
+ * whole-file content would flood the draft.
+ * @param filePath - absolute filesystem path of the referenced file or folder.
  * @param workspacePath - absolute workspace root.
  * @returns the reference payload.
  */
 export function buildFileReference(filePath: string, workspacePath: string): ReferencePayload {
   const display = relativeDisplayPath(filePath, workspacePath)
+  const folder = isDirectory(filePath)
+  const dirMarked = folder && !display.endsWith('/') ? `${display}/` : display
   return {
     type: 'dshui:reference',
-    kind: 'file',
-    path: display,
-    text: markdownLink(display, display),
+    kind: folder ? 'folder' : 'file',
+    path: dirMarked,
+    text: markdownLink(dirMarked, dirMarked),
+  }
+}
+
+/** Whether the path names an existing directory (best-effort; false on any failure). */
+function isDirectory(filePath: string): boolean {
+  try {
+    return fs.statSync(filePath).isDirectory()
+  } catch {
+    return false
   }
 }
 

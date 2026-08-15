@@ -68,6 +68,11 @@
         "category": "dsh UI"
       },
       {
+        "command": "dshui.referenceFolder",
+        "title": "Add Folder to dsh",
+        "category": "dsh UI"
+      },
+      {
         "command": "dshui.referenceSelection",
         "title": "Add Selection to dsh",
         "category": "dsh UI"
@@ -90,6 +95,11 @@
         {
           "command": "dshui.referenceFile",
           "when": "resourceScheme == file && !explorerResourceIsFolder && workspaceFolderCount > 0",
+          "group": "navigation"
+        },
+        {
+          "command": "dshui.referenceFolder",
+          "when": "resourceScheme == file && explorerResourceIsFolder && workspaceFolderCount > 0",
           "group": "navigation"
         }
       ],

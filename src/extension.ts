@@ -716,8 +716,17 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     await currentView.webview.postMessage(payload)
   }
 
-  // Command: reference a file (explorer/editor context menu) into the dsh
-  // composer — the agent reads the file itself with its own tools.
+  // Shared handler for file/folder references: build the path link payload and
+  // deliver it into the dsh composer — the agent reads the target itself with
+  // its own tools.
+  async function referencePath(target: vscode.Uri, workspacePath: string): Promise<void> {
+    const payload = buildFileReference(target.fsPath, workspacePath)
+    await deliverReference(payload)
+    vscode.window.setStatusBarMessage(`dsh UI: 已引用 ${payload.path}`, 3000)
+  }
+
+  // Command: reference a file (explorer/editor/editor-tab context menu) into
+  // the dsh composer.
   context.subscriptions.push(
     vscode.commands.registerCommand('dshui.referenceFile', async (uri?: vscode.Uri) => {
       const target = uri ?? vscode.window.activeTextEditor?.document.uri
@@ -730,9 +739,24 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         vscode.window.showWarningMessage('dsh UI: 请先打开一个文件夹（它将成为 dsh 工作区）。')
         return
       }
-      const payload = buildFileReference(target.fsPath, workspacePath)
-      await deliverReference(payload)
-      vscode.window.setStatusBarMessage(`dsh UI: 已引用 ${payload.path}`, 3000)
+      await referencePath(target, workspacePath)
+    }),
+  )
+
+  // Command: reference a folder (explorer context menu) into the dsh composer.
+  context.subscriptions.push(
+    vscode.commands.registerCommand('dshui.referenceFolder', async (uri?: vscode.Uri) => {
+      const target = uri ?? vscode.window.activeTextEditor?.document.uri
+      if (target === undefined || target.scheme !== 'file') {
+        vscode.window.showWarningMessage('dsh UI: 请先在资源管理器中选中一个文件夹。')
+        return
+      }
+      const workspacePath = currentWorkspace()
+      if (workspacePath === undefined) {
+        vscode.window.showWarningMessage('dsh UI: 请先打开一个文件夹（它将成为 dsh 工作区）。')
+        return
+      }
+      await referencePath(target, workspacePath)
     }),
   )
 

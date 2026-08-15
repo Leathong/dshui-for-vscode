@@ -112,6 +112,7 @@ npx @vscode/vsce package              # 产出 dshui-for-vscode-<version>.vsix
 | `dshui.open` | 显示侧边栏 dsh UI 视图 |
 | `dshui.openInBrowser` | 在系统浏览器中打开同一个 scoped 服务器 |
 | `dshui.referenceFile` | 将文件引用插入 dsh 输入框（资源管理器 / 编辑器 / 编辑器标签页右键菜单） |
+| `dshui.referenceFolder` | 将文件夹引用插入 dsh 输入框（资源管理器右键菜单） |
 | `dshui.referenceSelection` | 将选中代码片段（含行号）插入 dsh 输入框（编辑器右键菜单） |
 | `dshui.restartServer` | 重启内嵌 dsh 服务器并刷新侧边栏视图（仅命令面板调用，无视图按钮以防误触；服务器未运行时等同启动） |
 
@@ -131,12 +132,12 @@ npx @vscode/vsce package              # 产出 dshui-for-vscode-<version>.vsix
 
 ### 引用文件与代码片段
 
-在**资源管理器**中右键文件、或在**编辑器标签页**上右键 → **Add File to dsh**；在**编辑器**
-中选中代码后右键 → **Add Selection to dsh**。引用以消息文本插入侧边栏输入框（自动聚焦侧边栏
-视图）：
+在**资源管理器**中右键文件或**文件夹**、或在**编辑器标签页**上右键 → **Add File to dsh** /
+**Add Folder to dsh**；在**编辑器**中选中代码后右键 → **Add Selection to dsh**。引用以消息文本
+插入侧边栏输入框（自动聚焦侧边栏视图）：
 
-- 文件引用：`[src/extension.ts](src/extension.ts)`——标准 markdown 链接（相对路径），智能体以自带
-  工具读取，不占用输入框体积；
+- 文件 / 文件夹引用：`[src/extension.ts](src/extension.ts)` / `[src/components/](src/components/)`——
+  标准 markdown 链接（相对路径），智能体以自带工具读取 / 列出，不占用输入框体积；
 - 代码片段引用：`[src/extension.ts#L10-L20](src/extension.ts#L10-L20)` + 代码块——路径、行号
   （GitHub 风格 `#Lx-Ly` 锚点）与选中代码一并提供给智能体；超长选中（> 20,000 字符）会截断并附注
   完整路径。
