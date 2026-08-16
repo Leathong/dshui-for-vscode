@@ -73,6 +73,21 @@ function isAlive(pid) {
   try { process.kill(pid, 0); return true } catch (error) { return error !== null && error !== undefined && error.code === 'EPERM' }
 }
 
+/**
+ * 注册表用户是 { pid, id, lastSeen } 租约：pid 存活只是必要条件，租约还
+ * 必须由持有该随机 id 的扩展宿主持续心跳。这样旧窗口崩溃后即使 OS 复用
+ * 了它的 pid，新进程也不知道旧 id、不会续租，旧条目会在 TTL 后失效。
+ */
+const SERVER_USER_LEASE_TTL_MS = 45000
+function isLiveUser(user) {
+  if (user === null || typeof user !== 'object') return false
+  if (!Number.isInteger(user.pid) || user.pid <= 0) return false
+  if (typeof user.id !== 'string' || user.id === '') return false
+  if (typeof user.lastSeen !== 'number' || !Number.isFinite(user.lastSeen)) return false
+  if (Date.now() - user.lastSeen > SERVER_USER_LEASE_TTL_MS) return false
+  return isAlive(user.pid)
+}
+
 const markerAttempts = new Map()
 
 /** 处理工作区注册 marker：workspaceRegistry.create 成功后删除，失败有限重试。 */
@@ -114,7 +129,7 @@ function checkLiveness() {
   let registry
   try { registry = JSON.parse(raw) } catch { emptyPolls = 0; return }
   if (registry === null || typeof registry !== 'object' || !Array.isArray(registry.users)) { emptyPolls = 0; return }
-  const live = registry.users.filter(isAlive)
+  const live = registry.users.filter(isLiveUser)
   if (live.length === 0) {
     emptyPolls += 1
     if (emptyPolls >= SELF_EXIT_GRACE_POLLS) {

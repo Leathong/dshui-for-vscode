@@ -17,8 +17,8 @@ import { OpenBridge } from './openBridge'
 import { patchFileOpener } from './openPatch'
 import { installPlugins, resolveDshHome, type InstalledPlugin } from './plugins'
 import {
-  bridgesPath, registerBridge, registerServerUser, unregisterBridge,
-  unregisterServerUser, writeWorkspaceMarker,
+  bridgesPath, registerBridge, registerServerUser, startServerUserHeartbeat,
+  unregisterBridge, unregisterServerUser, writeWorkspaceMarker,
 } from './sharedBackend'
 import {
   buildFileReference,
@@ -231,6 +231,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   let currentView: vscode.WebviewView | null = null
   let currentWorkspacePath: string | undefined
   let registeredSharedUser = false
+  let serverUserHeartbeat: NodeJS.Timeout | null = null
 
   // Route dsh's file-open gestures into the running VS Code instead of the
   // OS default editor (or the vscode:// scheme with its confirmation popup),
@@ -363,6 +364,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     // 共享后端：把本窗口登记为共享服务器的用户（owner = 自己拉起的服务器）。
     const registerUse = async (boundPort: number, owner: boolean): Promise<void> => {
       registeredSharedUser = true
+      serverUserHeartbeat ??= startServerUserHeartbeat(dshHome)
       try {
         await registerServerUser(dshHome, boundPort, owner)
       } catch (error) {
@@ -829,7 +831,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
           fileLog(dshHome, `bridge registration failed: ${String(error)}`)
         })
       }
-      void startServer(workspacePath)
+      void startServer(workspacePath).catch((error) => {
+        console.error('[dshui] failed to start dsh web after workspace change:', error)
+        fileLog(dshHome, `server start failed after workspace change: ${String(error)}`)
+        void vscode.window.showErrorMessage(`dshui: failed to start the dsh server: ${String(error)}`)
+      })
     }),
   )
 
@@ -850,6 +856,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         }
         server = null
       }
+      // 先停心跳再摘除注册项，避免 unregister 完成后心跳又把本窗口写回去。
+      if (serverUserHeartbeat !== null) {
+        clearInterval(serverUserHeartbeat)
+        serverUserHeartbeat = null
+      }
       if (sharedUser) {
         void unregisterServerUser(dshHome, true).catch(() => { /* best-effort */ })
       }
@@ -868,6 +879,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       // sitting on a blank page while the server starts.
       void startServer(workspacePath).catch((error) => {
         console.error('[dshui] pre-warm server start failed:', error)
+        fileLog(dshHome, `pre-warm server start failed: ${String(error)}`)
+        void vscode.window.showErrorMessage(`dshui: failed to start the dsh server: ${String(error)}`)
       })
       void vscode.commands.executeCommand(`${VIEW_ID}.focus`)
     }

@@ -126,7 +126,7 @@ npx @vscode/vsce package              # 产出 dshui-for-vscode-<version>.vsix
 | 设置 | 默认 | 说明 |
 | --- | --- | --- |
 | `dshui.autoOpen` | `true` | 打开文件夹时自动显示侧边栏视图 |
-| `dshui.server.port` | `61370` | 内嵌服务器端口。固定端口兼作共享后端会合点：所有窗口复用同一个服务器（各按 `?dshui_workspace` 作用域），localStorage 按工作区隔离，各工作区跨启动恢复自己上次打开的会话；设为 `0` 则由系统分配（无共享、无保持）。端口被占用时自动退回随机端口 |
+| `dshui.server.port` | `61370` | 内嵌服务器端口。固定端口兼作共享后端会合点：所有窗口复用同一个服务器（各按 `?dshui_workspace` 作用域），localStorage 按工作区隔离，各工作区跨启动恢复自己上次打开的会话；设为 `0` 则由系统分配（无共享、无保持）。固定端口被占用时直接报错并提示更换端口 |
 | `dshui.openFilesInVscode` | `true` | 聊天中的文件链接在**当前 VS Code** 中打开（经扩展内桥接，无系统弹窗），而非系统默认编辑器 |
 | `dshui.checkDshUpdates` | `true` | 启动时异步查询 npm 上的最新 dsh 版本，内置版本过旧时通知（24 小时节流，同一新版本仅提示一次；可关闭） |
 
@@ -204,7 +204,7 @@ VS Code 侧边栏视图（webview）
   空白）。
 - **启动恢复上次会话**：固定端口复用同一 origin，客户端将当前会话写入 localStorage
   （`dsh.sessions.current`），下次启动原生恢复——打开的就是上次最后使用的会话；无历史会话时退回
-  空白新会话。端口被占用时自动退回随机端口（该次无保持）。
+  空白新会话。固定端口被占用时直接报错并提示修改 `dshui.server.port`，不再退回随机端口。
 - **插件装载**：激活时把三个 dshui 插件装入 `$DSH_HOME/profiles/node_modules`（同时装入扩展自身
   `node_modules` 作为 loader 回退），并经 `--patch` 覆盖层接入（见 `patch.yml`）：
   - `dshui-host-ensure-workspace`——host 插件：启动时把工作目录注册为 Workspace，并向页面注入

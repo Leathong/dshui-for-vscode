@@ -141,7 +141,7 @@ For development, press **F5** (the repo ships `.vscode/launch.json`), or run
 | Setting | Default | Description |
 | --- | --- | --- |
 | `dshui.autoOpen` | `true` | Automatically show the sidebar view when a folder is opened |
-| `dshui.server.port` | `61370` | Port of the embedded server. The fixed port doubles as the shared-backend rendezvous: all windows reuse ONE server (each scoped via `?dshui_workspace`), and localStorage is scoped per workspace so each folder remembers its own last-opened session across launches. Set to `0` for an OS-assigned port (no sharing, no persistence). Falls back to a random port when the port is taken |
+| `dshui.server.port` | `61370` | Port of the embedded server. The fixed port doubles as the shared-backend rendezvous: all windows reuse ONE server (each scoped via `?dshui_workspace`), and localStorage is scoped per workspace so each folder remembers its own last-opened session across launches. Set to `0` for an OS-assigned port (no sharing, no persistence). If the fixed port is taken, startup reports an error and asks you to change the port (no random-port fallback) |
 | `dshui.openFilesInVscode` | `true` | Open file links from chat in **the current VS Code** window (via the extension's bridge, no system popup) instead of the OS default editor |
 | `dshui.checkDshUpdates` | `true` | Check the npm registry for newer dsh releases at startup and notify when the bundled version is outdated (throttled to once per 24h; each new version is announced once; can be disabled) |
 
@@ -238,7 +238,8 @@ VS Code sidebar view (webview)
   default; pre-started at activation to avoid a blank view while loading).
 - **Restoring the last session:** localStorage keys are scoped per workspace (see the note above), so
   each folder restores its own last session on the next launch; with no history, it falls back to a
-  blank new session. When the port is taken, it falls back to a random port (no persistence that run).
+  blank new session. When the fixed port is taken, startup reports an error and asks you to change the
+  port (no random-port fallback).
 - **Plugin loading:** on activation, three dshui plugins are installed into
   `$DSH_HOME/profiles/node_modules` (with the extension's own `node_modules` as a loader fallback) and
   wired in through the `--patch` overlay (see `patch.yml`):

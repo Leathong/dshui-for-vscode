@@ -102,6 +102,7 @@ export class DshServer {
   private restarts = 0
   private readonly options: DshServerOptions
   private onData: ((line: string) => void) | null = null
+  private startDiagnostics = ''
 
   constructor(options: DshServerOptions) {
     this.options = options
@@ -193,12 +194,18 @@ export class DshServer {
     // stdout pipe keeps the URL-read listener alive while this host lives.
     child.unref()
     this.child = child
+    this.startDiagnostics = ''
+    const rememberDiagnostic = (chunk: Buffer): void => {
+      this.startDiagnostics = `${this.startDiagnostics}${chunk.toString('utf8')}`.slice(-16_384)
+    }
     child.stdout?.on('data', (chunk: Buffer) => {
+      rememberDiagnostic(chunk)
       for (const line of chunk.toString('utf8').split('\n')) {
         if (line.trim() !== '' && this.onData !== null) this.onData(line)
       }
     })
     child.stderr?.on('data', (chunk: Buffer) => {
+      rememberDiagnostic(chunk)
       if (this.onData !== null) this.onData(chunk.toString('utf8'))
     })
 
@@ -209,11 +216,12 @@ export class DshServer {
         this.boundPort = undefined
         this.options.onExit?.(code, signal)
         if (this.stopping) return
-        // Unexpected exit: restart on an OS-picked port, at most twice, so a
-        // persistently crashing server cannot loop forever.
+        // Unexpected exit: retry on the configured port, never a random
+        // fallback. A fixed port that is occupied will surface the same
+        // "change dshui.server.port" error as the initial spawn.
         if (code !== 0 && this.restarts < MAX_RESTARTS) {
           this.restarts += 1
-          this.spawn(0).then(this.options.onReady).catch((error) => {
+          this.spawn(this.options.port).then(this.options.onReady).catch((error) => {
             this.options.onExit?.(null, null)
             console.error('[dshui] dsh web restart failed:', error)
           })
@@ -221,26 +229,39 @@ export class DshServer {
       })
       return port
     }).catch(async (error) => {
-      if (this.restarts >= MAX_RESTARTS) throw error
-      this.restarts += 1
       if (this.child !== null && this.child.exitCode === null) {
         // Never bound and still alive: kill before any retry/adoption.
         try { child.kill('SIGTERM') } catch { /* already gone */ }
       }
-      // Fixed-port race: another window's dshui server may now hold the port
-      // (this child exited with EADDRINUSE). Adopt it instead of failing.
+      // Fixed-port spawn race: another window's dshui server may now hold the
+      // port (this child exited with EADDRINUSE). Adopt the winner instead of
+      // failing; this is still the same configured port and the same shared
+      // backend, not a fallback.
       if (requestedPort !== 0 && await probeDshuiServer(requestedPort)) {
         this.child = null
         this.boundPort = requestedPort
         return requestedPort
       }
-      // The port is held by a non-dsh process (or the server died): fall back
-      // to an OS-picked port, at most MAX_RESTARTS times.
       if (requestedPort !== 0) {
-        return this.spawn(0).then((port) => {
-          this.boundPort = port
-          return port
-        })
+        const cause = error instanceof Error ? error.message : String(error)
+        // Only claim "port occupied" when the child actually reported a bind
+        // failure. Any other boot error (plugin load failure, bad patch, ...)
+        // must not send the user on a wild-goose chase after lsof.
+        if (/EADDRINUSE|address already in use/i.test(this.startDiagnostics)) {
+          throw new Error(
+            `dsh web failed to bind configured port ${requestedPort}: ${cause}. `
+            + 'The port is occupied. Please change "dshui.server.port" '
+            + 'in VS Code settings, then run the "dshui: Restart dsh Server" command.',
+          )
+        }
+        const summary = this.startDiagnostics.split(/\r?\n/)
+          .map((line) => line.trim())
+          .find((line) => line.startsWith('Error:') || line.includes('ERR_MODULE_NOT_FOUND'))
+        const detail = summary === undefined ? '' : ` — ${summary.slice(0, 240)}`
+        throw new Error(
+          `dsh web failed to start: ${cause}${detail}. `
+          + `Check ${path.join(this.options.dshHome, 'dshui-logs', 'extension.log')} for the server output.`,
+        )
       }
       throw error
     })

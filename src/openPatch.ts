@@ -18,6 +18,7 @@
  * to the browser via the existing BROWSER_DOCUMENTS fast path).
  */
 import * as fs from 'node:fs'
+import { SERVER_USER_LEASE_TTL_MS } from './sharedBackend'
 
 /** The stock darwin branch inside `openNativePathWithIntent`. */
 const STOCK_DARWIN_BRANCH = `	if (platform === "darwin") {
@@ -131,6 +132,8 @@ async function dshuiPickBridgeForPath(path) {
 		const entry = bridges[key];
 		if (entry === null || typeof entry !== "object"
 			|| typeof entry.pid !== "number" || !dshuiPidAlive(entry.pid)
+			|| typeof entry.id !== "string" || entry.id === ""
+			|| typeof entry.lastSeen !== "number" || !dshuiBridgeLeaseLive(entry)
 			|| typeof entry.workspace !== "string" || entry.workspace === ""
 			|| typeof entry.endpoint !== "string" || entry.endpoint === "") continue;
 		if (path === entry.workspace || path.startsWith(entry.workspace + "/")) {
@@ -138,6 +141,15 @@ async function dshuiPickBridgeForPath(path) {
 		}
 	}
 	return best === null ? null : best.endpoint;
+}
+/**
+ * dshui patch: bridge lease liveness. A pid alone is insufficient because the
+ * OS can recycle it after the owning window dies; the lease must also be fresh.
+ * @param entry - bridge registration entry.
+ * @returns true when the entry is still valid.
+ */
+function dshuiBridgeLeaseLive(entry) {
+	return Date.now() - entry.lastSeen <= ${SERVER_USER_LEASE_TTL_MS};
 }
 /**
  * dshui patch: process liveness via signal 0.
@@ -148,6 +160,9 @@ function dshuiPidAlive(pid) {
 	try { process.kill(pid, 0); return true; } catch (error) { return error !== null && error !== undefined && error.code === "EPERM"; }
 }
 `
+
+/** Present in the current bridge-helper block; used to upgrade older patches. */
+const BRIDGE_LEASE_PATCH_MARKER = 'function dshuiBridgeLeaseLive'
 
 /** Absolute path as a \`vscode://file/\` URL (last-resort fallback opener). */
 const URL_FUNCTION = `/**
@@ -203,11 +218,12 @@ export function patchFileOpener(apiProxyLibPath: string): { patched: boolean; no
     return { patched: false, note: `api-proxy lib unreadable (${String(error)}); native opener left unchanged` }
   }
   try {
-    if (source.includes(PATCHED_DARWIN_BRANCH) && source.includes('function dshuiPickBridgeForPath')) {
+    const hasCurrentDarwinBranch = source.includes(PATCHED_DARWIN_BRANCH)
+    if (hasCurrentDarwinBranch && source.includes(BRIDGE_LEASE_PATCH_MARKER)) {
       return { patched: true, note: 'already patched' }
     }
     let next = source
-    if (!source.includes(PATCHED_DARWIN_BRANCH)) {
+    if (!hasCurrentDarwinBranch) {
       if (source.includes(OLD3_DARWIN_BRANCH)) {
         next = source.replace(OLD3_DARWIN_BRANCH, PATCHED_DARWIN_BRANCH)
       } else if (source.includes(OLD2_DARWIN_BRANCH)) {
@@ -220,23 +236,40 @@ export function patchFileOpener(apiProxyLibPath: string): { patched: boolean; no
         return { patched: false, note: 'darwin branch not found; skipping (dsh version drift?)' }
       }
     }
+
+    const openerSignature = 'async function openNativePathWithIntent(path, signal, intent, internals = {}) {'
     // Bridge helpers: upgrade in place, never duplicate.
     if (next.includes('function dshuiPickBridgeForPath')) {
-      // 新 helper 已就位。
+      if (!next.includes(BRIDGE_LEASE_PATCH_MARKER)) {
+        // Replace the entire old bridge-helper block. It was inserted either
+        // directly before `openNativePathWithIntent` or together with the
+        // `dshuiVscodeFileUrl` helper; preserve the URL helper when present.
+        const bridgeComment = 'dshui patch: ask the hosting VS Code'
+        const bridgeAt = next.indexOf(bridgeComment)
+        const blockStart = bridgeAt === -1 ? -1 : next.lastIndexOf('/**', bridgeAt)
+        const urlHelperAt = next.indexOf('dshui patch: absolute path as a', bridgeAt)
+        const openerAt = next.indexOf(openerSignature, bridgeAt)
+        let blockEnd = openerAt
+        if (urlHelperAt !== -1 && urlHelperAt < openerAt) blockEnd = urlHelperAt
+        if (blockStart === -1 || blockEnd === -1) {
+          return { patched: false, note: 'unrecognized bridge helper; leaving file unchanged' }
+        }
+        next = `${next.slice(0, blockStart)}${BRIDGE_FUNCTIONS}${next.slice(blockEnd)}`
+      }
     } else if (source.includes(OLD_BRIDGE_HELPER)) {
       next = next.replace(OLD_BRIDGE_HELPER, BRIDGE_FUNCTIONS)
     } else if (!next.includes('function dshuiOpenViaBridge')) {
       next = next.replace(
-        'async function openNativePathWithIntent(path, signal, intent, internals = {}) {',
-        `${next.includes('function dshuiVscodeFileUrl') ? BRIDGE_FUNCTIONS : HELPER}async function openNativePathWithIntent(path, signal, intent, internals = {}) {`,
+        openerSignature,
+        `${next.includes('function dshuiVscodeFileUrl') ? BRIDGE_FUNCTIONS : HELPER}${openerSignature}`,
       )
     } else {
       return { patched: false, note: 'unrecognized bridge helper; leaving file unchanged' }
     }
     if (!next.includes('function dshuiOpenViaCli')) {
       next = next.replace(
-        'async function openNativePathWithIntent(path, signal, intent, internals = {}) {',
-        `${CLI_HELPER}async function openNativePathWithIntent(path, signal, intent, internals = {}) {`,
+        openerSignature,
+        `${CLI_HELPER}${openerSignature}`,
       )
     }
     fs.writeFileSync(apiProxyLibPath, next)

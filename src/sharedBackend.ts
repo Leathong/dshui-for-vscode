@@ -22,12 +22,53 @@ const LOCK_FILE = 'dshui-server.lock'
 const MARKER_DIR = 'dshui-workspaces'
 const LOCK_TIMEOUT_MS = 8000
 
+/**
+ * A random id generated once per extension-host process. Registry and bridge
+ * entries carry this id plus a heartbeat timestamp, so a recycled OS pid can
+ * never keep a dead window's lease alive: a reused pid belongs to a different
+ * process, does not know this id, and therefore never refreshes that lease.
+ */
+const HOST_INSTANCE_ID = `${process.pid}:${Date.now().toString(36)}:${Math.random().toString(36).slice(2)}`
+/** A live user must refresh its lease at least this often. */
+export const SERVER_USER_LEASE_TTL_MS = 45_000
+const SERVER_USER_HEARTBEAT_MS = 10_000
+
+/** One extension host using the shared server. */
+export interface ServerUser {
+  pid: number
+  /** Random per-process instance id; distinguishes a reused pid from the original process. */
+  id: string
+  /** Last successful heartbeat (epoch ms). */
+  lastSeen: number
+}
+
 export interface ServerRegistry {
   port: number
   /** Pid of the extension host that spawned the server. */
   owner: number
-  /** Pids of extension hosts currently using the server (owner included). */
-  users: number[]
+  /** Extension hosts currently using the server (owner included). */
+  users: ServerUser[]
+}
+
+function isServerUserShape(user: unknown): user is ServerUser {
+  if (typeof user !== 'object' || user === null) return false
+  const candidate = user as Partial<ServerUser>
+  return Number.isInteger(candidate.pid) && (candidate.pid ?? 0) > 0
+    && typeof candidate.id === 'string' && candidate.id !== ''
+    && typeof candidate.lastSeen === 'number' && Number.isFinite(candidate.lastSeen)
+}
+
+function currentServerUser(): ServerUser {
+  return { pid: process.pid, id: HOST_INSTANCE_ID, lastSeen: Date.now() }
+}
+
+/**
+ * True while the lease is fresh AND the OS pid is alive. `isAlive` alone is
+ * not sufficient: after a crash the pid may be recycled by an unrelated
+ * process, which would make the old entry look alive forever.
+ */
+export function isServerUserLive(user: ServerUser, now = Date.now()): boolean {
+  return isAlive(user.pid) && now - user.lastSeen <= SERVER_USER_LEASE_TTL_MS
 }
 
 export function registryPath(dshHome: string): string {
@@ -141,7 +182,7 @@ export function readRegistry(dshHome: string): ServerRegistry | null {
     const parsed = JSON.parse(fs.readFileSync(registryPath(dshHome), 'utf8')) as Partial<ServerRegistry>
     if (
       typeof parsed.port !== 'number' || typeof parsed.owner !== 'number'
-      || !Array.isArray(parsed.users) || parsed.users.some((pid) => typeof pid !== 'number')
+      || !Array.isArray(parsed.users) || !parsed.users.every(isServerUserShape)
     ) return null
     return { port: parsed.port, owner: parsed.owner, users: parsed.users }
   } catch {
@@ -172,19 +213,19 @@ export async function registerServerUser(dshHome: string, port: number, owner: b
   await withRegistryLock(dshHome, () => {
     const existing = readRegistry(dshHome)
     // 采纳服务器但注册表尚不存在（owner 窗口还没登记，或服务器由旧版本
-    // 窗口启动）：创建注册表并登记自己——绝不能静默跳过，否则 owner 关闭
-    // 时会把本窗口误判为不存在而停掉共享服务器（见文件头注释的竞态）。
+    // 窗口启动）：创建注册表并登记自己——绝不能静默跳过，否则 host 插件
+    // 会把本窗口误判为不存在而退出共享服务器（见文件头注释的竞态）。
     if (existing === null && !owner) {
-      writeRegistry(dshHome, { port, owner: 0, users: [process.pid] })
+      writeRegistry(dshHome, { port, owner: 0, users: [currentServerUser()] })
       return
     }
-    const users = [...new Set([...(existing?.users ?? []), process.pid])]
-    // Prune pids of crashed windows so the server self-check stays accurate.
-    const live = users.filter((pid) => pid === process.pid || isAlive(pid))
+    const users = (existing?.users ?? [])
+      .filter((user) => user.pid !== process.pid && isServerUserLive(user))
+    users.push(currentServerUser())
     writeRegistry(dshHome, {
       port,
       owner: owner ? process.pid : (existing?.owner ?? process.pid),
-      users: live,
+      users,
     })
   })
 }
@@ -213,7 +254,7 @@ export async function unregisterServerUser(dshHome: string, shared: boolean): Pr
     }
     writeRegistry(dshHome, {
       ...existing,
-      users: existing.users.filter((pid) => pid !== process.pid && isAlive(pid)),
+      users: existing.users.filter((user) => user.pid !== process.pid && isServerUserLive(user)),
     })
   })
 }
@@ -222,7 +263,43 @@ export async function unregisterServerUser(dshHome: string, shared: boolean): Pr
 export function hasOtherLiveUsers(dshHome: string): boolean {
   const registry = readRegistry(dshHome)
   if (registry === null) return false
-  return registry.users.some((pid) => pid !== process.pid && isAlive(pid))
+  return registry.users.some((user) => user.pid !== process.pid && isServerUserLive(user))
+}
+
+/**
+ * Refresh this extension host's leases in the shared registry and bridge
+ * table. Called periodically by `startServerUserHeartbeat`. The id stored in
+ * each lease is secret to this process, so a recycled pid cannot extend it:
+ * the new process never learns the old id and the lease expires after
+ * `SERVER_USER_LEASE_TTL_MS`.
+ */
+async function refreshSharedLeases(dshHome: string): Promise<void> {
+  await withRegistryLock(dshHome, () => {
+    const registry = readRegistry(dshHome)
+    if (registry !== null) {
+      const hasSelf = registry.users.some((user) => user.pid === process.pid && user.id === HOST_INSTANCE_ID)
+      const users = registry.users.filter((user) => user.pid !== process.pid && isServerUserLive(user))
+      if (hasSelf) users.push(currentServerUser())
+      writeRegistry(dshHome, { ...registry, users })
+    }
+
+    const bridges = readBridges(dshHome)
+    const existing = bridges[process.pid]
+    if (existing !== undefined) {
+      bridges[process.pid] = { ...existing, id: HOST_INSTANCE_ID, lastSeen: Date.now() }
+      writeBridges(dshHome, bridges)
+    }
+  })
+}
+
+/** Start the background lease heartbeat for this extension host. */
+export function startServerUserHeartbeat(dshHome: string): NodeJS.Timeout {
+  void refreshSharedLeases(dshHome).catch(() => { /* best-effort heartbeat */ })
+  const timer = setInterval(() => {
+    void refreshSharedLeases(dshHome).catch(() => { /* best-effort heartbeat */ })
+  }, SERVER_USER_HEARTBEAT_MS)
+  timer.unref()
+  return timer
 }
 
 /**
@@ -253,10 +330,28 @@ export function writeWorkspaceMarker(dshHome: string, workspacePath: string): vo
 /** One window's open-bridge registration for workspace-aware file routing. */
 export interface BridgeEntry {
   pid: number
+  /** Same per-process instance id as the server-user lease. */
+  id: string
   /** Canonical workspace path this window has open. */
   workspace: string
   /** Absolute URL of the window's local open bridge (…/open). */
   endpoint: string
+  /** Last successful heartbeat (epoch ms). */
+  lastSeen: number
+}
+
+function isBridgeEntryShape(entry: unknown): entry is BridgeEntry {
+  if (typeof entry !== 'object' || entry === null) return false
+  const candidate = entry as Partial<BridgeEntry>
+  return Number.isInteger(candidate.pid) && (candidate.pid ?? 0) > 0
+    && typeof candidate.id === 'string' && candidate.id !== ''
+    && typeof candidate.workspace === 'string' && candidate.workspace !== ''
+    && typeof candidate.endpoint === 'string' && candidate.endpoint !== ''
+    && typeof candidate.lastSeen === 'number' && Number.isFinite(candidate.lastSeen)
+}
+
+function isBridgeEntryLive(entry: BridgeEntry, now = Date.now()): boolean {
+  return isAlive(entry.pid) && now - entry.lastSeen <= SERVER_USER_LEASE_TTL_MS
 }
 
 const BRIDGES_FILE = 'dshui-bridges.json'
@@ -272,13 +367,9 @@ function readBridges(dshHome: string): Record<number, BridgeEntry> {
     const result: Record<number, BridgeEntry> = {}
     for (const [key, entry] of Object.entries(parsed)) {
       const pid = Number(key)
-      if (
-        typeof entry === 'object' && entry !== null
-        && Number.isInteger(pid) && pid > 0
-        && typeof entry.workspace === 'string' && entry.workspace !== ''
-        && typeof entry.endpoint === 'string' && entry.endpoint !== ''
-        && isAlive(pid)
-      ) result[pid] = { pid, workspace: entry.workspace, endpoint: entry.endpoint }
+      if (Number.isInteger(pid) && pid > 0 && isBridgeEntryShape(entry) && isBridgeEntryLive(entry)) {
+        result[pid] = { ...entry, pid }
+      }
     }
     return result
   } catch {
@@ -305,7 +396,13 @@ function writeBridges(dshHome: string, bridges: Record<number, BridgeEntry>): vo
 export async function registerBridge(dshHome: string, workspace: string, endpoint: string): Promise<void> {
   await withRegistryLock(dshHome, () => {
     const bridges = readBridges(dshHome)
-    bridges[process.pid] = { pid: process.pid, workspace, endpoint }
+    bridges[process.pid] = {
+      pid: process.pid,
+      id: HOST_INSTANCE_ID,
+      workspace,
+      endpoint,
+      lastSeen: Date.now(),
+    }
     writeBridges(dshHome, bridges)
   })
 }
