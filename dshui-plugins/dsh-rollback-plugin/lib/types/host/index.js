@@ -7,7 +7,7 @@ export function apply(ctx, options = {}) {
         return;
     const host = ctx;
     const service = new RollbackService(ctx, options);
-    // Host Typert reflection and invocation descriptors (src-json codecs).
+    // Host Typert reflection and invocation descriptors (strict JSON codecs).
     const typert = ctx.typert;
     if (typert !== undefined) {
         ctx.effect(() => typert.register(ROLLBACK_HOST_TYPERT), 'rollback: typert host contribution');

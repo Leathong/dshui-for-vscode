@@ -560,7 +560,6 @@ window.__ModuleLoader__.load({
 		const inject = [
 			"slots",
 			"remote",
-			"remote.rollback",
 			"locale",
 			"sessions",
 			"workspaces"
@@ -588,6 +587,7 @@ window.__ModuleLoader__.load({
 				zh,
 				en
 			}), "rollback dictionaries");
+			const rollback = ctx.get("remote.rollback");
 			ctx.slots.inject("conversation.chat.assistant-actions", () => {
 				return ctx.slots.register({
 					name: "conversation.chat.assistant-actions",
@@ -595,13 +595,13 @@ window.__ModuleLoader__.load({
 					order: 20,
 					locale: NS,
 					inject: (sessionId) => ({
-						prepare: (messageId) => ctx.remote.rollback.prepare(sessionId, messageId),
-						execute: (messageId, request) => ctx.remote.rollback.execute({
+						prepare: (messageId) => rollback.prepare(sessionId, messageId),
+						execute: (messageId, request) => rollback.execute({
 							sessionId,
 							messageId,
 							...request
 						}),
-						openAt: (path, line) => ctx.remote.rollback.openAt(sessionId, path, line),
+						openAt: (path, line) => rollback.openAt(sessionId, path, line),
 						forkAt: async (seq) => {
 							const childId = await sessions.fork({
 								sessionId,
