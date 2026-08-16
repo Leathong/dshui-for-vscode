@@ -24,3 +24,6 @@
 
     - id: dshui-host-ensure-workspace
       name: dshui-host-ensure-workspace
+
+    - id: dsh-rollback-plugin
+      name: dsh-rollback-plugin

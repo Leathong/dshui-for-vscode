@@ -256,7 +256,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     if (openBridge.running) {
       const initialWorkspace = currentWorkspace()
       if (initialWorkspace !== undefined) {
-        void registerBridge(dshHome, initialWorkspace, openBridge.endpoint).catch((error) => {
+        void registerBridge(dshHome, initialWorkspace, openBridge.endpoint, openBridge.token).catch((error) => {
           fileLog(dshHome, `bridge registration failed: ${String(error)}`)
         })
       }
@@ -396,7 +396,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
           fileLog(dshHome, `server exited (code ${String(code)}, signal ${String(signal)})`)
         },
         env: {
-          ...(openBridge.running ? { DSHUI_OPEN_ENDPOINT: openBridge.endpoint } : {}),
+          ...(openBridge.running ? { DSHUI_OPEN_ENDPOINT: openBridge.endpoint, DSHUI_OPEN_TOKEN: openBridge.token } : {}),
           // 桥不可用时的回退：应用内 `code` CLI 绝对路径（补丁的 dshuiOpenViaCli 使用）。
           DSHUI_CODE_CLI: codeCli,
           // 各窗口桥的注册表（补丁的 dshuiPickBridgeForPath 按工作区前缀路由）。
@@ -827,7 +827,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       if (currentView === null || currentWorkspacePath === workspacePath) return
       currentWorkspacePath = workspacePath
       if (openBridge.running) {
-        void registerBridge(dshHome, workspacePath, openBridge.endpoint).catch((error) => {
+        void registerBridge(dshHome, workspacePath, openBridge.endpoint, openBridge.token).catch((error) => {
           fileLog(dshHome, `bridge registration failed: ${String(error)}`)
         })
       }

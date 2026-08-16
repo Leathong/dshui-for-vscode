@@ -336,6 +336,8 @@ export interface BridgeEntry {
   workspace: string
   /** Absolute URL of the window's local open bridge (…/open). */
   endpoint: string
+  /** Per-window random token required by that bridge. */
+  token: string
   /** Last successful heartbeat (epoch ms). */
   lastSeen: number
 }
@@ -347,6 +349,7 @@ function isBridgeEntryShape(entry: unknown): entry is BridgeEntry {
     && typeof candidate.id === 'string' && candidate.id !== ''
     && typeof candidate.workspace === 'string' && candidate.workspace !== ''
     && typeof candidate.endpoint === 'string' && candidate.endpoint !== ''
+    && typeof candidate.token === 'string' && candidate.token !== ''
     && typeof candidate.lastSeen === 'number' && Number.isFinite(candidate.lastSeen)
 }
 
@@ -392,8 +395,9 @@ function writeBridges(dshHome: string, bridges: Record<number, BridgeEntry>): vo
  * @param dshHome - the dsh home.
  * @param workspace - canonical path of this window's workspace.
  * @param endpoint - absolute URL of this window's open bridge.
+ * @param token - per-window token required by this bridge.
  */
-export async function registerBridge(dshHome: string, workspace: string, endpoint: string): Promise<void> {
+export async function registerBridge(dshHome: string, workspace: string, endpoint: string, token: string): Promise<void> {
   await withRegistryLock(dshHome, () => {
     const bridges = readBridges(dshHome)
     bridges[process.pid] = {
@@ -401,6 +405,7 @@ export async function registerBridge(dshHome: string, workspace: string, endpoin
       id: HOST_INSTANCE_ID,
       workspace,
       endpoint,
+      token,
       lastSeen: Date.now(),
     }
     writeBridges(dshHome, bridges)

@@ -88,19 +88,23 @@ async function dshuiOpenViaBridge(path, signal) {
 	const target = await dshuiPickBridgeForPath(path);
 	if (target !== null && await dshuiBridgeRequest(target, path, signal)) return true;
 	const endpoint = process.env.DSHUI_OPEN_ENDPOINT;
-	if (endpoint !== undefined && await dshuiBridgeRequest(endpoint, path, signal)) return true;
+	const token = process.env.DSHUI_OPEN_TOKEN;
+	if (endpoint !== undefined && await dshuiBridgeRequest({ endpoint, token }, path, signal)) return true;
 	return false;
 }
 /**
- * dshui patch: POST one open request to a bridge endpoint.
- * @param endpoint - bridge base URL.
+ * dshui patch: GET one open request to a bridge endpoint.
+ * @param target - bridge selection with endpoint URL and optional token.
  * @param path - absolute filesystem path.
  * @param signal - caller/connection lifetime.
  * @returns true when the bridge answered ok.
  */
-async function dshuiBridgeRequest(endpoint, path, signal) {
+async function dshuiBridgeRequest(target, path, signal) {
+	if (!target || typeof target.endpoint !== "string" || target.endpoint === "") return false;
 	try {
-		const response = await fetch(endpoint + "?path=" + encodeURIComponent(path), { signal });
+		let url = target.endpoint + "?path=" + encodeURIComponent(path);
+		if (typeof target.token === "string" && target.token !== "") url += "&token=" + encodeURIComponent(target.token);
+		const response = await fetch(url, { signal });
 		return response.ok;
 	} catch (error) {
 		console.warn("[dshui] open bridge request failed:", error);
@@ -108,11 +112,11 @@ async function dshuiBridgeRequest(endpoint, path, signal) {
 	}
 }
 /**
- * dshui patch: pick the bridge endpoint whose registered workspace is the
- * longest path prefix of the opened file; null when none matches. Entries of
- * dead windows are skipped.
+ * dshui patch: pick the bridge whose registered workspace is the longest path
+ * prefix of the opened file; null when none matches. Dead or expired windows
+ * are skipped.
  * @param path - absolute filesystem path.
- * @returns the bridge endpoint, or null.
+ * @returns the bridge selection, or null.
  */
 async function dshuiPickBridgeForPath(path) {
 	const bridgesFile = process.env.DSHUI_BRIDGES_FILE;
@@ -135,12 +139,13 @@ async function dshuiPickBridgeForPath(path) {
 			|| typeof entry.id !== "string" || entry.id === ""
 			|| typeof entry.lastSeen !== "number" || !dshuiBridgeLeaseLive(entry)
 			|| typeof entry.workspace !== "string" || entry.workspace === ""
-			|| typeof entry.endpoint !== "string" || entry.endpoint === "") continue;
+			|| typeof entry.endpoint !== "string" || entry.endpoint === ""
+			|| typeof entry.token !== "string" || entry.token === "") continue;
 		if (path === entry.workspace || path.startsWith(entry.workspace + "/")) {
 			if (best === null || entry.workspace.length > best.workspace.length) best = entry;
 		}
 	}
-	return best === null ? null : best.endpoint;
+	return best === null ? null : { endpoint: best.endpoint, token: best.token };
 }
 /**
  * dshui patch: bridge lease liveness. A pid alone is insufficient because the
@@ -163,6 +168,7 @@ function dshuiPidAlive(pid) {
 
 /** Present in the current bridge-helper block; used to upgrade older patches. */
 const BRIDGE_LEASE_PATCH_MARKER = 'function dshuiBridgeLeaseLive'
+const BRIDGE_TOKEN_PATCH_MARKER = 'typeof target.token'
 
 /** Absolute path as a \`vscode://file/\` URL (last-resort fallback opener). */
 const URL_FUNCTION = `/**
@@ -219,7 +225,7 @@ export function patchFileOpener(apiProxyLibPath: string): { patched: boolean; no
   }
   try {
     const hasCurrentDarwinBranch = source.includes(PATCHED_DARWIN_BRANCH)
-    if (hasCurrentDarwinBranch && source.includes(BRIDGE_LEASE_PATCH_MARKER)) {
+    if (hasCurrentDarwinBranch && source.includes(BRIDGE_LEASE_PATCH_MARKER) && source.includes(BRIDGE_TOKEN_PATCH_MARKER)) {
       return { patched: true, note: 'already patched' }
     }
     let next = source
@@ -240,7 +246,7 @@ export function patchFileOpener(apiProxyLibPath: string): { patched: boolean; no
     const openerSignature = 'async function openNativePathWithIntent(path, signal, intent, internals = {}) {'
     // Bridge helpers: upgrade in place, never duplicate.
     if (next.includes('function dshuiPickBridgeForPath')) {
-      if (!next.includes(BRIDGE_LEASE_PATCH_MARKER)) {
+      if (!next.includes(BRIDGE_TOKEN_PATCH_MARKER)) {
         // Replace the entire old bridge-helper block. It was inserted either
         // directly before `openNativePathWithIntent` or together with the
         // `dshuiVscodeFileUrl` helper; preserve the URL helper when present.

@@ -19,6 +19,7 @@ const PLUGIN_NAMES = [
   'dshui-host-ensure-workspace',
   'dshui-client-ui-workspace',
   'dshui-client-ui-conversation',
+  'dsh-rollback-plugin',
 ] as const
 
 /** Default dsh home mirroring `@deepseek-ai/dsh-home-paths`. */
@@ -60,6 +61,9 @@ export function installPlugins(
         if (!fs.existsSync(from)) continue
         fs.copyFileSync(from, path.join(target, file))
       }
+      // Bundles may ship their built artifacts in lib/ (e.g. dsh-rollback-plugin).
+      const libSource = path.join(source, 'lib')
+      if (fs.existsSync(libSource)) fs.cpSync(libSource, path.join(target, 'lib'), { recursive: true })
     }
     installed.push({ name, dir: path.join(targets[0], name) })
   }
