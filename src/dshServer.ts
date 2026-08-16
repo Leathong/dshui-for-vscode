@@ -33,6 +33,8 @@ export interface DshServerOptions {
   onExit?: (code: number | null, signal: NodeJS.Signals | null) => void
   /** Optional extra environment variables. */
   env?: Record<string, string>
+  /** True when this server participates in the shared lifecycle registry. */
+  sharedBackend?: boolean
 }
 
 const URL_LINE = /dsh web:\s+http:\/\/127\.0\.0\.1:(\d+)/
@@ -117,6 +119,7 @@ export class DshServer {
     const server = new DshServer({
       cwd, dshHome: '', patchPath: '', cliPath: '', port,
       onReady: () => {}, onExit: () => {},
+      sharedBackend: true,
     })
     server.boundPort = port
     return server
@@ -126,9 +129,19 @@ export class DshServer {
     return this.boundPort
   }
 
+  /** The port requested at construction (0 means OS-assigned). */
+  get requestedPort(): number {
+    return this.options.port
+  }
+
   /** The workspace root this server was booted for. */
   get cwd(): string {
     return this.options.cwd
+  }
+
+  /** True when this handle participates in the shared lifecycle registry. */
+  get lifecycleShared(): boolean {
+    return this.options.sharedBackend === true
   }
 
   /** True when this handle adopted another window's server (no child owned). */

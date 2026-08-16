@@ -17,7 +17,7 @@ import { OpenBridge } from './openBridge'
 import { patchFileOpener } from './openPatch'
 import { installPlugins, resolveDshHome, type InstalledPlugin } from './plugins'
 import {
-  bridgesPath, isAlive, readRegistry, registerBridge, registerServerUser, unregisterBridge,
+  bridgesPath, registerBridge, registerServerUser, unregisterBridge,
   unregisterServerUser, writeWorkspaceMarker,
 } from './sharedBackend'
 import {
@@ -230,6 +230,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   let serverStart: Promise<number> | null = null
   let currentView: vscode.WebviewView | null = null
   let currentWorkspacePath: string | undefined
+  let registeredSharedUser = false
 
   // Route dsh's file-open gestures into the running VS Code instead of the
   // OS default editor (or the vscode:// scheme with its confirmation popup),
@@ -301,24 +302,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     try { return fs.realpathSync(raw) } catch { return raw }
   }
 
-  /**
-   * True when an owned server may be stopped without harming other windows.
-   * Non-shared mode (port 0 — no lifecycle registry exists) always stops.
-   * Shared mode stops only when the registry exists and tracks no live user
-   * besides this window. A missing registry in shared mode means no window's
-   * registration has landed yet — another window may have just attached, and
-   * stopping would disconnect it (the attach-before-register race); the
-   * detached server's host-plugin self-check reaps it instead
-   * (unregisterServerUser materializes an empty registry for that check).
-   */
-  function canStopOwnedServer(): boolean {
-    const configPort = vscode.workspace.getConfiguration('dshui').get<number>('server.port') ?? 0
-    if (configPort <= 0) return true
-    const registry = readRegistry(dshHome)
-    if (registry === null) return false
-    return !registry.users.some((pid) => pid !== process.pid && isAlive(pid))
-  }
-
   /** The dsh UI color scheme matching VS Code's active color theme (high-contrast maps to its dark/light base). */
   function activeColorScheme(): 'dark' | 'light' {
     switch (vscode.window.activeColorTheme.kind) {
@@ -341,20 +324,34 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       return Promise.resolve(server.port)
     }
     if (serverStart !== null) return serverStart
-    // A live server bound to a different folder must be retired before the
-    // new one spawns (the cwd is the workspace identity) — unless another
-    // window still uses it: the shared server keeps serving the other
-    // windows, and the probe below attaches this window to it instead.
-    if (server !== null) {
-      const old = server
-      server = null
-      if (!old.shared && canStopOwnedServer()) {
-        void old.stop()
-      }
-    }
     const configPort = vscode.workspace.getConfiguration('dshui').get<number>('server.port') ?? 0
     const shared = configPort > 0
     const port = configPort > 0 ? configPort : 0
+    // A live server bound to a different folder must be retired before the
+    // new one spawns (the cwd is the workspace identity) — except a fixed-port
+    // shared server that this window can simply attach back to with the new
+    // workspace scope. Stopping a shared server here races with another
+    // window's attach/register sequence, so shared servers are never stopped
+    // by `startServer`; the host plugin reaps them once the registry is empty.
+    if (server !== null) {
+      const old = server
+      server = null
+      const oldIsShared = old.shared || old.lifecycleShared
+      const keepSharedUser = shared && oldIsShared && old.running
+        && old.port !== undefined && old.port === configPort
+        && old.requestedPort === configPort
+      if (oldIsShared) {
+        // Abandoning a shared server: remove our user record and leave the
+        // detached process alone. If this window was the last user, the host
+        // plugin will exit it after its empty-registry grace polls.
+        if (!keepSharedUser) {
+          void unregisterServerUser(dshHome, true).catch(() => { /* best-effort */ })
+        }
+      } else {
+        // Non-shared server: private to this window, safe to stop immediately.
+        void old.stop()
+      }
+    }
     const notifyReady = (boundPort: number): void => {
       console.log(`[dshui] dsh web ready on port ${boundPort}`)
       fileLog(dshHome, `server ready on port ${boundPort} for ${workspacePath}`)
@@ -365,6 +362,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }
     // 共享后端：把本窗口登记为共享服务器的用户（owner = 自己拉起的服务器）。
     const registerUse = async (boundPort: number, owner: boolean): Promise<void> => {
+      registeredSharedUser = true
       try {
         await registerServerUser(dshHome, boundPort, owner)
       } catch (error) {
@@ -389,6 +387,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         patchPath,
         cliPath,
         port,
+        sharedBackend: shared,
         onReady: notifyReady,
         onExit: (code, signal) => {
           console.warn(`[dshui] dsh web exited (code ${String(code)}, signal ${String(signal)})`)
@@ -400,6 +399,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
           DSHUI_CODE_CLI: codeCli,
           // 各窗口桥的注册表（补丁的 dshuiPickBridgeForPath 按工作区前缀路由）。
           DSHUI_BRIDGES_FILE: bridgesPath(dshHome),
+          // host 插件只应在共享后端模式下参与生命周期自检；
+          // port=0 的各窗口服务器是相互独立的，不能因共享的空注册表自杀。
+          DSHUI_SHARED_BACKEND: shared ? '1' : '0',
         },
       })
       server.onOutput((line) => {
@@ -833,18 +835,24 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   context.subscriptions.push({
     dispose: () => {
-      // 共享后端：采纳的服务器不归本窗口管；自己启动的服务器只在确认没有
-      // 其他存活用户时才停掉。注册表缺失时不停——另一窗口可能刚附加上而
-      // 登记尚未落盘，停了会断掉它；该情形由 detached 服务器的自检退出
-      // （unregisterServerUser 会补落一个空注册表供自检识别）。注册表条目
-      // 尽力摘除——即使没跑完，服务器自检也会把死 pid 当不存在。
+      // 共享后端：窗口关闭时不再由 owner 直接 stop。owner 直接 stop 与
+      // 其他窗口的 probe→attach→register 之间存在无法消除的 TOCTOU 竞态，
+      // 会误停掉刚 attach 但尚未写进 users 的窗口。这里只摘除自己的
+      // 注册项；detached server 的 host 插件在 5 个空轮询（约 10 秒）后
+      // 自行退出，因此不会泄漏，也不会误伤其他窗口。
+      const serverIsShared = server !== null && (server.shared || server.lifecycleShared)
+      const sharedUser = server !== null ? serverIsShared : registeredSharedUser
       if (server !== null) {
-        if (!server.shared && canStopOwnedServer()) {
+        // 只有非共享模式（port=0）的 owned server 才在本窗口关闭时立即停；
+        // 它与任何其他窗口都没有依赖关系。
+        if (!server.shared && !server.lifecycleShared) {
           void server.stop()
         }
         server = null
       }
-      void unregisterServerUser(dshHome).catch(() => { /* best-effort */ })
+      if (sharedUser) {
+        void unregisterServerUser(dshHome, true).catch(() => { /* best-effort */ })
+      }
       void unregisterBridge(dshHome).catch(() => { /* best-effort */ })
       openBridge.dispose()
     },

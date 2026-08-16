@@ -59,6 +59,14 @@ const SELF_EXIT_GRACE_POLLS = 5
 const dshHome = process.env.DSH_HOME || path.join(os.homedir(), '.dsh')
 const markersDir = path.join(dshHome, 'dshui-workspaces')
 const registryFile = path.join(dshHome, 'dshui-server.json')
+/**
+ * 只有扩展明确以非共享模式拉起的服务器（DSHUI_SHARED_BACKEND=0）才跳过
+ * marker/生命周期轮询。`dshui.server.port = 0` 时每个窗口各有一个独立
+ * 服务器；它们共享同一个 DSH_HOME，如果其中一个窗口关闭时留下了空注册表，
+ * 本插件会把所有独立服务器都误判为“无用户”而退出。默认参与轮询是为了
+ * 兼容旧扩展拉起的、没有该环境变量的服务器。
+ */
+const sharedBackend = process.env.DSHUI_SHARED_BACKEND !== '0'
 
 function isAlive(pid) {
   if (typeof pid !== 'number' || pid <= 0) return false
@@ -69,6 +77,7 @@ const markerAttempts = new Map()
 
 /** 处理工作区注册 marker：workspaceRegistry.create 成功后删除，失败有限重试。 */
 function processMarkers(ctx) {
+  if (!sharedBackend) return
   let files
   try { files = fs.readdirSync(markersDir) } catch { return /* 目录尚不存在 */ }
   for (const file of files) {
@@ -99,6 +108,7 @@ let emptyPolls = 0
 
 /** 生命周期自检：注册表里没有存活窗口 pid 时自退出（最后窗口关闭后收尾）。 */
 function checkLiveness() {
+  if (!sharedBackend) return
   let raw
   try { raw = fs.readFileSync(registryFile, 'utf8') } catch { emptyPolls = 0; return }
   let registry

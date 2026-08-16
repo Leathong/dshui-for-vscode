@@ -20,7 +20,7 @@ import * as path from 'node:path'
 const REGISTRY_FILE = 'dshui-server.json'
 const LOCK_FILE = 'dshui-server.lock'
 const MARKER_DIR = 'dshui-workspaces'
-const LOCK_TIMEOUT_MS = 3000
+const LOCK_TIMEOUT_MS = 8000
 
 export interface ServerRegistry {
   port: number
@@ -49,17 +49,76 @@ export function isAlive(pid: number): boolean {
   }
 }
 
+/**
+ * A registry/bridge lock file left behind by a crashed extension host must
+ * not block every future window forever. The lock file carries the owning
+ * pid plus a random token; a waiter may remove it when the owner is dead.
+ * A valid owner never holds the lock for more than a few milliseconds, so a
+ * lock held by a live pid for `LOCK_STALE_MS` is treated as a hung process.
+ */
+const LOCK_STALE_MS = 60_000
+/** An owner can be killed between `open(..., 'wx')` and the first write. */
+const LOCK_EMPTY_STALE_MS = 5_000
+
+interface LockOwner {
+  pid: number
+  token: string
+  createdAt: number
+}
+
+function readLockOwner(lock: string): LockOwner | null {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(lock, 'utf8')) as Partial<LockOwner>
+    if (
+      typeof parsed.pid !== 'number' || !Number.isInteger(parsed.pid) || parsed.pid <= 0
+      || typeof parsed.token !== 'string' || parsed.token === ''
+      || typeof parsed.createdAt !== 'number'
+    ) return null
+    return { pid: parsed.pid, token: parsed.token, createdAt: parsed.createdAt }
+  } catch {
+    return null
+  }
+}
+
+/** True when the current lock owner is dead, hung, or left an unreadable file. */
+function isStaleLockFile(lock: string): boolean {
+  let mtimeMs: number
+  try {
+    mtimeMs = fs.statSync(lock).mtimeMs
+  } catch {
+    return true // Released between EEXIST and this read: retry immediately.
+  }
+  const owner = readLockOwner(lock)
+  if (owner === null) return Date.now() - mtimeMs > LOCK_EMPTY_STALE_MS
+  if (!isAlive(owner.pid)) return true
+  return Date.now() - owner.createdAt > LOCK_STALE_MS
+}
+
 /** Serialize registry mutations across windows with an exclusive lock file. */
 async function withRegistryLock<T>(dshHome: string, fn: () => Promise<T> | T): Promise<T> {
   const lock = path.join(dshHome, LOCK_FILE)
   const deadline = Date.now() + LOCK_TIMEOUT_MS
+  const token = `${process.pid}:${Date.now().toString(36)}:${Math.random().toString(36).slice(2)}`
   for (;;) {
     try {
       const fd = fs.openSync(lock, 'wx')
-      fs.closeSync(fd)
+      try {
+        fs.writeFileSync(fd, JSON.stringify({ pid: process.pid, token, createdAt: Date.now() } satisfies LockOwner))
+      } finally {
+        fs.closeSync(fd)
+      }
       break
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
+      try {
+        if (isStaleLockFile(lock)) {
+          fs.rmSync(lock, { force: true })
+          continue
+        }
+      } catch {
+        // The lock disappeared (owner released it); loop and try again.
+        continue
+      }
       if (Date.now() > deadline) {
         throw new Error(`dshui server registry lock timeout: ${lock}`)
       }
@@ -69,7 +128,11 @@ async function withRegistryLock<T>(dshHome: string, fn: () => Promise<T> | T): P
   try {
     return await fn()
   } finally {
-    fs.rmSync(lock, { force: true })
+    // Only remove our own lock: a stale-removal race could otherwise delete
+    // a lock that another window just acquired.
+    try {
+      if (readLockOwner(lock)?.token === token) fs.rmSync(lock, { force: true })
+    } catch { /* best-effort lock release */ }
   }
 }
 
@@ -97,11 +160,10 @@ function writeRegistry(dshHome: string, registry: ServerRegistry): void {
  * server whose registry does not exist yet (the spawning window has not
  * written it, or an older extension version started the server) creates the
  * registry with this window as its only user instead of silently skipping:
- * a dropped registration would make the owner's close-time check see "no
- * other live users" and stop the server right under this window (the
- * attach-before-register race). The unknown owner is a sentinel `0` — the
- * host plugin's self-check only reads `users`, and every later write
- * replaces `owner` with a real pid.
+ * a dropped registration would let the host plugin see no live users and
+ * self-exit right under this window (the attach-before-register race). The
+ * unknown owner is a sentinel `0` — the host plugin's self-check only reads
+ * `users`, and every later write replaces `owner` with a real pid.
  * @param dshHome - the dsh home the shared server runs under.
  * @param port - the rendezvous port.
  * @param owner - true when this window spawned the server.
@@ -128,16 +190,24 @@ export async function registerServerUser(dshHome: string, port: number, owner: b
 }
 
 /**
- * Remove this extension host from the shared server's user list. A missing
- * registry (nobody's registration ever landed — the same attach-before-
- * register race) is materialized as an empty registry so the detached
- * server's host-plugin self-check can reap it; without a registry file the
- * self-check idles forever and the server would leak.
+ * Remove this extension host from the shared server's user list. In shared
+ * mode, a missing registry (nobody's registration ever landed — the same
+ * attach-before-register race) is materialized as an empty registry so the
+ * detached server's host-plugin self-check can reap it; without a registry
+ * file the self-check idles forever and the server would leak.
+ * @param dshHome - the dsh home the shared server runs under.
+ * @param shared - true when this window participates in the shared backend.
  */
-export async function unregisterServerUser(dshHome: string): Promise<void> {
+export async function unregisterServerUser(dshHome: string, shared: boolean): Promise<void> {
   await withRegistryLock(dshHome, () => {
     const existing = readRegistry(dshHome)
     if (existing === null) {
+      // Only a shared-backend participant may materialize the empty registry
+      // that tells the detached server to self-reap. A non-shared window
+      // (port 0) must never create this file: every dsh server polls the same
+      // dsh home, and an empty registry would make independent per-window
+      // servers exit under a still-live window.
+      if (!shared) return
       writeRegistry(dshHome, { port: 0, owner: process.pid, users: [] })
       return
     }
@@ -166,7 +236,18 @@ export function writeWorkspaceMarker(dshHome: string, workspacePath: string): vo
   const dir = markerDir(dshHome)
   fs.mkdirSync(dir, { recursive: true })
   const name = Buffer.from(workspacePath, 'utf8').toString('base64url')
-  fs.writeFileSync(path.join(dir, `${name}.json`), JSON.stringify({ path: workspacePath }))
+  // Atomic commit via temp+rename. The host plugin polls every 2s and only
+  // consumes `*.json`; a direct write could be observed half-written, parsed
+  // as invalid, and deleted before registration ever happens.
+  const target = path.join(dir, `${name}.json`)
+  const tmp = `${target}.${process.pid}.${Date.now()}.tmp`
+  try {
+    fs.writeFileSync(tmp, JSON.stringify({ path: workspacePath }))
+    fs.renameSync(tmp, target)
+  } catch (error) {
+    fs.rmSync(tmp, { force: true })
+    throw error
+  }
 }
 
 /** One window's open-bridge registration for workspace-aware file routing. */
