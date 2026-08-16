@@ -34,7 +34,7 @@ export declare class RollbackSafety {
     journalStart(guardId: string, paths: readonly string[]): Promise<RollbackJournalEntry>;
     journalUpdate(id: string, phase: RollbackJournalEntry['phase']): Promise<void>;
     listJournals(cwd: string): Promise<RollbackJournalEntry[]>;
-    rollbackGuard(ctx: RollbackCordisContext, provider: GitProvider, ledger: ChangeLedger, guardId: string, paths: readonly string[]): Promise<void>;
+    rollbackGuard(ctx: RollbackCordisContext, provider: GitProvider, ledger: ChangeLedger, guardId: string, paths: readonly string[], sandboxPolicy?: import('./fs-policy.ts').RollbackSandboxPolicy): Promise<void>;
     loadGuards(): Promise<void>;
     private persistGuards;
     private loadJournals;

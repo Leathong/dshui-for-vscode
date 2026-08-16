@@ -1,5 +1,6 @@
 import type { RollbackFileChange, RollbackHunk } from '../shared/types.ts';
 import type { FsObservation, FsTarget, RollbackCordisContext, RollbackToolActor } from './context.ts';
+import type { RollbackSandboxPolicy } from './fs-policy.ts';
 export interface LedgerOptions {
     ledgerMaxTextBytes: number;
     /** Cap on persisted records per session; the oldest records are trimmed first. */
@@ -29,8 +30,21 @@ interface LedgerEventLike {
     seq: number;
 }
 export declare function normalizeLf(text: string): string;
+/**
+ * Whole-file hunk for a file created after the baseline: `oldText: null`
+ * plus the bounded text content, so the modification list can render the
+ * new file as a diff. Binary or oversized files return no hunks.
+ */
+export declare function createdFileHunks(abs: string, maxBytes: number): Promise<RollbackHunk[]>;
 /** Compute a whole-file diff hunk between two text snapshots. */
 export declare function wholeFileHunk(before: string | null, after: string): RollbackHunk[];
+/**
+ * Line-level diff between two text snapshots, split into git-style hunks
+ * (with context) so per-hunk CodeLens buttons and precise change anchors
+ * work for ledger-tracked files too. `firstChanged*Line` marks the first
+ * line that actually differs inside each hunk.
+ */
+export declare function lineDiffHunks(before: string, after: string): RollbackHunk[];
 /** Open turn/step for a session, derived from the durable log boundaries. */
 export declare function sessionTurnPosition(session: {
     readonly events: readonly LedgerEventLike[];
@@ -61,6 +75,15 @@ export declare class ChangeLedger {
     listForTurn(sessionId: string, turn: number): LedgerModificationRecord[];
     /** Earliest before-image for one path during the target turn. */
     baselineForTurn(sessionId: string, turn: number, filePath: string): LedgerModificationRecord | undefined;
+    /** All records for one path in a session, oldest first. */
+    recordsForPath(sessionId: string, filePath: string): LedgerModificationRecord[];
+    /** Earliest record for one path across the whole session. */
+    earliestForSessionPath(sessionId: string, filePath: string): LedgerModificationRecord | undefined;
+    /**
+     * File-level changes for every ledger-covered path of a session, using the
+     * earliest record per path as the baseline (the session modification list).
+     */
+    buildSessionFileChanges(sessionId: string, cwd: string, mode: 'ignored' | 'fallback'): Promise<RollbackFileChange[]>;
     /** All modifications for a path at or after one record, newest first. */
     laterModifications(sessionId: string, filePath: string, after: LedgerModificationRecord): LedgerModificationRecord[];
     recordById(sessionId: string, modificationId: string): LedgerModificationRecord | undefined;
@@ -71,7 +94,7 @@ export declare class ChangeLedger {
     buildFileChanges(sessionId: string, turn: number, cwd: string, mode: 'ignored' | 'fallback'): Promise<RollbackFileChange[]>;
     fileChangeForBaseline(cwd: string, rel: string, baseline: LedgerModificationRecord, mode: 'ignored' | 'fallback'): Promise<RollbackFileChange | undefined>;
     /** Restore one ledger-covered path through ctx.fs, bypassing the tool waterfall. */
-    restoreLedgerPath(cwd: string, rel: string, baseline: LedgerModificationRecord, createdPolicy: 'keep' | 'delete'): Promise<'restored' | 'kept' | 'deleted' | 'unsupported'>;
+    restoreLedgerPath(cwd: string, rel: string, baseline: LedgerModificationRecord, createdPolicy: 'keep' | 'delete', sandboxPolicy?: RollbackSandboxPolicy): Promise<'restored' | 'kept' | 'deleted' | 'unsupported'>;
     readCurrentForGuard(cwd: string, rel: string): Promise<{
         existed: boolean;
         version?: string;
@@ -82,7 +105,7 @@ export declare class ChangeLedger {
         existed: boolean;
         version?: string;
         content?: string;
-    }): Promise<void>;
+    }, sandboxPolicy?: RollbackSandboxPolicy): Promise<void>;
     private captureBefore;
     private positionForCall;
     private readText;

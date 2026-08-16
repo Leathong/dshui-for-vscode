@@ -16,6 +16,25 @@ function safePathKey(target) {
 export function normalizeLf(text) {
     return text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
 }
+/**
+ * Whole-file hunk for a file created after the baseline: `oldText: null`
+ * plus the bounded text content, so the modification list can render the
+ * new file as a diff. Binary or oversized files return no hunks.
+ */
+export async function createdFileHunks(abs, maxBytes) {
+    try {
+        const stat = await fs.promises.stat(abs);
+        if (!stat.isFile() || stat.size > maxBytes)
+            return [];
+        const content = await fs.promises.readFile(abs, 'utf8');
+        if (content.includes('\0'))
+            return [];
+        return wholeFileHunk(null, content);
+    }
+    catch {
+        return [];
+    }
+}
 /** Compute a whole-file diff hunk between two text snapshots. */
 export function wholeFileHunk(before, after) {
     if (before === null) {
@@ -30,6 +49,155 @@ export function wholeFileHunk(before, after) {
             newLine: 1,
             endLine: countLines(after),
         }];
+}
+/** Context lines kept around each changed region, like `git diff`'s default. */
+const DIFF_CONTEXT = 3;
+/** Guard against pathological LCS tables; larger middles fall back to one whole-file hunk. */
+const DIFF_MAX_LCS_CELLS = 1_000_000;
+/**
+ * Line-level diff between two text snapshots, split into git-style hunks
+ * (with context) so per-hunk CodeLens buttons and precise change anchors
+ * work for ledger-tracked files too. `firstChanged*Line` marks the first
+ * line that actually differs inside each hunk.
+ */
+export function lineDiffHunks(before, after) {
+    if (before === after)
+        return [];
+    if (before === '' || after === '')
+        return wholeFileHunk(before, after);
+    const beforeLines = before.split('\n');
+    const afterLines = after.split('\n');
+    let prefix = 0;
+    while (prefix < beforeLines.length && prefix < afterLines.length && beforeLines[prefix] === afterLines[prefix])
+        prefix += 1;
+    let suffix = 0;
+    while (suffix < beforeLines.length - prefix && suffix < afterLines.length - prefix
+        && beforeLines[beforeLines.length - 1 - suffix] === afterLines[afterLines.length - 1 - suffix])
+        suffix += 1;
+    const midBefore = beforeLines.slice(prefix, beforeLines.length - suffix);
+    const midAfter = afterLines.slice(prefix, afterLines.length - suffix);
+    if (midBefore.length === 0 && midAfter.length === 0)
+        return [];
+    if (midBefore.length * midAfter.length > DIFF_MAX_LCS_CELLS) {
+        // Degenerate middle: fall back to one whole-file hunk, but still point
+        // the change anchor at the first differing line (the common prefix).
+        return [{
+                oldText: before,
+                newText: after,
+                oldLine: 1,
+                newLine: 1,
+                endLine: countLines(after),
+                firstChangedOldLine: prefix + 1,
+                firstChangedNewLine: prefix + 1,
+            }];
+    }
+    // Backward LCS table over the trimmed middle.
+    const n = midBefore.length;
+    const m = midAfter.length;
+    const stride = m + 1;
+    const dp = new Int32Array((n + 1) * stride);
+    for (let i = n - 1; i >= 0; i -= 1) {
+        for (let j = m - 1; j >= 0; j -= 1) {
+            dp[i * stride + j] = midBefore[i] === midAfter[j]
+                ? dp[(i + 1) * stride + j + 1] + 1
+                : Math.max(dp[(i + 1) * stride + j], dp[i * stride + j + 1]);
+        }
+    }
+    const ops = [];
+    let oldCursor = 1;
+    let newCursor = 1;
+    for (let k = 0; k < prefix; k += 1) {
+        ops.push({ type: 'keep', oldLine: oldCursor, newLine: newCursor });
+        oldCursor += 1;
+        newCursor += 1;
+    }
+    let i = 0;
+    let j = 0;
+    while (i < n || j < m) {
+        if (i < n && j < m && midBefore[i] === midAfter[j]) {
+            ops.push({ type: 'keep', oldLine: oldCursor, newLine: newCursor });
+            i += 1;
+            j += 1;
+            oldCursor += 1;
+            newCursor += 1;
+        }
+        else if (j >= m || (i < n && dp[(i + 1) * stride + j] >= dp[i * stride + j + 1])) {
+            ops.push({ type: 'del', oldLine: oldCursor, newLine: newCursor });
+            i += 1;
+            oldCursor += 1;
+        }
+        else {
+            ops.push({ type: 'ins', oldLine: oldCursor, newLine: newCursor });
+            j += 1;
+            newCursor += 1;
+        }
+    }
+    // The common suffix was trimmed before the LCS; append it as keeps so the
+    // final hunk still gets its trailing context lines.
+    for (let k = 0; k < suffix; k += 1) {
+        ops.push({ type: 'keep', oldLine: oldCursor, newLine: newCursor });
+        oldCursor += 1;
+        newCursor += 1;
+    }
+    // Group change runs into hunks: runs separated by more than 2×context
+    // unchanged lines get their own hunk (git-style); closer runs share one.
+    const hunks = [];
+    let firstChange = -1;
+    let lastChange = -1;
+    const flush = (first, last) => {
+        const hunkStart = Math.max(0, first - DIFF_CONTEXT);
+        const hunkEnd = Math.min(ops.length - 1, last + DIFF_CONTEXT);
+        const oldLines = [];
+        const newLines = [];
+        let hunkOldLine = 0;
+        let hunkNewLine = 0;
+        let firstChangedOld;
+        let firstChangedNew;
+        for (let k = hunkStart; k <= hunkEnd; k += 1) {
+            const op = ops[k];
+            if (op.type !== 'ins') {
+                oldLines.push(beforeLines[op.oldLine - 1] ?? '');
+                if (hunkOldLine === 0)
+                    hunkOldLine = op.oldLine;
+                if (k >= first && firstChangedOld === undefined)
+                    firstChangedOld = op.oldLine;
+            }
+            if (op.type !== 'del') {
+                newLines.push(afterLines[op.newLine - 1] ?? '');
+                if (hunkNewLine === 0)
+                    hunkNewLine = op.newLine;
+                if (k >= first && firstChangedNew === undefined)
+                    firstChangedNew = op.newLine;
+            }
+        }
+        const newCount = newLines.length;
+        hunks.push({
+            oldText: oldLines.join('\n'),
+            newText: newLines.join('\n'),
+            oldLine: hunkOldLine,
+            newLine: hunkNewLine,
+            ...(newCount > 0 ? { endLine: hunkNewLine + newCount - 1 } : {}),
+            ...(firstChangedOld === undefined ? {} : { firstChangedOldLine: firstChangedOld }),
+            ...(firstChangedNew === undefined ? {} : { firstChangedNewLine: firstChangedNew }),
+        });
+    };
+    for (let k = 0; k < ops.length; k += 1) {
+        if (ops[k].type === 'keep')
+            continue;
+        // A change op starts a new hunk when the unchanged lines since the last
+        // change exceed the merge threshold. (Checked on change ops, not keeps:
+        // the gap is the distance between two change runs.)
+        if (firstChange >= 0 && k - lastChange - 1 > 2 * DIFF_CONTEXT) {
+            flush(firstChange, lastChange);
+            firstChange = -1;
+        }
+        if (firstChange < 0)
+            firstChange = k;
+        lastChange = k;
+    }
+    if (firstChange >= 0)
+        flush(firstChange, lastChange);
+    return hunks;
 }
 function countLines(text) {
     if (text === '')
@@ -165,6 +333,37 @@ export class ChangeLedger {
             .filter(record => samePath(record.path, filePath));
         return matches[0];
     }
+    /** All records for one path in a session, oldest first. */
+    recordsForPath(sessionId, filePath) {
+        return this.list(sessionId)
+            .filter(record => samePath(record.path, filePath))
+            .sort((a, b) => a.seq - b.seq || a.createdAt - b.createdAt);
+    }
+    /** Earliest record for one path across the whole session. */
+    earliestForSessionPath(sessionId, filePath) {
+        return this.recordsForPath(sessionId, filePath)[0];
+    }
+    /**
+     * File-level changes for every ledger-covered path of a session, using the
+     * earliest record per path as the baseline (the session modification list).
+     */
+    async buildSessionFileChanges(sessionId, cwd, mode) {
+        const result = [];
+        const seen = new Set();
+        for (const record of this.list(sessionId)) {
+            const rel = relPathWithin(cwd, record.path);
+            if (rel === undefined || seen.has(rel))
+                continue;
+            seen.add(rel);
+            const baseline = this.earliestForSessionPath(sessionId, record.path);
+            if (baseline === undefined)
+                continue;
+            const change = await this.fileChangeForBaseline(cwd, rel, baseline, mode);
+            if (change !== undefined)
+                result.push(change);
+        }
+        return result;
+    }
     /** All modifications for a path at or after one record, newest first. */
     laterModifications(sessionId, filePath, after) {
         return this.list(sessionId)
@@ -211,6 +410,9 @@ export class ChangeLedger {
             const target = await this.ctx.fs.resolve(rel, { cwd });
             const currentInfo = await this.ctx.fs.stat(target);
             if (!baseline.beforeExisted) {
+                if (currentInfo === undefined)
+                    return undefined;
+                const hunks = await createdFileHunks(this.ctx.fs.processPath(target), this.options.ledgerMaxTextBytes);
                 return {
                     path: rel,
                     absolutePath: this.ctx.fs.processPath(target),
@@ -218,6 +420,7 @@ export class ChangeLedger {
                     source: 'ledger',
                     restorable: false,
                     createdAfterSnapshot: true,
+                    ...(hunks.length > 0 ? { hunks } : {}),
                 };
             }
             if (currentInfo === undefined) {
@@ -259,7 +462,7 @@ export class ChangeLedger {
                 status: mode === 'ignored' ? 'ignored' : 'modified',
                 source: 'ledger',
                 restorable: true,
-                hunks: wholeFileHunk(baseline.beforeContent, current),
+                hunks: lineDiffHunks(baseline.beforeContent, current),
             };
         }
         catch {
@@ -267,7 +470,7 @@ export class ChangeLedger {
         }
     }
     /** Restore one ledger-covered path through ctx.fs, bypassing the tool waterfall. */
-    async restoreLedgerPath(cwd, rel, baseline, createdPolicy) {
+    async restoreLedgerPath(cwd, rel, baseline, createdPolicy, sandboxPolicy) {
         const target = await this.ctx.fs.resolve(rel, { cwd });
         if (!baseline.beforeExisted) {
             if (createdPolicy !== 'delete')
@@ -281,7 +484,7 @@ export class ChangeLedger {
         const info = await this.ctx.fs.stat(target);
         if (baseline.beforeContent === undefined)
             return 'unsupported';
-        await this.ctx.fs.writeText(target, baseline.beforeContent, info === undefined ? { kind: 'createIfAbsent' } : { kind: 'replaceIfVersion', version: info.version });
+        await this.ctx.fs.writeText(target, baseline.beforeContent, info === undefined ? { kind: 'createIfAbsent' } : { kind: 'replaceIfVersion', version: info.version }, undefined, sandboxPolicy);
         return 'restored';
     }
     async readCurrentForGuard(cwd, rel) {
@@ -299,7 +502,7 @@ export class ChangeLedger {
             return { existed: false };
         }
     }
-    async restoreGuardFile(cwd, rel, guard) {
+    async restoreGuardFile(cwd, rel, guard, sandboxPolicy) {
         const target = await this.ctx.fs.resolve(rel, { cwd });
         if (!guard.existed) {
             const info = await this.ctx.fs.stat(target);
@@ -310,7 +513,7 @@ export class ChangeLedger {
         if (guard.content === undefined)
             return;
         const info = await this.ctx.fs.stat(target);
-        await this.ctx.fs.writeText(target, guard.content, info === undefined ? { kind: 'createIfAbsent' } : { kind: 'replaceIfVersion', version: info.version });
+        await this.ctx.fs.writeText(target, guard.content, info === undefined ? { kind: 'createIfAbsent' } : { kind: 'replaceIfVersion', version: info.version }, undefined, sandboxPolicy);
     }
     async captureBefore(toolName, target, actor) {
         const filePath = this.ctx.fs.processPath(target);

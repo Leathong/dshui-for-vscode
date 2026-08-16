@@ -319,6 +319,13 @@ export function parseDiffHunks(stdout, maxHunks, maxBytes) {
             continue;
         const oldLines = [];
         const newLines = [];
+        // Offsets (in body lines) of the first changed line on each side; the
+        // hunk header line number marks the start of the context region, so the
+        // buttons must anchor on the first line that actually differs.
+        let firstOld;
+        let firstNew;
+        let oldBefore = 0;
+        let newBefore = 0;
         for (i += 1; i < lines.length; i += 1) {
             const body = lines[i] ?? '';
             if (body === '\\ No newline at end of file')
@@ -333,12 +340,20 @@ export function parseDiffHunks(stdout, maxHunks, maxBytes) {
                 const text = body.slice(1);
                 oldLines.push(text);
                 newLines.push(text);
+                oldBefore += 1;
+                newBefore += 1;
             }
             else if (body.startsWith('-')) {
+                if (firstOld === undefined)
+                    firstOld = oldBefore;
                 oldLines.push(body.slice(1));
+                oldBefore += 1;
             }
             else if (body.startsWith('+')) {
+                if (firstNew === undefined)
+                    firstNew = newBefore;
                 newLines.push(body.slice(1));
+                newBefore += 1;
             }
         }
         const oldText = oldLines.join('\n');
@@ -354,6 +369,8 @@ export function parseDiffHunks(stdout, maxHunks, maxBytes) {
             ...(parsed.oldLine === undefined ? {} : { oldLine: parsed.oldLine }),
             ...(parsed.newLine === undefined ? {} : { newLine: parsed.newLine }),
             ...(parsed.endLine === undefined ? {} : { endLine: parsed.endLine }),
+            ...(firstOld === undefined || parsed.oldLine === undefined ? {} : { firstChangedOldLine: parsed.oldLine + firstOld }),
+            ...(firstNew === undefined || parsed.newLine === undefined ? {} : { firstChangedNewLine: parsed.newLine + firstNew }),
         });
     }
     return { hunks, truncated, binary: false };

@@ -17,26 +17,36 @@ export function resolveBoundary(session, messageId) {
             },
         };
     }
-    const targetTurn = assistant.data.turn;
-    const turnEnd = session.events.find(event => event.type === 'turn/end' && event.data.turn === targetTurn);
-    if (turnEnd === undefined) {
+    return resolveForTurn(session, assistant.data.turn, { assistantEvent: assistant });
+}
+/**
+ * Resolve the rollback boundary of a turn by its number. Works for unfinished
+ * turns (a stopped/interrupted assistant message never emits `turn/end`): the
+ * rollback target is the turn-start snapshot and the fork anchor is the last
+ * completed turn end before it.
+ */
+export function resolveBoundaryForTurn(session, turn) {
+    const turnStart = session.events.find(event => event.type === 'turn/start' && event.data.turn === turn);
+    if (turnStart === undefined) {
         return {
             failure: {
-                code: 'turn-not-completed',
-                message: `turn ${targetTurn} has not completed yet`,
+                code: 'turn-not-found',
+                message: `turn ${turn} has no turn/start in session "${session.id}"`,
                 sessionId: session.id,
-                messageId,
             },
         };
     }
+    return resolveForTurn(session, turn, { turnStartSeq: turnStart.seq });
+}
+function resolveForTurn(session, targetTurn, extras) {
     const turnStart = session.events.find(event => event.type === 'turn/start' && event.data.turn === targetTurn);
-    const anchor = findPreviousTurnEnd(session.events, turnStart?.seq ?? assistant.seq);
+    const anchor = findPreviousTurnEnd(session.events, turnStart?.seq ?? Number.MAX_SAFE_INTEGER);
     return {
         boundary: {
             targetTurn,
             ...(anchor === undefined ? {} : { forkAtSeq: anchor.seq }),
             forkAvailable: anchor !== undefined,
-            assistantEvent: assistant,
+            ...extras,
             ...(turnStart === undefined ? {} : { turnStartSeq: turnStart.seq }),
         },
     };

@@ -2,7 +2,7 @@
   "name": "dshui-for-vscode",
   "displayName": "dsh UI for VS Code",
   "description": "The DeepSeek Harness (dsh) web UI embedded in VS Code, scoped to the workspace you have open. No workspace selection: the opened folder IS the dsh workspace, the sidebar lists only its sessions, and the input box always stays at the bottom.",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "publisher": "Leathong",
   "icon": "media/icon.png",
   "author": "Leathong",
@@ -51,6 +51,9 @@
         }
       ]
     },
+    "configurationDefaults": {
+      "diffEditor.codeLens": true
+    },
     "commands": [
       {
         "command": "dshui.open",
@@ -81,6 +84,16 @@
         "command": "dshui.restartServer",
         "title": "Restart Server",
         "category": "dsh UI"
+      },
+      {
+        "command": "dshui.rollback.accept",
+        "title": "Accept This Change",
+        "category": "dsh UI"
+      },
+      {
+        "command": "dshui.rollback.undo",
+        "title": "Undo This Change",
+        "category": "dsh UI"
       }
     ],
     "menus": {
@@ -89,6 +102,16 @@
           "command": "dshui.referenceFile",
           "when": "resourceScheme == file && workspaceFolderCount > 0",
           "group": "navigation"
+        },
+        {
+          "command": "dshui.rollback.accept",
+          "when": "resourceScheme == dshui-rollback",
+          "group": "dshui.rollback@1"
+        },
+        {
+          "command": "dshui.rollback.undo",
+          "when": "resourceScheme == dshui-rollback",
+          "group": "dshui.rollback@2"
         }
       ],
       "explorer/context": [
@@ -113,6 +136,16 @@
           "command": "dshui.referenceFile",
           "when": "resourceScheme == file && workspaceFolderCount > 0",
           "group": "navigation"
+        },
+        {
+          "command": "dshui.rollback.accept",
+          "when": "resourceScheme == dshui-rollback",
+          "group": "dshui.rollback@1"
+        },
+        {
+          "command": "dshui.rollback.undo",
+          "when": "resourceScheme == dshui-rollback",
+          "group": "dshui.rollback@2"
         }
       ]
     },

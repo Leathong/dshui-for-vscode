@@ -68,14 +68,14 @@ agentic coding 框架，主张「一切皆插件」）的 Web UI 嵌入 VS Code 
 
 ## 环境要求
 
-- VS Code ≥ 1.85
+- VS Code ≥ 1.85（回滚测试改动 A）
 - 无需单独安装 Node：扩展使用扩展宿主内置的 Node（`ELECTRON_RUN_AS_NODE`）运行 dsh CLI。
 - 仅当需要**从源码重建客户端 bundle** 时才需要本机 Node ≥ 22.19 与 pnpm 11.7.0（见
   [开发流程](#开发流程)）。
 
 ## 安装
 
-**方式一：安装现成安装包**（推荐；内置 dsh 运行时，约 60 MB）
+**方式一：安装现成安装包**（推荐；内置 dsh 运行时，约 60 MB）（回滚测试改动 B）
 
 安装包随 [GitHub Releases](https://github.com/leathong/dshui-for-vscode/releases) 发布：
 
@@ -99,7 +99,7 @@ npx @vscode/vsce package              # 产出 dshui-for-vscode-<version>.vsix
 
 ## 快速开始
 
-1. 安装扩展（`dshui-for-vscode`）。
+1. 安装扩展（`dshui-for-vscode`）。（回滚测试改动 C）
 2. 打开一个文件夹——该文件夹即成为 dsh 工作区。
 3. 侧边栏出现 dsh UI（活动栏图标 → **dsh**）；打开文件夹时自动显示（可用 `dshui.autoOpen` 关闭，
    用 **dsh UI: Open** 命令重新打开）。

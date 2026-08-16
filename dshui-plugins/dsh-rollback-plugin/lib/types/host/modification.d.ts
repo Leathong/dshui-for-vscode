@@ -1,5 +1,6 @@
 import type { LedgerModificationRecord, ChangeLedger } from './ledger.ts';
 import type { RollbackCordisContext } from './context.ts';
+import type { RollbackSandboxPolicy } from './fs-policy.ts';
 export type ModificationRestoreStatus = 'restored' | 'conflict' | 'unsupported' | 'failed';
 export interface ModificationRestoreOutcome {
     status: ModificationRestoreStatus;
@@ -10,7 +11,7 @@ export interface ModificationRestoreOutcome {
  * Undo one write/edit tool modification with a three-way reverse merge:
  * base = after (A), ours = current (B), theirs = before (O).
  */
-export declare function restoreModification(ctx: RollbackCordisContext, ledger: ChangeLedger, cwd: string, record: LedgerModificationRecord, deleteCreatedPolicy: boolean, timeoutMs: number): Promise<ModificationRestoreOutcome>;
+export declare function restoreModification(ctx: RollbackCordisContext, ledger: ChangeLedger, cwd: string, record: LedgerModificationRecord, deleteCreatedPolicy: boolean, timeoutMs: number, sandboxPolicy?: RollbackSandboxPolicy): Promise<ModificationRestoreOutcome>;
 export declare function mergeFiles(current: string, base: string, other: string, timeoutMs: number): Promise<{
     ok: true;
     value: string;

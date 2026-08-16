@@ -7,7 +7,7 @@ import { spawnGit } from "./providers/git.js";
  * Undo one write/edit tool modification with a three-way reverse merge:
  * base = after (A), ours = current (B), theirs = before (O).
  */
-export async function restoreModification(ctx, ledger, cwd, record, deleteCreatedPolicy, timeoutMs) {
+export async function restoreModification(ctx, ledger, cwd, record, deleteCreatedPolicy, timeoutMs, sandboxPolicy) {
     const before = record.beforeContent;
     if (record.beforeExisted && before === undefined) {
         return { status: 'unsupported', detail: 'no bounded text before-image for this modification' };
@@ -70,7 +70,7 @@ export async function restoreModification(ctx, ledger, cwd, record, deleteCreate
     try {
         const style = current.includes('\r\n') ? '\r\n' : '\n';
         const output = merged.value.split('\n').join(style);
-        await ctx.fs.writeText(target, output, currentInfo === undefined ? { kind: 'createIfAbsent' } : { kind: 'replaceIfVersion', version: currentInfo.version });
+        await ctx.fs.writeText(target, output, currentInfo === undefined ? { kind: 'createIfAbsent' } : { kind: 'replaceIfVersion', version: currentInfo.version }, undefined, sandboxPolicy);
         const verify = normalizeLf(await ctx.fs.readText(target));
         if (verify !== merged.value) {
             return { status: 'failed', detail: 'post-write verification failed' };

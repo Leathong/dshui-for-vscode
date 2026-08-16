@@ -15,6 +15,7 @@ import { bundledCliPath, DshServer, probeDshuiServer } from './dshServer'
 import { killProcessOnPort } from './killPort'
 import { OpenBridge } from './openBridge'
 import { patchFileOpener } from './openPatch'
+import { RollbackReviewManager } from './rollbackReview'
 import { installPlugins, resolveDshHome, type InstalledPlugin } from './plugins'
 import {
   bridgesPath, registerBridge, registerServerUser, startServerUserHeartbeat,
@@ -232,6 +233,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   let currentWorkspacePath: string | undefined
   let registeredSharedUser = false
   let serverUserHeartbeat: NodeJS.Timeout | null = null
+  const reviewManager = new RollbackReviewManager()
+  reviewManager.onDidChange = () => {
+    if (currentView !== null) {
+      void currentView.webview.postMessage({ type: 'dshui:modificationsChanged' })
+    }
+  }
 
   // Route dsh's file-open gestures into the running VS Code instead of the
   // OS default editor (or the vscode:// scheme with its confirmation popup),
@@ -496,6 +503,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         vscode.postMessage({ type: 'openExternal', url: data.url });
         return;
       }
+      // SPA → extension: open the rollback modification review panel in the
+      // VS Code editor area instead of expanding the row inside the sidebar.
+      if (event.source === frame.contentWindow && data.type === 'dshui:reviewModifications' && typeof data.sessionId === 'string' && typeof data.path === 'string') {
+        vscode.postMessage(data);
+        return;
+      }
       if (data.type === 'navigate') {
         frame.src = data.url;
         spaReady = false; // the fresh page must re-announce readiness
@@ -520,6 +533,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         return;
       }
       if (data.type === 'dshui:sessionDeleted' && typeof data.sessionId === 'string') {
+        if (frame.contentWindow) frame.contentWindow.postMessage(data, '*');
+        return;
+      }
+      if (data.type === 'dshui:modificationsChanged') {
         if (frame.contentWindow) frame.contentWindow.postMessage(data, '*');
         return;
       }
@@ -555,11 +572,36 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         // through the VS Code file API and answers with
         // { type: 'dshui:sessionDeleted', sessionId, ok, error? }.
         webviewView.webview.onDidReceiveMessage((message: unknown) => {
-          const data = message as { type?: unknown; sessionId?: unknown; cwd?: unknown; url?: unknown } | null
+          const data = message as { type?: unknown; sessionId?: unknown; cwd?: unknown; url?: unknown; path?: unknown; modificationId?: unknown } | null
           if (data === null || typeof data !== 'object' || typeof data.type !== 'string') return
           // External link clicked in a message: open in the system browser.
           if (data.type === 'openExternal' && typeof data.url === 'string' && data.url !== '') {
             void vscode.env.openExternal(vscode.Uri.parse(data.url))
+            return
+          }
+          if (data.type === 'dshui:reviewModifications') {
+            if (typeof data.sessionId !== 'string' || data.sessionId === ''
+              || typeof data.path !== 'string' || data.path === '') {
+              return
+            }
+            const reviewSessionId = data.sessionId
+            const reviewPath = data.path
+            const reviewModificationId = typeof data.modificationId === 'string' && data.modificationId !== '' ? data.modificationId : undefined
+            const workspacePath = currentWorkspace()
+            if (workspacePath === undefined) {
+              void vscode.window.showWarningMessage('dsh UI: 请先打开一个文件夹（它将成为 dsh 工作区）。')
+              return
+            }
+            void startServer(workspacePath).then((port) => {
+              if (reviewModificationId !== undefined) {
+                return reviewManager.showModification(port, reviewSessionId, reviewPath, reviewModificationId)
+              }
+              return reviewManager.showFile(port, reviewSessionId, reviewPath)
+            }).catch((error) => {
+              console.error('[dshui] failed to open rollback review:', error)
+              fileLog(dshHome, `rollback review open failed: ${String(error)}`)
+              void vscode.window.showErrorMessage(`dshui: 打开修改视图失败: ${String(error)}`)
+            })
             return
           }
           if (data.type !== 'dshui:deleteSession') return
@@ -866,6 +908,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       }
       void unregisterBridge(dshHome).catch(() => { /* best-effort */ })
       openBridge.dispose()
+      reviewManager.dispose()
     },
   })
 

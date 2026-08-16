@@ -352,6 +352,10 @@ function parseDiffHunks(stdout, maxHunks, maxBytes) {
 		if (parsed === void 0) continue;
 		const oldLines = [];
 		const newLines = [];
+		let firstOld;
+		let firstNew;
+		let oldBefore = 0;
+		let newBefore = 0;
 		for (i += 1; i < lines.length; i += 1) {
 			const body = lines[i] ?? "";
 			if (body === "\\ No newline at end of file") continue;
@@ -364,8 +368,17 @@ function parseDiffHunks(stdout, maxHunks, maxBytes) {
 				const text = body.slice(1);
 				oldLines.push(text);
 				newLines.push(text);
-			} else if (body.startsWith("-")) oldLines.push(body.slice(1));
-			else if (body.startsWith("+")) newLines.push(body.slice(1));
+				oldBefore += 1;
+				newBefore += 1;
+			} else if (body.startsWith("-")) {
+				if (firstOld === void 0) firstOld = oldBefore;
+				oldLines.push(body.slice(1));
+				oldBefore += 1;
+			} else if (body.startsWith("+")) {
+				if (firstNew === void 0) firstNew = newBefore;
+				newLines.push(body.slice(1));
+				newBefore += 1;
+			}
 		}
 		const oldText = oldLines.join("\n");
 		const newText = newLines.join("\n");
@@ -379,7 +392,9 @@ function parseDiffHunks(stdout, maxHunks, maxBytes) {
 			newText,
 			...parsed.oldLine === void 0 ? {} : { oldLine: parsed.oldLine },
 			...parsed.newLine === void 0 ? {} : { newLine: parsed.newLine },
-			...parsed.endLine === void 0 ? {} : { endLine: parsed.endLine }
+			...parsed.endLine === void 0 ? {} : { endLine: parsed.endLine },
+			...firstOld === void 0 || parsed.oldLine === void 0 ? {} : { firstChangedOldLine: parsed.oldLine + firstOld },
+			...firstNew === void 0 || parsed.newLine === void 0 ? {} : { firstChangedNewLine: parsed.newLine + firstNew }
 		});
 	}
 	return {
@@ -601,6 +616,120 @@ function turnStartSeq(session, turn) {
 	return session.events.find((item) => item.type === "turn/start" && item.data.turn === turn)?.seq;
 }
 //#endregion
+//#region lib/types/host/accepts.js
+function acceptsPath() {
+	return path.join(changeLedgerRoot(), "v1", "accepts.json");
+}
+function trimRecords$1(records, maxPerSession) {
+	const bySession = /* @__PURE__ */ new Map();
+	for (const record of records) {
+		const list = bySession.get(record.sessionId) ?? [];
+		list.push(record);
+		bySession.set(record.sessionId, list);
+	}
+	const result = [];
+	for (const list of bySession.values()) result.push(...list.slice(-maxPerSession));
+	return result;
+}
+function fingerprintMatches(record, fingerprint) {
+	if (record.fingerprint === void 0) return true;
+	if (fingerprint === void 0) return false;
+	if (record.fingerprint.kind === "content" && fingerprint.kind === "content") return record.fingerprint.hash === fingerprint.hash;
+	if (record.fingerprint.kind === "stat" && fingerprint.kind === "stat") {
+		const left = record.fingerprint;
+		const right = fingerprint;
+		if (left.version !== void 0 || right.version !== void 0) {
+			if (left.version !== right.version) return false;
+		}
+		if (left.size !== right.size) return false;
+		if (left.mtimeMs !== right.mtimeMs) return false;
+		return true;
+	}
+	return false;
+}
+var AcceptLedger = class {
+	options;
+	records = [];
+	loaded = false;
+	writeTail = Promise.resolve();
+	maxPerSession;
+	file;
+	constructor(options = {}) {
+		this.options = options;
+		this.maxPerSession = options.maxAcceptRecordsPerSession ?? 500;
+		this.file = options.acceptsFile ?? acceptsPath();
+	}
+	load() {
+		if (this.loaded) return;
+		this.loaded = true;
+		this.records.push(...readJsonFileSync$1(this.file, []));
+	}
+	upsert(record) {
+		this.load();
+		const index = this.records.findIndex((item) => item.sessionId === record.sessionId && item.kind === record.kind && item.key === record.key);
+		if (index >= 0) this.records[index] = record;
+		else this.records.push(record);
+		this.persist();
+	}
+	persist() {
+		const trimmed = trimRecords$1(this.records, this.maxPerSession);
+		this.records.length = 0;
+		this.records.push(...trimmed);
+		this.writeTail = this.writeTail.catch(() => void 0).then(async () => writeJsonFileAtomic(this.file, this.records)).catch(() => void 0);
+	}
+	acceptFile(sessionId, filePath, fingerprint) {
+		this.upsert({
+			sessionId,
+			kind: "file",
+			key: filePath,
+			...fingerprint === void 0 ? {} : { fingerprint },
+			createdAt: Date.now()
+		});
+	}
+	acceptModification(sessionId, modificationId) {
+		this.upsert({
+			sessionId,
+			kind: "modification",
+			key: modificationId,
+			createdAt: Date.now()
+		});
+	}
+	fileAccepted(sessionId, filePath, fingerprint) {
+		this.load();
+		const record = this.records.find((item) => item.sessionId === sessionId && item.kind === "file" && item.key === filePath);
+		if (record === void 0) return false;
+		return fingerprintMatches(record, fingerprint);
+	}
+	modificationAccepted(sessionId, modificationId) {
+		this.load();
+		return this.records.some((item) => item.sessionId === sessionId && item.kind === "modification" && item.key === modificationId);
+	}
+	acceptedFiles(sessionId) {
+		this.load();
+		return this.records.filter((item) => item.sessionId === sessionId && item.kind === "file").map((item) => item.key);
+	}
+	acceptedModifications(sessionId) {
+		this.load();
+		return this.records.filter((item) => item.sessionId === sessionId && item.kind === "modification").map((item) => item.key);
+	}
+	list(sessionId) {
+		this.load();
+		return sessionId === void 0 ? [...this.records] : this.records.filter((item) => item.sessionId === sessionId);
+	}
+	/** Await pending persistence (tests and graceful shutdown paths). */
+	async flush() {
+		this.load();
+		await this.writeTail.catch(() => void 0);
+	}
+};
+function readJsonFileSync$1(file, fallback) {
+	try {
+		return JSON.parse(fs.readFileSync(file, "utf8"));
+	} catch {
+		return fallback;
+	}
+}
+//#endregion
 //#region lib/types/host/ledger.js
 function jsonSafe(value) {
 	try {
@@ -615,6 +744,22 @@ function safePathKey(target) {
 }
 function normalizeLf(text) {
 	return text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+}
+/**
+* Whole-file hunk for a file created after the baseline: `oldText: null`
+* plus the bounded text content, so the modification list can render the
+* new file as a diff. Binary or oversized files return no hunks.
+*/
+async function createdFileHunks(abs, maxBytes) {
+	try {
+		const stat = await fs.promises.stat(abs);
+		if (!stat.isFile() || stat.size > maxBytes) return [];
+		const content = await fs.promises.readFile(abs, "utf8");
+		if (content.includes("\0")) return [];
+		return wholeFileHunk(null, content);
+	} catch {
+		return [];
+	}
 }
 /** Compute a whole-file diff hunk between two text snapshots. */
 function wholeFileHunk(before, after) {
@@ -632,6 +777,140 @@ function wholeFileHunk(before, after) {
 		newLine: 1,
 		endLine: countLines(after)
 	}];
+}
+/** Context lines kept around each changed region, like `git diff`'s default. */
+const DIFF_CONTEXT = 3;
+/** Guard against pathological LCS tables; larger middles fall back to one whole-file hunk. */
+const DIFF_MAX_LCS_CELLS = 1e6;
+/**
+* Line-level diff between two text snapshots, split into git-style hunks
+* (with context) so per-hunk CodeLens buttons and precise change anchors
+* work for ledger-tracked files too. `firstChanged*Line` marks the first
+* line that actually differs inside each hunk.
+*/
+function lineDiffHunks(before, after) {
+	if (before === after) return [];
+	if (before === "" || after === "") return wholeFileHunk(before, after);
+	const beforeLines = before.split("\n");
+	const afterLines = after.split("\n");
+	let prefix = 0;
+	while (prefix < beforeLines.length && prefix < afterLines.length && beforeLines[prefix] === afterLines[prefix]) prefix += 1;
+	let suffix = 0;
+	while (suffix < beforeLines.length - prefix && suffix < afterLines.length - prefix && beforeLines[beforeLines.length - 1 - suffix] === afterLines[afterLines.length - 1 - suffix]) suffix += 1;
+	const midBefore = beforeLines.slice(prefix, beforeLines.length - suffix);
+	const midAfter = afterLines.slice(prefix, afterLines.length - suffix);
+	if (midBefore.length === 0 && midAfter.length === 0) return [];
+	if (midBefore.length * midAfter.length > DIFF_MAX_LCS_CELLS) return [{
+		oldText: before,
+		newText: after,
+		oldLine: 1,
+		newLine: 1,
+		endLine: countLines(after),
+		firstChangedOldLine: prefix + 1,
+		firstChangedNewLine: prefix + 1
+	}];
+	const n = midBefore.length;
+	const m = midAfter.length;
+	const stride = m + 1;
+	const dp = new Int32Array((n + 1) * stride);
+	for (let i = n - 1; i >= 0; i -= 1) for (let j = m - 1; j >= 0; j -= 1) dp[i * stride + j] = midBefore[i] === midAfter[j] ? dp[(i + 1) * stride + j + 1] + 1 : Math.max(dp[(i + 1) * stride + j], dp[i * stride + j + 1]);
+	const ops = [];
+	let oldCursor = 1;
+	let newCursor = 1;
+	for (let k = 0; k < prefix; k += 1) {
+		ops.push({
+			type: "keep",
+			oldLine: oldCursor,
+			newLine: newCursor
+		});
+		oldCursor += 1;
+		newCursor += 1;
+	}
+	let i = 0;
+	let j = 0;
+	while (i < n || j < m) if (i < n && j < m && midBefore[i] === midAfter[j]) {
+		ops.push({
+			type: "keep",
+			oldLine: oldCursor,
+			newLine: newCursor
+		});
+		i += 1;
+		j += 1;
+		oldCursor += 1;
+		newCursor += 1;
+	} else if (j >= m || i < n && dp[(i + 1) * stride + j] >= dp[i * stride + j + 1]) {
+		ops.push({
+			type: "del",
+			oldLine: oldCursor,
+			newLine: newCursor
+		});
+		i += 1;
+		oldCursor += 1;
+	} else {
+		ops.push({
+			type: "ins",
+			oldLine: oldCursor,
+			newLine: newCursor
+		});
+		j += 1;
+		newCursor += 1;
+	}
+	for (let k = 0; k < suffix; k += 1) {
+		ops.push({
+			type: "keep",
+			oldLine: oldCursor,
+			newLine: newCursor
+		});
+		oldCursor += 1;
+		newCursor += 1;
+	}
+	const hunks = [];
+	let firstChange = -1;
+	let lastChange = -1;
+	const flush = (first, last) => {
+		const hunkStart = Math.max(0, first - DIFF_CONTEXT);
+		const hunkEnd = Math.min(ops.length - 1, last + DIFF_CONTEXT);
+		const oldLines = [];
+		const newLines = [];
+		let hunkOldLine = 0;
+		let hunkNewLine = 0;
+		let firstChangedOld;
+		let firstChangedNew;
+		for (let k = hunkStart; k <= hunkEnd; k += 1) {
+			const op = ops[k];
+			if (op.type !== "ins") {
+				oldLines.push(beforeLines[op.oldLine - 1] ?? "");
+				if (hunkOldLine === 0) hunkOldLine = op.oldLine;
+				if (k >= first && firstChangedOld === void 0) firstChangedOld = op.oldLine;
+			}
+			if (op.type !== "del") {
+				newLines.push(afterLines[op.newLine - 1] ?? "");
+				if (hunkNewLine === 0) hunkNewLine = op.newLine;
+				if (k >= first && firstChangedNew === void 0) firstChangedNew = op.newLine;
+			}
+		}
+		const newCount = newLines.length;
+		hunks.push({
+			oldText: oldLines.join("\n"),
+			newText: newLines.join("\n"),
+			oldLine: hunkOldLine,
+			newLine: hunkNewLine,
+			...newCount > 0 ? { endLine: hunkNewLine + newCount - 1 } : {},
+			...firstChangedOld === void 0 ? {} : { firstChangedOldLine: firstChangedOld },
+			...firstChangedNew === void 0 ? {} : { firstChangedNewLine: firstChangedNew }
+		});
+	};
+	for (let k = 0; k < ops.length; k += 1) {
+		if (ops[k].type === "keep") continue;
+		if (firstChange >= 0 && k - lastChange - 1 > 2 * DIFF_CONTEXT) {
+			flush(firstChange, lastChange);
+			firstChange = -1;
+		}
+		if (firstChange < 0) firstChange = k;
+		lastChange = k;
+	}
+	if (firstChange >= 0) flush(firstChange, lastChange);
+	return hunks;
 }
 function countLines(text) {
 	if (text === "") return 1;
@@ -750,6 +1029,32 @@ var ChangeLedger = class {
 	baselineForTurn(sessionId, turn, filePath) {
 		return this.listForTurn(sessionId, turn).filter((record) => samePath(record.path, filePath))[0];
 	}
+	/** All records for one path in a session, oldest first. */
+	recordsForPath(sessionId, filePath) {
+		return this.list(sessionId).filter((record) => samePath(record.path, filePath)).sort((a, b) => a.seq - b.seq || a.createdAt - b.createdAt);
+	}
+	/** Earliest record for one path across the whole session. */
+	earliestForSessionPath(sessionId, filePath) {
+		return this.recordsForPath(sessionId, filePath)[0];
+	}
+	/**
+	* File-level changes for every ledger-covered path of a session, using the
+	* earliest record per path as the baseline (the session modification list).
+	*/
+	async buildSessionFileChanges(sessionId, cwd, mode) {
+		const result = [];
+		const seen = /* @__PURE__ */ new Set();
+		for (const record of this.list(sessionId)) {
+			const rel = relPathWithin(cwd, record.path);
+			if (rel === void 0 || seen.has(rel)) continue;
+			seen.add(rel);
+			const baseline = this.earliestForSessionPath(sessionId, record.path);
+			if (baseline === void 0) continue;
+			const change = await this.fileChangeForBaseline(cwd, rel, baseline, mode);
+			if (change !== void 0) result.push(change);
+		}
+		return result;
+	}
 	/** All modifications for a path at or after one record, newest first. */
 	laterModifications(sessionId, filePath, after) {
 		return this.list(sessionId).filter((record) => samePath(record.path, filePath) && record.createdAt > after.createdAt).sort((a, b) => b.createdAt - a.createdAt);
@@ -788,14 +1093,19 @@ var ChangeLedger = class {
 		try {
 			const target = await this.ctx.fs.resolve(rel, { cwd });
 			const currentInfo = await this.ctx.fs.stat(target);
-			if (!baseline.beforeExisted) return {
-				path: rel,
-				absolutePath: this.ctx.fs.processPath(target),
-				status: mode === "ignored" ? "ignored" : "created",
-				source: "ledger",
-				restorable: false,
-				createdAfterSnapshot: true
-			};
+			if (!baseline.beforeExisted) {
+				if (currentInfo === void 0) return void 0;
+				const hunks = await createdFileHunks(this.ctx.fs.processPath(target), this.options.ledgerMaxTextBytes);
+				return {
+					path: rel,
+					absolutePath: this.ctx.fs.processPath(target),
+					status: mode === "ignored" ? "ignored" : "created",
+					source: "ledger",
+					restorable: false,
+					createdAfterSnapshot: true,
+					...hunks.length > 0 ? { hunks } : {}
+				};
+			}
 			if (currentInfo === void 0) return {
 				path: rel,
 				absolutePath: path.resolve(cwd, rel),
@@ -828,14 +1138,14 @@ var ChangeLedger = class {
 				status: mode === "ignored" ? "ignored" : "modified",
 				source: "ledger",
 				restorable: true,
-				hunks: wholeFileHunk(baseline.beforeContent, current)
+				hunks: lineDiffHunks(baseline.beforeContent, current)
 			};
 		} catch {
 			return;
 		}
 	}
 	/** Restore one ledger-covered path through ctx.fs, bypassing the tool waterfall. */
-	async restoreLedgerPath(cwd, rel, baseline, createdPolicy) {
+	async restoreLedgerPath(cwd, rel, baseline, createdPolicy, sandboxPolicy) {
 		const target = await this.ctx.fs.resolve(rel, { cwd });
 		if (!baseline.beforeExisted) {
 			if (createdPolicy !== "delete") return "kept";
@@ -848,7 +1158,7 @@ var ChangeLedger = class {
 		await this.ctx.fs.writeText(target, baseline.beforeContent, info === void 0 ? { kind: "createIfAbsent" } : {
 			kind: "replaceIfVersion",
 			version: info.version
-		});
+		}, void 0, sandboxPolicy);
 		return "restored";
 	}
 	async readCurrentForGuard(cwd, rel) {
@@ -867,7 +1177,7 @@ var ChangeLedger = class {
 			return { existed: false };
 		}
 	}
-	async restoreGuardFile(cwd, rel, guard) {
+	async restoreGuardFile(cwd, rel, guard, sandboxPolicy) {
 		const target = await this.ctx.fs.resolve(rel, { cwd });
 		if (!guard.existed) {
 			if (await this.ctx.fs.stat(target) !== void 0) fs.rmSync(this.ctx.fs.processPath(target), { force: true });
@@ -878,7 +1188,7 @@ var ChangeLedger = class {
 		await this.ctx.fs.writeText(target, guard.content, info === void 0 ? { kind: "createIfAbsent" } : {
 			kind: "replaceIfVersion",
 			version: info.version
-		});
+		}, void 0, sandboxPolicy);
 	}
 	async captureBefore(toolName, target, actor) {
 		const filePath = this.ctx.fs.processPath(target);
@@ -974,20 +1284,31 @@ function resolveBoundary(session, messageId) {
 		sessionId: session.id,
 		messageId
 	} };
-	const targetTurn = assistant.data.turn;
-	if (session.events.find((event) => event.type === "turn/end" && event.data.turn === targetTurn) === void 0) return { failure: {
-		code: "turn-not-completed",
-		message: `turn ${targetTurn} has not completed yet`,
-		sessionId: session.id,
-		messageId
+	return resolveForTurn(session, assistant.data.turn, { assistantEvent: assistant });
+}
+/**
+* Resolve the rollback boundary of a turn by its number. Works for unfinished
+* turns (a stopped/interrupted assistant message never emits `turn/end`): the
+* rollback target is the turn-start snapshot and the fork anchor is the last
+* completed turn end before it.
+*/
+function resolveBoundaryForTurn(session, turn) {
+	const turnStart = session.events.find((event) => event.type === "turn/start" && event.data.turn === turn);
+	if (turnStart === void 0) return { failure: {
+		code: "turn-not-found",
+		message: `turn ${turn} has no turn/start in session "${session.id}"`,
+		sessionId: session.id
 	} };
+	return resolveForTurn(session, turn, { turnStartSeq: turnStart.seq });
+}
+function resolveForTurn(session, targetTurn, extras) {
 	const turnStart = session.events.find((event) => event.type === "turn/start" && event.data.turn === targetTurn);
-	const anchor = findPreviousTurnEnd(session.events, turnStart?.seq ?? assistant.seq);
+	const anchor = findPreviousTurnEnd(session.events, turnStart?.seq ?? Number.MAX_SAFE_INTEGER);
 	return { boundary: {
 		targetTurn,
 		...anchor === void 0 ? {} : { forkAtSeq: anchor.seq },
 		forkAvailable: anchor !== void 0,
-		assistantEvent: assistant,
+		...extras,
 		...turnStart === void 0 ? {} : { turnStartSeq: turnStart.seq }
 	} };
 }
@@ -1007,12 +1328,56 @@ function boundaryInfo(boundary) {
 	};
 }
 //#endregion
+//#region lib/types/host/fs-policy.js
+const SANDBOX_MODES = new Set([
+	"read-only",
+	"workspace-write",
+	"danger-full-access"
+]);
+/**
+* Resolve the per-call fs sandbox policy for one live session. Prefers the
+* composition's `sandboxPolicy` service (which honours session mode
+* overrides); falls back to workspace-write bounded by the session cwd.
+*/
+function sandboxPolicyFor(ctx, session) {
+	let service;
+	try {
+		service = ctx.get("sandboxPolicy");
+	} catch {
+		service = void 0;
+	}
+	if (service !== void 0 && typeof service.resolve === "function") try {
+		const resolved = service.resolve({ session });
+		if (resolved !== void 0 && typeof resolved.mode === "string" && SANDBOX_MODES.has(resolved.mode) && typeof resolved.workspaceRoot === "string" && resolved.workspaceRoot !== "") return {
+			mode: resolved.mode,
+			workspaceRoot: resolved.workspaceRoot
+		};
+	} catch {}
+	const cwd = session.header.cwd;
+	if (cwd === void 0 || cwd === "") return void 0;
+	return {
+		mode: "workspace-write",
+		workspaceRoot: cwd
+	};
+}
+/**
+* Policy for restoration paths without a live session (startup reconciliation
+* of interrupted journals): the guard's recorded cwd is the honest boundary.
+*/
+function sandboxPolicyForCwd(cwd) {
+	if (cwd === "") return void 0;
+	return {
+		mode: "workspace-write",
+		workspaceRoot: cwd
+	};
+}
+//#endregion
 //#region lib/types/host/modification.js
 /**
 * Undo one write/edit tool modification with a three-way reverse merge:
 * base = after (A), ours = current (B), theirs = before (O).
 */
-async function restoreModification(ctx, ledger, cwd, record, deleteCreatedPolicy, timeoutMs) {
+async function restoreModification(ctx, ledger, cwd, record, deleteCreatedPolicy, timeoutMs, sandboxPolicy) {
 	const before = record.beforeContent;
 	if (record.beforeExisted && before === void 0) return {
 		status: "unsupported",
@@ -1090,7 +1455,7 @@ async function restoreModification(ctx, ledger, cwd, record, deleteCreatedPolicy
 		await ctx.fs.writeText(target, output, currentInfo === void 0 ? { kind: "createIfAbsent" } : {
 			kind: "replaceIfVersion",
 			version: currentInfo.version
-		});
+		}, void 0, sandboxPolicy);
 		if (normalizeLf(await ctx.fs.readText(target)) !== merged.value) return {
 			status: "failed",
 			detail: "post-write verification failed"
@@ -1254,14 +1619,35 @@ var RollbackRestore = class {
 		this.options = options;
 	}
 	async prepare(sessionId, messageId) {
+		const base = this.prepareBase(sessionId);
+		if (!base.ok) return base;
+		const resolved = resolveBoundary(base.value.session, messageId);
+		if (resolved.failure !== void 0) return fail(resolved.failure.code, resolved.failure.message, resolved.failure);
+		return this.prepareWithBoundary(base.value, resolved.boundary, messageId);
+	}
+	/** Turn-anchored prepare: also serves unfinished (stopped) turns. */
+	async prepareTurn(sessionId, turn) {
+		const base = this.prepareBase(sessionId);
+		if (!base.ok) return base;
+		if (!Number.isInteger(turn) || turn < 1) return fail("turn-not-found", `turn ${String(turn)} is not a valid turn number`, { sessionId });
+		const resolved = resolveBoundaryForTurn(base.value.session, turn);
+		if (resolved.failure !== void 0) return fail(resolved.failure.code, resolved.failure.message, resolved.failure);
+		return this.prepareWithBoundary(base.value, resolved.boundary);
+	}
+	prepareBase(sessionId) {
 		const live = this.liveSession(sessionId);
 		if (!live.ok) return live;
 		const session = live.value;
 		const cwd = session.header.cwd;
 		if (cwd === void 0) return fail("session-not-live", `session "${sessionId}" has no workspace cwd`);
-		const resolved = resolveBoundary(session, messageId);
-		if (resolved.failure !== void 0) return fail(resolved.failure.code, resolved.failure.message, resolved.failure);
-		const boundary = resolved.boundary;
+		return ok({
+			session,
+			cwd
+		});
+	}
+	async prepareWithBoundary(base, boundary, messageId) {
+		const { session, cwd } = base;
+		const sessionId = session.id;
 		const found = await this.snapshots.find(sessionId, boundary.targetTurn);
 		if (found === void 0) return fail("snapshot-unavailable", `no rollback snapshot is available for turn ${boundary.targetTurn}`, {
 			sessionId,
@@ -1281,7 +1667,7 @@ var RollbackRestore = class {
 			const entries = await provider.diffEntries(found.manifest.tree, preparedTree);
 			for (const entry of entries) {
 				if (entry.oldMode === "160000" || entry.newMode === "160000") {
-					warnings.push(`nested git repository "${entry.path}" is represented as a gitlink and cannot be restored from this snapshot`);
+					warnings.push(entry.oldMode !== "160000" ? `nested git repository "${entry.path}" appeared after the snapshot; it is outside the rollback scope and will not be deleted or restored` : `nested git repository "${entry.path}" is tracked as a gitlink; its internal changes are outside the rollback scope (only tool-written files inside it can be restored)`);
 					continue;
 				}
 				if (entry.status === "A") {
@@ -1317,7 +1703,8 @@ var RollbackRestore = class {
 		const prepared = {
 			prepareId,
 			sessionId,
-			messageId,
+			...messageId === void 0 ? {} : { messageId },
+			turn: boundary.targetTurn,
 			cwd,
 			snapshot: found.manifest,
 			degraded: found.degraded,
@@ -1342,10 +1729,15 @@ var RollbackRestore = class {
 	async execute(request) {
 		if (request.confirmed !== true) return fail("rollback-failed", "rollback execution requires confirmed: true");
 		const prepared = this.prepared.get(request.prepareId);
-		if (prepared === void 0 || prepared.sessionId !== request.sessionId || prepared.messageId !== request.messageId) return fail("workspace-changed", "prepare context is missing or does not match this message; run prepare again", {
+		if (prepared === void 0 || prepared.sessionId !== request.sessionId) return fail("workspace-changed", "prepare context is missing or does not match this session; run prepare again", {
+			sessionId: request.sessionId,
+			...request.messageId === void 0 ? {} : { messageId: request.messageId }
+		});
+		if (request.messageId !== void 0 && prepared.messageId !== request.messageId) return fail("workspace-changed", "prepare context does not match this message; run prepare again", {
 			sessionId: request.sessionId,
 			messageId: request.messageId
 		});
+		if (request.messageId === void 0 && (request.turn === void 0 || prepared.turn !== request.turn)) return fail("workspace-changed", "prepare context does not match this turn; run prepare again", { sessionId: request.sessionId });
 		if (request.scope === "modifications" && request.paths !== void 0 && request.paths.length > 0) return fail("rollback-failed", "scope=modifications is mutually exclusive with paths");
 		if (request.scope === "files" && request.modificationIds !== void 0 && request.modificationIds.length > 0) return fail("rollback-failed", "scope=files is mutually exclusive with modificationIds");
 		const live = this.liveSession(request.sessionId);
@@ -1369,7 +1761,8 @@ var RollbackRestore = class {
 			acquired = true;
 			await this.safety.assertFences(this.ctx, prepared.cwd, provider);
 			await this.ctx.sessions.flush(session);
-			if (request.scope === "modifications") return await this.executeModifications(prepared, request, provider, guardTree, affected, () => this.finishGuard(prepared, guardId, journalId));
+			const policy = sandboxPolicyFor(this.ctx, session);
+			if (request.scope === "modifications") return await this.executeModifications(prepared, request, provider, guardTree, affected, policy, () => this.finishGuard(prepared, guardId, journalId));
 			const selected = await this.selectFilePaths(prepared, request, provider);
 			if (!selected.ok) return selected;
 			for (const item of selected.value.all) affected.add(item);
@@ -1411,7 +1804,7 @@ var RollbackRestore = class {
 						} else kept.push(item.rel);
 						continue;
 					}
-					const outcome = await this.ledger.restoreLedgerPath(prepared.cwd, item.rel, baseline, request.createdPolicy ?? "keep");
+					const outcome = await this.ledger.restoreLedgerPath(prepared.cwd, item.rel, baseline, request.createdPolicy ?? "keep", policy);
 					if (outcome === "restored") restored.push(item.rel);
 					else if (outcome === "deleted") deleted.push(item.rel);
 					else if (outcome === "kept") kept.push(item.rel);
@@ -1427,7 +1820,7 @@ var RollbackRestore = class {
 					...request.scope === "turn" ? { forkAnchor: prepared.boundary.forkAtSeq } : {}
 				});
 			} catch (error) {
-				await this.safety.rollbackGuard(this.ctx, provider, this.ledger, guardId, selected.value.all).catch(() => void 0);
+				await this.safety.rollbackGuard(this.ctx, provider, this.ledger, guardId, selected.value.all, policy).catch(() => void 0);
 				await this.safety.journalUpdate(journalId, "rolled-back").catch(() => void 0);
 				return fail(error instanceof Error && error.message.startsWith("verification failed") ? "verification-failed" : "rollback-failed", String(error), {
 					sessionId: request.sessionId,
@@ -1560,70 +1953,12 @@ var RollbackRestore = class {
 		});
 	}
 	buildModifications(sessionId, turn, cwd, events) {
-		const records = this.ledger.listForTurn(sessionId, turn);
-		const recorded = new Set(records.map((item) => item.modificationId));
-		const result = [];
-		for (const event of events) {
-			if (event.type !== "tool/call") continue;
-			const data = event.data;
-			if (data.turn !== turn || data.callId === void 0 || data.name !== "write" && data.name !== "edit") continue;
-			if (recorded.has(data.callId)) continue;
-			const args = parseRecordArgs(data.arguments);
-			const filePath = typeof args.file_path === "string" ? args.file_path : typeof args.filePath === "string" ? args.filePath : void 0;
-			if (filePath === void 0) continue;
-			const rel = path.relative(cwd, filePath);
-			if (rel === ".." || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)) continue;
-			const toolResult = events.find((candidate) => candidate.type === "tool/result" && candidate.data.turn === turn && resultEventCallId(candidate) === data.callId);
-			result.push({
-				modificationId: data.callId,
-				toolName: data.name,
-				path: rel.split(path.sep).join("/"),
-				turn: data.turn ?? turn,
-				step: data.step ?? 0,
-				seq: event.seq,
-				hunks: sessionLogHunks(toolResult, args),
-				restorable: "unsupported",
-				reason: "no live ledger before-image for this modification"
-			});
-			recorded.add(data.callId);
-		}
-		for (const record of records) {
-			const rel = path.relative(cwd, record.path);
-			if (rel === ".." || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)) continue;
-			result.push({
-				modificationId: record.modificationId,
-				toolName: record.toolName,
-				path: rel.split(path.sep).join("/"),
-				turn: record.turn,
-				step: record.step,
-				seq: record.seq,
-				hunks: recordHunks(record),
-				restorable: record.beforeExisted ? record.beforeContent !== void 0 ? "merge" : "unsupported" : "file-only",
-				...record.beforeExisted && record.beforeContent === void 0 ? { reason: "no bounded text before-image" } : {},
-				...!record.beforeExisted ? {
-					createdFile: true,
-					reason: "file was created by this modification; undoing it requires delete confirmation"
-				} : {},
-				laterModificationIds: this.ledger.laterModifications(sessionId, record.path, record).map((item) => item.modificationId)
-			});
-		}
-		return result;
+		return buildModificationsFromRecords(cwd, events, this.ledger.listForTurn(sessionId, turn), (record) => this.ledger.laterModifications(sessionId, record.path, record), turn);
 	}
 	attachToolCalls(changes, modifications) {
-		for (const change of changes) {
-			const calls = modifications.filter((item) => item.path === change.path);
-			if (calls.length === 0) continue;
-			change.toolCalls = calls.map((item) => ({
-				callId: item.modificationId,
-				toolName: item.toolName,
-				turn: item.turn,
-				step: item.step,
-				seq: item.seq,
-				hunks: item.hunks
-			}));
-		}
+		attachToolCallsToChanges(changes, modifications);
 	}
-	async executeModifications(prepared, request, provider, guardTree, affected, _finish) {
+	async executeModifications(prepared, request, provider, guardTree, affected, policy, _finish) {
 		const ids = request.modificationIds ?? [];
 		if (ids.length === 0) return fail("rollback-failed", "scope=modifications requires modificationIds");
 		const selected = ids.map((id) => this.ledger.recordById(request.sessionId, id)).filter((record) => record !== void 0);
@@ -1652,7 +1987,7 @@ var RollbackRestore = class {
 				const fileGuard = await this.ledger.readCurrentForGuard(prepared.cwd, rel);
 				let failed = false;
 				for (const record of records) {
-					const outcome = await restoreModification(this.ctx, this.ledger, prepared.cwd, record, request.createdPolicy === "delete", this.options.spawnTimeoutMs);
+					const outcome = await restoreModification(this.ctx, this.ledger, prepared.cwd, record, request.createdPolicy === "delete", this.options.spawnTimeoutMs, policy);
 					results.push({
 						modificationId: record.modificationId,
 						path: rel,
@@ -1669,7 +2004,7 @@ var RollbackRestore = class {
 						const existing = results.find((item) => item.modificationId === record.modificationId);
 						if (existing !== void 0 && existing.status === "restored") existing.status = "conflict";
 					}
-					await this.ledger.restoreGuardFile(prepared.cwd, rel, fileGuard).catch(() => void 0);
+					await this.ledger.restoreGuardFile(prepared.cwd, rel, fileGuard, policy).catch(() => void 0);
 				} else restoredPaths.push(rel);
 			}
 			await this.safety.journalUpdate(journalId, "completed");
@@ -1683,7 +2018,7 @@ var RollbackRestore = class {
 				...request.scope === "turn" ? { forkAnchor: prepared.boundary.forkAtSeq } : {}
 			});
 		} catch (error) {
-			await this.safety.rollbackGuard(this.ctx, provider, this.ledger, guard.guardId, paths).catch(() => void 0);
+			await this.safety.rollbackGuard(this.ctx, provider, this.ledger, guard.guardId, paths, policy).catch(() => void 0);
 			await this.safety.journalUpdate(journalId, "rolled-back").catch(() => void 0);
 			return fail("rollback-failed", String(error), {
 				sessionId: request.sessionId,
@@ -1698,7 +2033,9 @@ var RollbackRestore = class {
 		let guardRolledBack = guardId === "";
 		if (guardId !== "" && affected.size > 0) try {
 			const provider = this.snapshots.providerFor(prepared.cwd);
-			await this.safety.rollbackGuard(this.ctx, provider, this.ledger, guardId, [...affected]);
+			const liveSession = this.ctx.sessions.get(request.sessionId);
+			const policy = liveSession === void 0 ? sandboxPolicyForCwd(prepared.cwd) : sandboxPolicyFor(this.ctx, liveSession);
+			await this.safety.rollbackGuard(this.ctx, provider, this.ledger, guardId, [...affected], policy);
 			guardRolledBack = true;
 		} catch {}
 		if (journalId !== void 0) await this.safety.journalUpdate(journalId, guardRolledBack ? "rolled-back" : "interrupted").catch(() => void 0);
@@ -1717,6 +2054,72 @@ function parseRecordArgs(raw) {
 		return typeof parsed === "object" && parsed !== null ? parsed : {};
 	} catch {
 		return {};
+	}
+}
+/** Reusable modification builder: ledger records + log-only write/edit events. */
+function buildModificationsFromRecords(cwd, events, records, later, turn) {
+	const recorded = new Set(records.map((item) => item.modificationId));
+	const result = [];
+	for (const event of events) {
+		if (event.type !== "tool/call") continue;
+		const data = event.data;
+		if (turn !== void 0 && data.turn !== turn) continue;
+		if (data.callId === void 0 || data.name !== "write" && data.name !== "edit") continue;
+		if (recorded.has(data.callId)) continue;
+		const args = parseRecordArgs(data.arguments);
+		const filePath = typeof args.file_path === "string" ? args.file_path : typeof args.filePath === "string" ? args.filePath : void 0;
+		if (filePath === void 0) continue;
+		const rel = path.relative(cwd, filePath);
+		if (rel === ".." || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)) continue;
+		const toolResult = events.find((candidate) => candidate.type === "tool/result" && candidate.data.turn === data.turn && resultEventCallId(candidate) === data.callId);
+		result.push({
+			modificationId: data.callId,
+			toolName: data.name,
+			path: rel.split(path.sep).join("/"),
+			turn: data.turn ?? 0,
+			step: data.step ?? 0,
+			seq: event.seq,
+			hunks: sessionLogHunks(toolResult, args),
+			restorable: "unsupported",
+			reason: "no live ledger before-image for this modification"
+		});
+		recorded.add(data.callId);
+	}
+	for (const record of records) {
+		const rel = path.relative(cwd, record.path);
+		if (rel === ".." || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)) continue;
+		result.push({
+			modificationId: record.modificationId,
+			toolName: record.toolName,
+			path: rel.split(path.sep).join("/"),
+			turn: record.turn,
+			step: record.step,
+			seq: record.seq,
+			hunks: recordHunks(record),
+			restorable: record.beforeExisted ? record.beforeContent !== void 0 ? "merge" : "unsupported" : "file-only",
+			...record.beforeExisted && record.beforeContent === void 0 ? { reason: "no bounded text before-image" } : {},
+			...!record.beforeExisted ? {
+				createdFile: true,
+				reason: "file was created by this modification; undoing it requires delete confirmation"
+			} : {},
+			laterModificationIds: later(record).map((item) => item.modificationId)
+		});
+	}
+	return result.sort((a, b) => a.seq - b.seq || a.turn - b.turn || a.step - b.step);
+}
+/** Attach per-path tool-call patch lists onto file-level changes. */
+function attachToolCallsToChanges(changes, modifications) {
+	for (const change of changes) {
+		const calls = modifications.filter((item) => item.path === change.path);
+		if (calls.length === 0) continue;
+		change.toolCalls = calls.map((item) => ({
+			callId: item.modificationId,
+			toolName: item.toolName,
+			turn: item.turn,
+			step: item.step,
+			seq: item.seq,
+			hunks: item.hunks
+		}));
 	}
 }
 function resultEventCallId(event) {
@@ -1918,7 +2321,7 @@ var RollbackSafety = class {
 		await this.loadJournals();
 		return this.journals.filter((entry) => this.guards.get(entry.guardId ?? "")?.cwd === path.resolve(cwd));
 	}
-	async rollbackGuard(ctx, provider, ledger, guardId, paths) {
+	async rollbackGuard(ctx, provider, ledger, guardId, paths, sandboxPolicy) {
 		const guard = this.guards.get(guardId);
 		if (guard === void 0) throw new Error(`guard ${guardId} is no longer available`);
 		const gitPaths = paths.filter((item) => provider.isWithin(item));
@@ -1926,7 +2329,7 @@ var RollbackSafety = class {
 		if (guard.tree !== void 0 && gitPaths.length > 0) await provider.restorePaths(guard.tree, gitPaths);
 		for (const rel of [...new Set(ledgerPaths)]) {
 			const file = guard.ledgerFiles.find((item) => item.path === rel);
-			if (file !== void 0) await ledger.restoreGuardFile(guard.cwd, rel, file);
+			if (file !== void 0) await ledger.restoreGuardFile(guard.cwd, rel, file, sandboxPolicy);
 		}
 	}
 	async loadGuards() {
@@ -1961,7 +2364,7 @@ var RollbackSafety = class {
 			if (lock !== void 0 && isAlive(lock.ownerPid) && Date.now() - lock.createdAt <= this.options.lockStaleMs) continue;
 			try {
 				const provider = snapshots.providerFor(guard.cwd);
-				await this.rollbackGuard(ctx, provider, ledger, entry.guardId, entry.paths);
+				await this.rollbackGuard(ctx, provider, ledger, entry.guardId, entry.paths, sandboxPolicyForCwd(guard.cwd));
 				await this.journalUpdate(entry.id, "rolled-back");
 			} catch (error) {
 				ctx.logger.warn(`rollback reconciliation failed for journal ${entry.id}:`, error);
@@ -1996,6 +2399,501 @@ function isAlive(pid) {
 }
 function delay(ms) {
 	return new Promise((resolve) => setTimeout(resolve, ms));
+}
+//#endregion
+//#region lib/types/host/session-changes.js
+/**
+* The session modification list: a live, session-wide diff against the
+* earliest session snapshot merged with ledger-covered tool changes, plus
+* accept markers and per-file / per-patch undo mutations.
+*/
+var SessionChangeManager = class {
+	ctx;
+	snapshots;
+	ledger;
+	safety;
+	accepts;
+	options;
+	bound = /* @__PURE__ */ new Map();
+	constructor(ctx, snapshots, ledger, safety, accepts, options) {
+		this.ctx = ctx;
+		this.snapshots = snapshots;
+		this.ledger = ledger;
+		this.safety = safety;
+		this.accepts = accepts;
+		this.options = options;
+	}
+	async sessionChanges(sessionId) {
+		const live = this.liveSession(sessionId);
+		if (!live.ok) return live;
+		const session = live.value;
+		const cwd = session.header.cwd;
+		if (cwd === void 0) return fail("session-not-live", `session "${sessionId}" has no workspace cwd`);
+		const manifests = await this.snapshots.listForSession(sessionId);
+		const earliest = manifests[manifests.length - 1];
+		const provider = this.snapshots.providerFor(cwd);
+		const gitAvailable = await provider.available();
+		const warnings = [];
+		let preparedTree;
+		let baselineUsable = false;
+		let changes = [];
+		if (earliest !== void 0 && earliest.tree !== void 0 && gitAvailable) if (!await this.snapshots.ensureTreeAvailable(earliest, provider)) warnings.push("the session baseline snapshot objects have been garbage collected; only ledger-covered paths are shown");
+		else {
+			baselineUsable = true;
+			preparedTree = await provider.captureTree();
+			const entries = await provider.diffEntries(earliest.tree, preparedTree);
+			for (const entry of entries) {
+				if (entry.oldMode === "160000" || entry.newMode === "160000") {
+					warnings.push(entry.oldMode !== "160000" ? `nested git repository "${entry.path}" appeared after the baseline snapshot; it is outside the list scope and will not be deleted or restored` : `nested git repository "${entry.path}" is tracked as a gitlink; its internal changes are outside the list scope (only tool-written files inside it can be restored)`);
+					continue;
+				}
+				if (entry.status === "A") {
+					const abs = provider.absolutePath(entry.path);
+					const hunks = await createdFileHunks(abs, this.options.maxDiffBytesPerFile);
+					changes.push({
+						path: entry.path,
+						absolutePath: abs,
+						status: "created",
+						source: "git",
+						restorable: false,
+						createdAfterSnapshot: true,
+						...hunks.length > 0 ? { hunks } : {}
+					});
+					continue;
+				}
+				const diff = await provider.diffHunks(earliest.tree, preparedTree, entry.path);
+				changes.push({
+					path: entry.path,
+					absolutePath: provider.absolutePath(entry.path),
+					status: entry.status === "D" ? "deleted" : entry.status === "T" ? "typechange" : diff.binary ? "binary" : "modified",
+					source: "git",
+					restorable: true,
+					...diff.binary ? { binary: true } : {},
+					...diff.truncated ? { truncated: true } : {},
+					...diff.hunks.length > 0 ? { hunks: diff.hunks } : {}
+				});
+			}
+		}
+		else if (earliest !== void 0 && earliest.tree !== void 0) warnings.push("workspace is no longer inside a git work tree; only ledger-covered paths are shown");
+		if (earliest === void 0) warnings.push("no session baseline snapshot yet; only ledger-covered tool modifications are listed");
+		const ledgerChanges = await this.ledger.buildSessionFileChanges(sessionId, cwd, gitAvailable && baselineUsable ? "ignored" : "fallback");
+		const byPath = /* @__PURE__ */ new Map();
+		for (const change of changes) byPath.set(change.path, change);
+		for (const change of ledgerChanges) {
+			if (byPath.has(change.path)) continue;
+			byPath.set(change.path, change);
+		}
+		changes = [...byPath.values()];
+		if (!gitAvailable) warnings.push("workspace is not inside a git work tree; only tool write/edit modifications captured by the ledger can be restored");
+		const modifications = buildModificationsFromRecords(cwd, session.events, this.ledger.list(sessionId), (record) => this.ledger.laterModifications(sessionId, record.path, record));
+		this.attachToolCalls(changes, modifications);
+		for (const change of changes) change.accepted = this.accepts.fileAccepted(sessionId, change.path, await fingerprintOfAbs(change.absolutePath));
+		for (const modification of modifications) modification.accepted = this.accepts.modificationAccepted(sessionId, modification.modificationId);
+		const listId = crypto.randomUUID();
+		this.bound.set(listId, {
+			listId,
+			sessionId,
+			cwd,
+			...baselineUsable && earliest !== void 0 ? { baseline: earliest } : {},
+			...preparedTree === void 0 ? {} : { preparedTree },
+			gitAvailable,
+			changes: changes.filter((change) => change.accepted !== true),
+			createdAt: Date.now()
+		});
+		while (this.bound.size > 32) {
+			const oldest = this.bound.keys().next().value;
+			if (oldest === void 0) break;
+			this.bound.delete(oldest);
+		}
+		return ok({
+			listId,
+			...earliest === void 0 ? {} : { baseline: baselineInfo(earliest) },
+			changes,
+			modifications,
+			acceptedFiles: this.accepts.acceptedFiles(sessionId),
+			acceptedModifications: this.accepts.acceptedModifications(sessionId),
+			warnings: [...new Set(warnings)]
+		});
+	}
+	async acceptFile(request) {
+		const bound = this.bound.get(request.listId);
+		if (bound === void 0 || bound.sessionId !== request.sessionId) return fail("workspace-changed", "the modification list is stale; refresh it and try again", { sessionId: request.sessionId });
+		const live = this.liveSession(request.sessionId);
+		if (!live.ok) return live;
+		const provider = this.snapshots.providerFor(bound.cwd);
+		let rel;
+		try {
+			rel = provider.normalizeRelPath(request.path);
+		} catch {
+			return fail("path-not-in-snapshot", `path "${request.path}" is not a valid workspace path`, { sessionId: request.sessionId });
+		}
+		this.accepts.acceptFile(request.sessionId, rel, await fingerprintOfAbs(provider.absolutePath(rel)));
+		for (const id of this.patchIdsForPath(live.value, bound.cwd, rel)) this.accepts.acceptModification(request.sessionId, id);
+		return ok({
+			acceptedFiles: this.accepts.acceptedFiles(request.sessionId),
+			acceptedModifications: this.accepts.acceptedModifications(request.sessionId)
+		});
+	}
+	async acceptModification(request) {
+		const bound = this.bound.get(request.listId);
+		if (bound === void 0 || bound.sessionId !== request.sessionId) return fail("workspace-changed", "the modification list is stale; refresh it and try again", { sessionId: request.sessionId });
+		const live = this.liveSession(request.sessionId);
+		if (!live.ok) return live;
+		this.accepts.acceptModification(request.sessionId, request.modificationId);
+		const provider = this.snapshots.providerFor(bound.cwd);
+		let rel;
+		try {
+			rel = provider.normalizeRelPath(request.path);
+		} catch {
+			rel = void 0;
+		}
+		if (rel !== void 0) {
+			const patchIds = this.patchIdsForPath(live.value, bound.cwd, rel);
+			if (patchIds.length > 0 && patchIds.every((id) => this.accepts.modificationAccepted(request.sessionId, id))) this.accepts.acceptFile(request.sessionId, rel, await fingerprintOfAbs(provider.absolutePath(rel)));
+		}
+		return ok({
+			acceptedFiles: this.accepts.acceptedFiles(request.sessionId),
+			acceptedModifications: this.accepts.acceptedModifications(request.sessionId)
+		});
+	}
+	async undoFile(request) {
+		const bound = this.bound.get(request.listId);
+		if (bound === void 0 || bound.sessionId !== request.sessionId) return fail("workspace-changed", "the modification list is stale; refresh it and try again", { sessionId: request.sessionId });
+		const live = this.liveSession(request.sessionId);
+		if (!live.ok) return live;
+		const session = live.value;
+		const policy = sandboxPolicyFor(this.ctx, session);
+		const provider = this.snapshots.providerFor(bound.cwd);
+		let rel;
+		try {
+			rel = provider.normalizeRelPath(request.path);
+		} catch {
+			return fail("path-not-in-snapshot", `path "${request.path}" is not a valid workspace path`, { sessionId: request.sessionId });
+		}
+		let guardId = "";
+		let journalId;
+		let acquired = false;
+		try {
+			if (bound.preparedTree !== void 0) {
+				if (await provider.captureTree() !== bound.preparedTree) return fail("workspace-changed", "the workspace changed after the list was read; refresh it and try again", { sessionId: request.sessionId });
+			}
+			await this.safety.acquire(bound.cwd);
+			acquired = true;
+			await this.safety.assertFences(this.ctx, bound.cwd, provider);
+			await this.ctx.sessions.flush(session);
+			guardId = (await this.safety.captureGuard(this.ctx, provider, bound.cwd, bound.preparedTree, [rel], this.ledger)).guardId;
+			journalId = (await this.safety.journalStart(guardId, [rel])).id;
+			const restored = [];
+			const deleted = [];
+			const kept = [];
+			const skipped = [];
+			try {
+				const baseline = bound.baseline;
+				if (baseline !== void 0 && baseline.tree !== void 0) if ((await provider.pathsInTree(baseline.tree, rel)).includes(rel)) {
+					await provider.restorePaths(baseline.tree, [rel]);
+					if (await provider.blobHash(baseline.tree, rel) !== await provider.fileHash(rel)) throw new Error(`verification failed for ${rel}`);
+					restored.push(rel);
+				} else {
+					const abs = provider.absolutePath(rel);
+					if (!fs.existsSync(abs)) skipped.push(rel);
+					else {
+						fs.rmSync(abs, { force: true });
+						deleted.push(rel);
+					}
+				}
+				else {
+					const earliest = this.ledger.earliestForSessionPath(request.sessionId, provider.absolutePath(rel));
+					if (earliest === void 0) throw new Error(`no ledger baseline is available for ${rel}`);
+					const outcome = await this.ledger.restoreLedgerPath(bound.cwd, rel, earliest, "delete", policy);
+					if (outcome === "restored") restored.push(rel);
+					else if (outcome === "deleted") deleted.push(rel);
+					else if (outcome === "kept") kept.push(rel);
+					else skipped.push(rel);
+				}
+				await this.safety.journalUpdate(journalId, "completed");
+				this.accepts.acceptFile(request.sessionId, rel, await fingerprintOfAbs(provider.absolutePath(rel)));
+				return ok({
+					guardId,
+					restored,
+					deleted,
+					kept,
+					skipped,
+					acceptedFiles: this.accepts.acceptedFiles(request.sessionId)
+				});
+			} catch (error) {
+				await this.safety.rollbackGuard(this.ctx, provider, this.ledger, guardId, [rel], policy).catch(() => void 0);
+				await this.safety.journalUpdate(journalId, "rolled-back").catch(() => void 0);
+				return fail(error instanceof Error && error.message.startsWith("verification failed") ? "verification-failed" : "rollback-failed", String(error), {
+					sessionId: request.sessionId,
+					paths: [rel]
+				});
+			}
+		} catch (error) {
+			return this.mutationFailure(error, request.sessionId, bound, guardId, journalId, [rel], policy);
+		} finally {
+			if (acquired) await this.safety.release();
+		}
+	}
+	async undoModification(request) {
+		const bound = this.bound.get(request.listId);
+		if (bound === void 0 || bound.sessionId !== request.sessionId) return fail("workspace-changed", "the modification list is stale; refresh it and try again", { sessionId: request.sessionId });
+		const live = this.liveSession(request.sessionId);
+		if (!live.ok) return live;
+		const session = live.value;
+		const policy = sandboxPolicyFor(this.ctx, session);
+		const record = this.ledger.recordById(request.sessionId, request.modificationId);
+		if (record === void 0) return fail("rollback-failed", `modification "${request.modificationId}" has no live ledger record; refresh the list and undo at file level instead`, { sessionId: request.sessionId });
+		const provider = this.snapshots.providerFor(bound.cwd);
+		let rel;
+		try {
+			rel = provider.normalizeRelPath(path.relative(bound.cwd, record.path));
+		} catch {
+			return fail("path-not-in-snapshot", "the modification path is outside the workspace", { sessionId: request.sessionId });
+		}
+		let guardId = "";
+		let journalId;
+		let acquired = false;
+		try {
+			if (bound.preparedTree !== void 0) {
+				if (await provider.captureTree() !== bound.preparedTree) return fail("workspace-changed", "the workspace changed after the list was read; refresh it and try again", { sessionId: request.sessionId });
+			}
+			await this.safety.acquire(bound.cwd);
+			acquired = true;
+			await this.safety.assertFences(this.ctx, bound.cwd, provider);
+			await this.ctx.sessions.flush(session);
+			const fileGuard = await this.ledger.readCurrentForGuard(bound.cwd, rel);
+			guardId = (await this.safety.captureGuard(this.ctx, provider, bound.cwd, bound.preparedTree, [rel], this.ledger)).guardId;
+			journalId = (await this.safety.journalStart(guardId, [rel])).id;
+			try {
+				const outcome = await restoreModification(this.ctx, this.ledger, bound.cwd, record, true, this.options.spawnTimeoutMs, policy);
+				const results = [{
+					modificationId: record.modificationId,
+					path: rel,
+					status: outcome.status,
+					...outcome.detail === void 0 ? {} : { detail: outcome.detail }
+				}];
+				if (outcome.status === "conflict" || outcome.status === "failed" || outcome.status === "unsupported") {
+					await this.ledger.restoreGuardFile(bound.cwd, rel, fileGuard, policy).catch(() => void 0);
+					await this.safety.journalUpdate(journalId, "rolled-back").catch(() => void 0);
+					return fail("rollback-failed", outcome.detail ?? `undo failed with status ${outcome.status}`, {
+						sessionId: request.sessionId,
+						paths: [rel]
+					});
+				}
+				await this.safety.journalUpdate(journalId, "completed");
+				this.accepts.acceptModification(request.sessionId, record.modificationId);
+				const patchIds = this.patchIdsForPath(session, bound.cwd, rel);
+				if (patchIds.length > 0 && patchIds.every((id) => this.accepts.modificationAccepted(request.sessionId, id))) this.accepts.acceptFile(request.sessionId, rel, await fingerprintOfAbs(provider.absolutePath(rel)));
+				return ok({
+					guardId,
+					modificationResults: results,
+					acceptedModifications: this.accepts.acceptedModifications(request.sessionId)
+				});
+			} catch (error) {
+				await this.safety.rollbackGuard(this.ctx, provider, this.ledger, guardId, [rel], policy).catch(() => void 0);
+				await this.safety.journalUpdate(journalId, "rolled-back").catch(() => void 0);
+				return fail("rollback-failed", String(error), {
+					sessionId: request.sessionId,
+					paths: [rel]
+				});
+			}
+		} catch (error) {
+			return this.mutationFailure(error, request.sessionId, bound, guardId, journalId, [rel], policy);
+		} finally {
+			if (acquired) await this.safety.release();
+		}
+	}
+	liveSession(sessionId) {
+		const session = this.ctx.sessions.get(sessionId);
+		if (session === void 0) return fail("session-not-found", `session "${sessionId}" is not live`, { sessionId });
+		return ok(session);
+	}
+	/** Accept every unaccepted file of the bound list (with patch cascades). */
+	async acceptAll(request) {
+		const bound = this.bound.get(request.listId);
+		if (bound === void 0 || bound.sessionId !== request.sessionId) return fail("workspace-changed", "the modification list is stale; refresh it and try again", { sessionId: request.sessionId });
+		const live = this.liveSession(request.sessionId);
+		if (!live.ok) return live;
+		const session = live.value;
+		for (const change of bound.changes) {
+			this.accepts.acceptFile(request.sessionId, change.path, await fingerprintOfAbs(change.absolutePath));
+			for (const id of this.patchIdsForPath(session, bound.cwd, change.path)) this.accepts.acceptModification(request.sessionId, id);
+		}
+		return ok({
+			acceptedFiles: this.accepts.acceptedFiles(request.sessionId),
+			acceptedModifications: this.accepts.acceptedModifications(request.sessionId)
+		});
+	}
+	/** Undo every unaccepted file of the bound list back to the session baseline. */
+	async undoAll(request) {
+		const bound = this.bound.get(request.listId);
+		if (bound === void 0 || bound.sessionId !== request.sessionId) return fail("workspace-changed", "the modification list is stale; refresh it and try again", { sessionId: request.sessionId });
+		const live = this.liveSession(request.sessionId);
+		if (!live.ok) return live;
+		const session = live.value;
+		const policy = sandboxPolicyFor(this.ctx, session);
+		const provider = this.snapshots.providerFor(bound.cwd);
+		const changes = bound.changes;
+		if (changes.length === 0) return ok({
+			guardId: "",
+			restored: [],
+			deleted: [],
+			kept: [],
+			skipped: [],
+			acceptedFiles: this.accepts.acceptedFiles(request.sessionId)
+		});
+		const rels = changes.map((change) => change.path);
+		const gitChanges = changes.filter((change) => change.source === "git");
+		const ledgerChanges = changes.filter((change) => change.source === "ledger");
+		const baseline = bound.baseline;
+		let guardId = "";
+		let journalId;
+		let acquired = false;
+		try {
+			if (bound.preparedTree !== void 0) {
+				if (await provider.captureTree() !== bound.preparedTree) return fail("workspace-changed", "the workspace changed after the list was read; refresh it and try again", { sessionId: request.sessionId });
+			}
+			await this.safety.acquire(bound.cwd);
+			acquired = true;
+			await this.safety.assertFences(this.ctx, bound.cwd, provider);
+			await this.ctx.sessions.flush(session);
+			guardId = (await this.safety.captureGuard(this.ctx, provider, bound.cwd, bound.preparedTree, ledgerChanges.map((change) => change.path), this.ledger)).guardId;
+			journalId = (await this.safety.journalStart(guardId, rels)).id;
+			const restored = [];
+			const deleted = [];
+			const kept = [];
+			const skipped = [];
+			try {
+				if (gitChanges.length > 0) {
+					if (baseline === void 0 || baseline.tree === void 0) throw new Error("no baseline snapshot is available for git-tracked paths");
+					const inSnapshot = [];
+					const created = [];
+					for (const change of gitChanges) if ((await provider.pathsInTree(baseline.tree, change.path)).includes(change.path)) inSnapshot.push(change.path);
+					else created.push(change.path);
+					if (inSnapshot.length > 0) {
+						await provider.restorePaths(baseline.tree, inSnapshot);
+						for (const rel of inSnapshot) {
+							if (await provider.blobHash(baseline.tree, rel) !== await provider.fileHash(rel)) throw new Error(`verification failed for ${rel}`);
+							restored.push(rel);
+						}
+					}
+					for (const rel of created) {
+						const abs = provider.absolutePath(rel);
+						if (!fs.existsSync(abs)) skipped.push(rel);
+						else {
+							fs.rmSync(abs, { force: true });
+							deleted.push(rel);
+						}
+					}
+				}
+				for (const change of ledgerChanges) {
+					const earliest = this.ledger.earliestForSessionPath(request.sessionId, provider.absolutePath(change.path));
+					if (earliest === void 0) throw new Error(`no ledger baseline is available for ${change.path}`);
+					const outcome = await this.ledger.restoreLedgerPath(bound.cwd, change.path, earliest, "delete", policy);
+					if (outcome === "restored") restored.push(change.path);
+					else if (outcome === "deleted") deleted.push(change.path);
+					else if (outcome === "kept") kept.push(change.path);
+					else skipped.push(change.path);
+				}
+				await this.safety.journalUpdate(journalId, "completed");
+				for (const rel of rels) this.accepts.acceptFile(request.sessionId, rel, await fingerprintOfAbs(provider.absolutePath(rel)));
+				return ok({
+					guardId,
+					restored,
+					deleted,
+					kept,
+					skipped,
+					acceptedFiles: this.accepts.acceptedFiles(request.sessionId)
+				});
+			} catch (error) {
+				await this.safety.rollbackGuard(this.ctx, provider, this.ledger, guardId, rels, policy).catch(() => void 0);
+				await this.safety.journalUpdate(journalId, "rolled-back").catch(() => void 0);
+				return fail(error instanceof Error && error.message.startsWith("verification failed") ? "verification-failed" : "rollback-failed", String(error), {
+					sessionId: request.sessionId,
+					paths: rels
+				});
+			}
+		} catch (error) {
+			return this.mutationFailure(error, request.sessionId, bound, guardId, journalId, rels, policy);
+		} finally {
+			if (acquired) await this.safety.release();
+		}
+	}
+	attachToolCalls(changes, modifications) {
+		for (const change of changes) {
+			const calls = modifications.filter((item) => item.path === change.path);
+			if (calls.length === 0) continue;
+			change.toolCalls = calls.map((item) => ({
+				callId: item.modificationId,
+				toolName: item.toolName,
+				turn: item.turn,
+				step: item.step,
+				seq: item.seq,
+				hunks: item.hunks
+			}));
+		}
+	}
+	/** Every write/edit patch id (ledger + session-log only) attributed to a path. */
+	patchIdsForPath(session, cwd, rel) {
+		const ids = /* @__PURE__ */ new Set();
+		const abs = path.resolve(cwd, rel);
+		for (const record of this.ledger.recordsForPath(session.id, abs)) ids.add(record.modificationId);
+		for (const event of session.events) {
+			if (event.type !== "tool/call") continue;
+			const data = event.data;
+			if (data.callId === void 0 || data.name !== "write" && data.name !== "edit") continue;
+			const args = parseRecordArgs(data.arguments);
+			const filePath = typeof args.file_path === "string" ? args.file_path : typeof args.filePath === "string" ? args.filePath : void 0;
+			if (filePath === void 0) continue;
+			if (path.resolve(cwd, path.relative(cwd, filePath)) !== abs) continue;
+			ids.add(data.callId);
+		}
+		return [...ids];
+	}
+	async mutationFailure(error, sessionId, bound, guardId, journalId, affected, policy) {
+		const message = error instanceof Error ? error.message : String(error);
+		const code = message.includes("workspace lock timeout") ? "lock-timeout" : message.includes("running agent") ? "agent-running" : message.includes("git operation") ? "git-operation-in-progress" : "rollback-failed";
+		let guardRolledBack = guardId === "";
+		if (guardId !== "" && affected.length > 0) try {
+			const provider = this.snapshots.providerFor(bound.cwd);
+			await this.safety.rollbackGuard(this.ctx, provider, this.ledger, guardId, affected, policy);
+			guardRolledBack = true;
+		} catch {}
+		if (journalId !== void 0) await this.safety.journalUpdate(journalId, guardRolledBack ? "rolled-back" : "interrupted").catch(() => void 0);
+		return fail(code, message, {
+			sessionId,
+			paths: affected
+		});
+	}
+};
+function baselineInfo(manifest) {
+	return {
+		turn: manifest.turn,
+		createdAt: manifest.createdAt,
+		mode: manifest.tree === void 0 ? "ledger" : "git",
+		...manifest.turn > 1 ? { degraded: true } : {}
+	};
+}
+/** Content fingerprint of a file; falls back to stat identity for unreadable files. */
+async function fingerprintOfAbs(abs) {
+	try {
+		const data = await fs.promises.readFile(abs);
+		return {
+			kind: "content",
+			hash: crypto.createHash("sha256").update(data).digest("hex")
+		};
+	} catch {
+		try {
+			const stat = await fs.promises.stat(abs);
+			return {
+				kind: "stat",
+				size: stat.size,
+				mtimeMs: stat.mtimeMs
+			};
+		} catch {
+			return;
+		}
+	}
 }
 //#endregion
 //#region lib/types/host/service.js
@@ -2057,6 +2955,14 @@ let RollbackService = (() => {
 	let _execute_decorators;
 	let _openAt_decorators;
 	let _status_decorators;
+	let _prepareTurn_decorators;
+	let _sessionChanges_decorators;
+	let _acceptAll_decorators;
+	let _acceptFile_decorators;
+	let _acceptModification_decorators;
+	let _undoAll_decorators;
+	let _undoFile_decorators;
+	let _undoModification_decorators;
 	return class RollbackService extends _classSuper {
 		static {
 			const _metadata = typeof Symbol === "function" && Symbol.metadata ? Object.create(_classSuper[Symbol.metadata] ?? null) : void 0;
@@ -2064,6 +2970,14 @@ let RollbackService = (() => {
 			_execute_decorators = [Remote];
 			_openAt_decorators = [Remote];
 			_status_decorators = [Remote];
+			_prepareTurn_decorators = [Remote];
+			_sessionChanges_decorators = [Remote];
+			_acceptAll_decorators = [Remote];
+			_acceptFile_decorators = [Remote];
+			_acceptModification_decorators = [Remote];
+			_undoAll_decorators = [Remote];
+			_undoFile_decorators = [Remote];
+			_undoModification_decorators = [Remote];
 			__esDecorate(this, null, _prepare_decorators, {
 				kind: "method",
 				name: "prepare",
@@ -2108,6 +3022,94 @@ let RollbackService = (() => {
 				},
 				metadata: _metadata
 			}, null, _instanceExtraInitializers);
+			__esDecorate(this, null, _prepareTurn_decorators, {
+				kind: "method",
+				name: "prepareTurn",
+				static: false,
+				private: false,
+				access: {
+					has: (obj) => "prepareTurn" in obj,
+					get: (obj) => obj.prepareTurn
+				},
+				metadata: _metadata
+			}, null, _instanceExtraInitializers);
+			__esDecorate(this, null, _sessionChanges_decorators, {
+				kind: "method",
+				name: "sessionChanges",
+				static: false,
+				private: false,
+				access: {
+					has: (obj) => "sessionChanges" in obj,
+					get: (obj) => obj.sessionChanges
+				},
+				metadata: _metadata
+			}, null, _instanceExtraInitializers);
+			__esDecorate(this, null, _acceptAll_decorators, {
+				kind: "method",
+				name: "acceptAll",
+				static: false,
+				private: false,
+				access: {
+					has: (obj) => "acceptAll" in obj,
+					get: (obj) => obj.acceptAll
+				},
+				metadata: _metadata
+			}, null, _instanceExtraInitializers);
+			__esDecorate(this, null, _acceptFile_decorators, {
+				kind: "method",
+				name: "acceptFile",
+				static: false,
+				private: false,
+				access: {
+					has: (obj) => "acceptFile" in obj,
+					get: (obj) => obj.acceptFile
+				},
+				metadata: _metadata
+			}, null, _instanceExtraInitializers);
+			__esDecorate(this, null, _acceptModification_decorators, {
+				kind: "method",
+				name: "acceptModification",
+				static: false,
+				private: false,
+				access: {
+					has: (obj) => "acceptModification" in obj,
+					get: (obj) => obj.acceptModification
+				},
+				metadata: _metadata
+			}, null, _instanceExtraInitializers);
+			__esDecorate(this, null, _undoAll_decorators, {
+				kind: "method",
+				name: "undoAll",
+				static: false,
+				private: false,
+				access: {
+					has: (obj) => "undoAll" in obj,
+					get: (obj) => obj.undoAll
+				},
+				metadata: _metadata
+			}, null, _instanceExtraInitializers);
+			__esDecorate(this, null, _undoFile_decorators, {
+				kind: "method",
+				name: "undoFile",
+				static: false,
+				private: false,
+				access: {
+					has: (obj) => "undoFile" in obj,
+					get: (obj) => obj.undoFile
+				},
+				metadata: _metadata
+			}, null, _instanceExtraInitializers);
+			__esDecorate(this, null, _undoModification_decorators, {
+				kind: "method",
+				name: "undoModification",
+				static: false,
+				private: false,
+				access: {
+					has: (obj) => "undoModification" in obj,
+					get: (obj) => obj.undoModification
+				},
+				metadata: _metadata
+			}, null, _instanceExtraInitializers);
 			if (_metadata) Object.defineProperty(this, Symbol.metadata, {
 				enumerable: true,
 				configurable: true,
@@ -2120,7 +3122,9 @@ let RollbackService = (() => {
 		snapshots;
 		ledger;
 		safety;
+		accepts;
 		restore;
+		sessionChangeManager;
 		constructor(ctx, config = {}) {
 			super(ctx, "rollback");
 			this.host = ctx;
@@ -2147,10 +3151,16 @@ let RollbackService = (() => {
 				ledgerDir,
 				lockTimeoutMs: 1e4
 			});
+			this.accepts = new AcceptLedger();
 			this.restore = new RollbackRestore(this.host, this.snapshots, this.ledger, this.safety, {
 				maxDiffHunksPerFile: this.config.maxDiffHunksPerFile,
 				maxDiffBytesPerFile: this.config.maxDiffBytesPerFile,
 				restoreChunkSize: this.config.restoreChunkSize,
+				spawnTimeoutMs: this.config.spawnTimeoutMs
+			});
+			this.sessionChangeManager = new SessionChangeManager(this.host, this.snapshots, this.ledger, this.safety, this.accepts, {
+				maxDiffHunksPerFile: this.config.maxDiffHunksPerFile,
+				maxDiffBytesPerFile: this.config.maxDiffBytesPerFile,
 				spawnTimeoutMs: this.config.spawnTimeoutMs
 			});
 		}
@@ -2169,6 +3179,30 @@ let RollbackService = (() => {
 		}
 		status(sessionId, _signal) {
 			return this.restore.status(sessionId);
+		}
+		prepareTurn(sessionId, turn, _signal) {
+			return this.restore.prepareTurn(sessionId, turn);
+		}
+		sessionChanges(sessionId, _signal) {
+			return this.sessionChangeManager.sessionChanges(sessionId);
+		}
+		acceptAll(request, _signal) {
+			return this.sessionChangeManager.acceptAll(request);
+		}
+		acceptFile(request, _signal) {
+			return this.sessionChangeManager.acceptFile(request);
+		}
+		acceptModification(request, _signal) {
+			return this.sessionChangeManager.acceptModification(request);
+		}
+		undoAll(request, _signal) {
+			return this.sessionChangeManager.undoAll(request);
+		}
+		undoFile(request, _signal) {
+			return this.sessionChangeManager.undoFile(request);
+		}
+		undoModification(request, _signal) {
+			return this.sessionChangeManager.undoModification(request);
 		}
 	};
 })();
@@ -2237,6 +3271,46 @@ const ROLLBACK_HOST_TYPERT = {
 					kind: "method",
 					name: "status",
 					signature: "@Remote status(sessionId: string, signal?: AbortSignal): Promise<RollbackStatusResult>"
+				},
+				{
+					kind: "method",
+					name: "prepareTurn",
+					signature: "@Remote prepareTurn(sessionId: string, turn: number, signal?: AbortSignal): Promise<RollbackPrepareTurnResult>"
+				},
+				{
+					kind: "method",
+					name: "acceptAll",
+					signature: "@Remote acceptAll(request: RollbackAcceptAllRequest, signal?: AbortSignal): Promise<RollbackAcceptAllResult>"
+				},
+				{
+					kind: "method",
+					name: "undoAll",
+					signature: "@Remote undoAll(request: RollbackUndoAllRequest, signal?: AbortSignal): Promise<RollbackUndoAllResult>"
+				},
+				{
+					kind: "method",
+					name: "sessionChanges",
+					signature: "@Remote sessionChanges(sessionId: string, signal?: AbortSignal): Promise<RollbackSessionChangesResult>"
+				},
+				{
+					kind: "method",
+					name: "acceptFile",
+					signature: "@Remote acceptFile(request: RollbackAcceptFileRequest, signal?: AbortSignal): Promise<RollbackAcceptResult>"
+				},
+				{
+					kind: "method",
+					name: "acceptModification",
+					signature: "@Remote acceptModification(request: RollbackAcceptModificationRequest, signal?: AbortSignal): Promise<RollbackAcceptResult>"
+				},
+				{
+					kind: "method",
+					name: "undoFile",
+					signature: "@Remote undoFile(request: RollbackUndoFileRequest, signal?: AbortSignal): Promise<RollbackUndoFileResult>"
+				},
+				{
+					kind: "method",
+					name: "undoModification",
+					signature: "@Remote undoModification(request: RollbackUndoModificationRequest, signal?: AbortSignal): Promise<RollbackUndoModificationResult>"
 				}
 			],
 			types: []
@@ -2285,6 +3359,59 @@ const ROLLBACK_HOST_TYPERT = {
 		invocation("status", [{
 			name: "sessionId",
 			wire: "sessionId",
+			source: "json",
+			codec: jsonCodec("dsh-rollback-plugin#JsonValue")
+		}], true),
+		invocation("prepareTurn", [{
+			name: "sessionId",
+			wire: "sessionId",
+			source: "json",
+			codec: jsonCodec("dsh-rollback-plugin#JsonValue")
+		}, {
+			name: "turn",
+			wire: "turn",
+			source: "json",
+			codec: jsonCodec("dsh-rollback-plugin#JsonValue")
+		}], true),
+		invocation("acceptAll", [{
+			name: "request",
+			wire: "request",
+			source: "json",
+			codec: jsonCodec("dsh-rollback-plugin#JsonValue")
+		}], true),
+		invocation("undoAll", [{
+			name: "request",
+			wire: "request",
+			source: "json",
+			codec: jsonCodec("dsh-rollback-plugin#JsonValue")
+		}], true),
+		invocation("sessionChanges", [{
+			name: "sessionId",
+			wire: "sessionId",
+			source: "json",
+			codec: jsonCodec("dsh-rollback-plugin#JsonValue")
+		}], true),
+		invocation("acceptFile", [{
+			name: "request",
+			wire: "request",
+			source: "json",
+			codec: jsonCodec("dsh-rollback-plugin#JsonValue")
+		}], true),
+		invocation("acceptModification", [{
+			name: "request",
+			wire: "request",
+			source: "json",
+			codec: jsonCodec("dsh-rollback-plugin#JsonValue")
+		}], true),
+		invocation("undoFile", [{
+			name: "request",
+			wire: "request",
+			source: "json",
+			codec: jsonCodec("dsh-rollback-plugin#JsonValue")
+		}], true),
+		invocation("undoModification", [{
+			name: "request",
+			wire: "request",
 			source: "json",
 			codec: jsonCodec("dsh-rollback-plugin#JsonValue")
 		}], true)
@@ -2337,6 +3464,6 @@ function installLedgerListeners(ctx, service) {
 	});
 }
 //#endregion
-export { ChangeLedger, DEFAULT_ROLLBACK_CONFIG, GitProvider, RollbackService, SnapshotManager, apply, boundaryInfo, buildFileChange, changeLedgerRoot, findPreviousTurnEnd, inject, installLedgerListeners, isHash, journalsPath, ledgerRecordsPath, locksDir, manifestsPath, mergeFiles, name, normalizeLf, parseDiffHunks, parseDiffTreeZ, readJsonFile, resolveBoundary, resolveDshHome, restoreModification, sessionTurnPosition, spawnGit, wholeFileHunk, writeJsonFileAtomic };
+export { ChangeLedger, DEFAULT_ROLLBACK_CONFIG, GitProvider, RollbackService, SnapshotManager, apply, boundaryInfo, buildFileChange, changeLedgerRoot, createdFileHunks, findPreviousTurnEnd, inject, installLedgerListeners, isHash, journalsPath, ledgerRecordsPath, lineDiffHunks, locksDir, manifestsPath, mergeFiles, name, normalizeLf, parseDiffHunks, parseDiffTreeZ, readJsonFile, resolveBoundary, resolveBoundaryForTurn, resolveDshHome, restoreModification, sessionTurnPosition, spawnGit, wholeFileHunk, writeJsonFileAtomic };
 
 //# sourceMappingURL=index.js.map

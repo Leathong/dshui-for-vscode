@@ -2,7 +2,8 @@ import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { ok, fail } from "./errors.js";
-import { resolveBoundary, boundaryInfo } from "./boundary.js";
+import { resolveBoundary, resolveBoundaryForTurn, boundaryInfo } from "./boundary.js";
+import { sandboxPolicyFor, sandboxPolicyForCwd } from "./fs-policy.js";
 import { wholeFileHunk } from "./ledger.js";
 import { restoreModification } from "./modification.js";
 import { LedgerProvider } from "./providers/ledger-fallback.js";
@@ -21,6 +22,28 @@ export class RollbackRestore {
         this.options = options;
     }
     async prepare(sessionId, messageId) {
+        const base = this.prepareBase(sessionId);
+        if (!base.ok)
+            return base;
+        const resolved = resolveBoundary(base.value.session, messageId);
+        if (resolved.failure !== undefined)
+            return fail(resolved.failure.code, resolved.failure.message, resolved.failure);
+        return this.prepareWithBoundary(base.value, resolved.boundary, messageId);
+    }
+    /** Turn-anchored prepare: also serves unfinished (stopped) turns. */
+    async prepareTurn(sessionId, turn) {
+        const base = this.prepareBase(sessionId);
+        if (!base.ok)
+            return base;
+        if (!Number.isInteger(turn) || turn < 1) {
+            return fail('turn-not-found', `turn ${String(turn)} is not a valid turn number`, { sessionId });
+        }
+        const resolved = resolveBoundaryForTurn(base.value.session, turn);
+        if (resolved.failure !== undefined)
+            return fail(resolved.failure.code, resolved.failure.message, resolved.failure);
+        return this.prepareWithBoundary(base.value, resolved.boundary);
+    }
+    prepareBase(sessionId) {
         const live = this.liveSession(sessionId);
         if (!live.ok)
             return live;
@@ -29,10 +52,11 @@ export class RollbackRestore {
         if (cwd === undefined) {
             return fail('session-not-live', `session "${sessionId}" has no workspace cwd`);
         }
-        const resolved = resolveBoundary(session, messageId);
-        if (resolved.failure !== undefined)
-            return fail(resolved.failure.code, resolved.failure.message, resolved.failure);
-        const boundary = resolved.boundary;
+        return ok({ session, cwd });
+    }
+    async prepareWithBoundary(base, boundary, messageId) {
+        const { session, cwd } = base;
+        const sessionId = session.id;
         const found = await this.snapshots.find(sessionId, boundary.targetTurn);
         if (found === undefined) {
             return fail('snapshot-unavailable', `no rollback snapshot is available for turn ${boundary.targetTurn}`, { sessionId, messageId });
@@ -50,7 +74,9 @@ export class RollbackRestore {
             const entries = await provider.diffEntries(found.manifest.tree, preparedTree);
             for (const entry of entries) {
                 if (entry.oldMode === '160000' || entry.newMode === '160000') {
-                    warnings.push(`nested git repository "${entry.path}" is represented as a gitlink and cannot be restored from this snapshot`);
+                    warnings.push(entry.oldMode !== '160000'
+                        ? `nested git repository "${entry.path}" appeared after the snapshot; it is outside the rollback scope and will not be deleted or restored`
+                        : `nested git repository "${entry.path}" is tracked as a gitlink; its internal changes are outside the rollback scope (only tool-written files inside it can be restored)`);
                     continue;
                 }
                 if (entry.status === 'A') {
@@ -90,7 +116,8 @@ export class RollbackRestore {
         const prepared = {
             prepareId,
             sessionId,
-            messageId,
+            ...(messageId === undefined ? {} : { messageId }),
+            turn: boundary.targetTurn,
             cwd,
             snapshot: found.manifest,
             degraded: found.degraded,
@@ -116,10 +143,21 @@ export class RollbackRestore {
         if (request.confirmed !== true)
             return fail('rollback-failed', 'rollback execution requires confirmed: true');
         const prepared = this.prepared.get(request.prepareId);
-        if (prepared === undefined || prepared.sessionId !== request.sessionId || prepared.messageId !== request.messageId) {
-            return fail('workspace-changed', 'prepare context is missing or does not match this message; run prepare again', {
+        if (prepared === undefined || prepared.sessionId !== request.sessionId) {
+            return fail('workspace-changed', 'prepare context is missing or does not match this session; run prepare again', {
+                sessionId: request.sessionId,
+                ...(request.messageId === undefined ? {} : { messageId: request.messageId }),
+            });
+        }
+        if (request.messageId !== undefined && prepared.messageId !== request.messageId) {
+            return fail('workspace-changed', 'prepare context does not match this message; run prepare again', {
                 sessionId: request.sessionId,
                 messageId: request.messageId,
+            });
+        }
+        if (request.messageId === undefined && (request.turn === undefined || prepared.turn !== request.turn)) {
+            return fail('workspace-changed', 'prepare context does not match this turn; run prepare again', {
+                sessionId: request.sessionId,
             });
         }
         if (request.scope === 'modifications' && request.paths !== undefined && request.paths.length > 0) {
@@ -153,8 +191,9 @@ export class RollbackRestore {
             acquired = true;
             await this.safety.assertFences(this.ctx, prepared.cwd, provider);
             await this.ctx.sessions.flush(session);
+            const policy = sandboxPolicyFor(this.ctx, session);
             if (request.scope === 'modifications') {
-                return await this.executeModifications(prepared, request, provider, guardTree, affected, () => this.finishGuard(prepared, guardId, journalId));
+                return await this.executeModifications(prepared, request, provider, guardTree, affected, policy, () => this.finishGuard(prepared, guardId, journalId));
             }
             const selected = await this.selectFilePaths(prepared, request, provider);
             if (!selected.ok)
@@ -211,7 +250,7 @@ export class RollbackRestore {
                         }
                         continue;
                     }
-                    const outcome = await this.ledger.restoreLedgerPath(prepared.cwd, item.rel, baseline, request.createdPolicy ?? 'keep');
+                    const outcome = await this.ledger.restoreLedgerPath(prepared.cwd, item.rel, baseline, request.createdPolicy ?? 'keep', policy);
                     if (outcome === 'restored')
                         restored.push(item.rel);
                     else if (outcome === 'deleted')
@@ -232,7 +271,7 @@ export class RollbackRestore {
                 });
             }
             catch (error) {
-                await this.safety.rollbackGuard(this.ctx, provider, this.ledger, guardId, selected.value.all).catch(() => undefined);
+                await this.safety.rollbackGuard(this.ctx, provider, this.ledger, guardId, selected.value.all, policy).catch(() => undefined);
                 await this.safety.journalUpdate(journalId, 'rolled-back').catch(() => undefined);
                 const code = error instanceof Error && error.message.startsWith('verification failed') ? 'verification-failed' : 'rollback-failed';
                 return fail(code, String(error), { sessionId: request.sessionId, messageId: request.messageId, paths: selected.value.all });
@@ -368,76 +407,12 @@ export class RollbackRestore {
         return ok({ all, git, ledger });
     }
     buildModifications(sessionId, turn, cwd, events) {
-        const records = this.ledger.listForTurn(sessionId, turn);
-        const recorded = new Set(records.map(item => item.modificationId));
-        const result = [];
-        for (const event of events) {
-            if (event.type !== 'tool/call')
-                continue;
-            const data = event.data;
-            if (data.turn !== turn || data.callId === undefined || data.name !== 'write' && data.name !== 'edit')
-                continue;
-            if (recorded.has(data.callId))
-                continue;
-            const args = parseRecordArgs(data.arguments);
-            const filePath = typeof args.file_path === 'string' ? args.file_path : typeof args.filePath === 'string' ? args.filePath : undefined;
-            if (filePath === undefined)
-                continue;
-            const rel = path.relative(cwd, filePath);
-            if (rel === '..' || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel))
-                continue;
-            const toolResult = events.find(candidate => candidate.type === 'tool/result' && candidate.data.turn === turn && resultEventCallId(candidate) === data.callId);
-            result.push({
-                modificationId: data.callId,
-                toolName: data.name,
-                path: rel.split(path.sep).join('/'),
-                turn: data.turn ?? turn,
-                step: data.step ?? 0,
-                seq: event.seq,
-                hunks: sessionLogHunks(toolResult, args),
-                restorable: 'unsupported',
-                reason: 'no live ledger before-image for this modification',
-            });
-            recorded.add(data.callId);
-        }
-        for (const record of records) {
-            const rel = path.relative(cwd, record.path);
-            if (rel === '..' || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel))
-                continue;
-            result.push({
-                modificationId: record.modificationId,
-                toolName: record.toolName,
-                path: rel.split(path.sep).join('/'),
-                turn: record.turn,
-                step: record.step,
-                seq: record.seq,
-                hunks: recordHunks(record),
-                restorable: record.beforeExisted
-                    ? record.beforeContent !== undefined ? 'merge' : 'unsupported'
-                    : 'file-only',
-                ...(record.beforeExisted && record.beforeContent === undefined ? { reason: 'no bounded text before-image' } : {}),
-                ...(!record.beforeExisted ? { createdFile: true, reason: 'file was created by this modification; undoing it requires delete confirmation' } : {}),
-                laterModificationIds: this.ledger.laterModifications(sessionId, record.path, record).map(item => item.modificationId),
-            });
-        }
-        return result;
+        return buildModificationsFromRecords(cwd, events, this.ledger.listForTurn(sessionId, turn), record => this.ledger.laterModifications(sessionId, record.path, record), turn);
     }
     attachToolCalls(changes, modifications) {
-        for (const change of changes) {
-            const calls = modifications.filter(item => item.path === change.path);
-            if (calls.length === 0)
-                continue;
-            change.toolCalls = calls.map(item => ({
-                callId: item.modificationId,
-                toolName: item.toolName,
-                turn: item.turn,
-                step: item.step,
-                seq: item.seq,
-                hunks: item.hunks,
-            }));
-        }
+        attachToolCallsToChanges(changes, modifications);
     }
-    async executeModifications(prepared, request, provider, guardTree, affected, _finish) {
+    async executeModifications(prepared, request, provider, guardTree, affected, policy, _finish) {
         const ids = request.modificationIds ?? [];
         if (ids.length === 0)
             return fail('rollback-failed', 'scope=modifications requires modificationIds');
@@ -468,7 +443,7 @@ export class RollbackRestore {
                 const fileGuard = await this.ledger.readCurrentForGuard(prepared.cwd, rel);
                 let failed = false;
                 for (const record of records) {
-                    const outcome = await restoreModification(this.ctx, this.ledger, prepared.cwd, record, request.createdPolicy === 'delete', this.options.spawnTimeoutMs);
+                    const outcome = await restoreModification(this.ctx, this.ledger, prepared.cwd, record, request.createdPolicy === 'delete', this.options.spawnTimeoutMs, policy);
                     results.push({
                         modificationId: record.modificationId,
                         path: rel,
@@ -486,7 +461,7 @@ export class RollbackRestore {
                         if (existing !== undefined && existing.status === 'restored')
                             existing.status = 'conflict';
                     }
-                    await this.ledger.restoreGuardFile(prepared.cwd, rel, fileGuard).catch(() => undefined);
+                    await this.ledger.restoreGuardFile(prepared.cwd, rel, fileGuard, policy).catch(() => undefined);
                 }
                 else {
                     restoredPaths.push(rel);
@@ -504,7 +479,7 @@ export class RollbackRestore {
             });
         }
         catch (error) {
-            await this.safety.rollbackGuard(this.ctx, provider, this.ledger, guard.guardId, paths).catch(() => undefined);
+            await this.safety.rollbackGuard(this.ctx, provider, this.ledger, guard.guardId, paths, policy).catch(() => undefined);
             await this.safety.journalUpdate(journalId, 'rolled-back').catch(() => undefined);
             return fail('rollback-failed', String(error), { sessionId: request.sessionId, messageId: request.messageId, paths });
         }
@@ -519,7 +494,9 @@ export class RollbackRestore {
         if (guardId !== '' && affected.size > 0) {
             try {
                 const provider = this.snapshots.providerFor(prepared.cwd);
-                await this.safety.rollbackGuard(this.ctx, provider, this.ledger, guardId, [...affected]);
+                const liveSession = this.ctx.sessions.get(request.sessionId);
+                const policy = liveSession === undefined ? sandboxPolicyForCwd(prepared.cwd) : sandboxPolicyFor(this.ctx, liveSession);
+                await this.safety.rollbackGuard(this.ctx, provider, this.ledger, guardId, [...affected], policy);
                 guardRolledBack = true;
             }
             catch {
@@ -536,7 +513,7 @@ export class RollbackRestore {
         // transitions happen at the mutation sites.
     }
 }
-function parseRecordArgs(raw) {
+export function parseRecordArgs(raw) {
     if (raw === undefined)
         return {};
     try {
@@ -547,13 +524,88 @@ function parseRecordArgs(raw) {
         return {};
     }
 }
+/** Reusable modification builder: ledger records + log-only write/edit events. */
+export function buildModificationsFromRecords(cwd, events, records, later, turn) {
+    const recorded = new Set(records.map(item => item.modificationId));
+    const result = [];
+    for (const event of events) {
+        if (event.type !== 'tool/call')
+            continue;
+        const data = event.data;
+        if (turn !== undefined && data.turn !== turn)
+            continue;
+        if (data.callId === undefined || data.name !== 'write' && data.name !== 'edit')
+            continue;
+        if (recorded.has(data.callId))
+            continue;
+        const args = parseRecordArgs(data.arguments);
+        const filePath = typeof args.file_path === 'string' ? args.file_path : typeof args.filePath === 'string' ? args.filePath : undefined;
+        if (filePath === undefined)
+            continue;
+        const rel = path.relative(cwd, filePath);
+        if (rel === '..' || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel))
+            continue;
+        const toolResult = events.find(candidate => candidate.type === 'tool/result'
+            && candidate.data.turn === data.turn
+            && resultEventCallId(candidate) === data.callId);
+        result.push({
+            modificationId: data.callId,
+            toolName: data.name,
+            path: rel.split(path.sep).join('/'),
+            turn: data.turn ?? 0,
+            step: data.step ?? 0,
+            seq: event.seq,
+            hunks: sessionLogHunks(toolResult, args),
+            restorable: 'unsupported',
+            reason: 'no live ledger before-image for this modification',
+        });
+        recorded.add(data.callId);
+    }
+    for (const record of records) {
+        const rel = path.relative(cwd, record.path);
+        if (rel === '..' || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel))
+            continue;
+        result.push({
+            modificationId: record.modificationId,
+            toolName: record.toolName,
+            path: rel.split(path.sep).join('/'),
+            turn: record.turn,
+            step: record.step,
+            seq: record.seq,
+            hunks: recordHunks(record),
+            restorable: record.beforeExisted
+                ? record.beforeContent !== undefined ? 'merge' : 'unsupported'
+                : 'file-only',
+            ...(record.beforeExisted && record.beforeContent === undefined ? { reason: 'no bounded text before-image' } : {}),
+            ...(!record.beforeExisted ? { createdFile: true, reason: 'file was created by this modification; undoing it requires delete confirmation' } : {}),
+            laterModificationIds: later(record).map(item => item.modificationId),
+        });
+    }
+    return result.sort((a, b) => a.seq - b.seq || a.turn - b.turn || a.step - b.step);
+}
+/** Attach per-path tool-call patch lists onto file-level changes. */
+export function attachToolCallsToChanges(changes, modifications) {
+    for (const change of changes) {
+        const calls = modifications.filter(item => item.path === change.path);
+        if (calls.length === 0)
+            continue;
+        change.toolCalls = calls.map(item => ({
+            callId: item.modificationId,
+            toolName: item.toolName,
+            turn: item.turn,
+            step: item.step,
+            seq: item.seq,
+            hunks: item.hunks,
+        }));
+    }
+}
 function resultEventCallId(event) {
     if (event.type !== 'tool/result')
         return undefined;
     const data = event.data;
     return data.message?.source?.callId;
 }
-function sessionLogHunks(event, args) {
+export function sessionLogHunks(event, args) {
     if (event !== undefined && event.type === 'tool/result') {
         const data = event.data;
         const diffs = data.meta?.diffs;
@@ -571,7 +623,7 @@ function sessionLogHunks(event, args) {
     const newString = typeof args.new_string === 'string' ? args.new_string : typeof args.newString === 'string' ? args.newString : '';
     return oldString === undefined ? [] : [{ oldText: oldString, newText: newString }];
 }
-function recordHunks(record) {
+export function recordHunks(record) {
     let args = {};
     if (record.argsRaw !== undefined) {
         try {

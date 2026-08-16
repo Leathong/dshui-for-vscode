@@ -1,6 +1,6 @@
 import type { LocaleDictOf } from '@deepseek-ai/dsh-client-ui-slots';
 export declare const NS = "rollback";
-export type RollbackLocaleKey = 'action' | 'title' | 'loading' | 'snapshot' | 'targetTurn' | 'degraded' | 'changes' | 'modifications' | 'file' | 'modification' | 'status.modified' | 'status.deleted' | 'status.created' | 'status.typechange' | 'status.ignored' | 'status.binary' | 'status.nested-repo' | 'wholeTurn' | 'selectedFiles' | 'selectedModifications' | 'createdPolicy.keep' | 'createdPolicy.delete' | 'deleteCreated' | 'confirm' | 'cancel' | 'turn1NoFork' | 'merge' | 'fileOnly' | 'unsupported' | 'conflictRisk' | 'success' | 'failed' | 'empty' | 'openAt' | 'workspaceChanged' | 'bridgeUnavailable';
+export type RollbackLocaleKey = 'action' | 'title' | 'loading' | 'snapshot' | 'targetTurn' | 'degraded' | 'changes' | 'modifications' | 'file' | 'modification' | 'status.modified' | 'status.deleted' | 'status.created' | 'status.typechange' | 'status.ignored' | 'status.binary' | 'status.nested-repo' | 'wholeTurn' | 'selectedFiles' | 'selectedModifications' | 'createdPolicy.keep' | 'createdPolicy.delete' | 'deleteCreated' | 'confirm' | 'cancel' | 'turn1NoFork' | 'merge' | 'fileOnly' | 'unsupported' | 'conflictRisk' | 'success' | 'failed' | 'empty' | 'openAt' | 'openInEditor' | 'workspaceChanged' | 'bridgeUnavailable' | 'dock.title' | 'dock.refresh' | 'dock.empty' | 'dock.modificationsOnly' | 'dock.accepted' | 'dock.showAccepted' | 'dock.hideAccepted' | 'dock.accept' | 'dock.acceptAll' | 'dock.undo' | 'dock.undoAll' | 'dock.undoing' | 'dock.baseline' | 'dock.patches' | 'dock.stale' | 'dock.fileRestoreHint' | 'dock.updated';
 declare module '@deepseek-ai/dsh-client-ui-slots' {
     interface LocaleNamespaceMap {
         rollback: RollbackLocaleKey;
@@ -41,8 +41,26 @@ export declare const zh: {
     failed: string;
     empty: string;
     openAt: string;
+    openInEditor: string;
     workspaceChanged: string;
     bridgeUnavailable: string;
+    'dock.title': string;
+    'dock.refresh': string;
+    'dock.empty': string;
+    'dock.modificationsOnly': string;
+    'dock.accepted': string;
+    'dock.showAccepted': string;
+    'dock.hideAccepted': string;
+    'dock.accept': string;
+    'dock.acceptAll': string;
+    'dock.undo': string;
+    'dock.undoAll': string;
+    'dock.undoing': string;
+    'dock.baseline': string;
+    'dock.patches': string;
+    'dock.stale': string;
+    'dock.fileRestoreHint': string;
+    'dock.updated': string;
 };
 export declare const en: {
     action: string;
@@ -79,7 +97,25 @@ export declare const en: {
     failed: string;
     empty: string;
     openAt: string;
+    openInEditor: string;
     workspaceChanged: string;
     bridgeUnavailable: string;
+    'dock.title': string;
+    'dock.refresh': string;
+    'dock.empty': string;
+    'dock.modificationsOnly': string;
+    'dock.accepted': string;
+    'dock.showAccepted': string;
+    'dock.hideAccepted': string;
+    'dock.accept': string;
+    'dock.acceptAll': string;
+    'dock.undo': string;
+    'dock.undoAll': string;
+    'dock.undoing': string;
+    'dock.baseline': string;
+    'dock.patches': string;
+    'dock.stale': string;
+    'dock.fileRestoreHint': string;
+    'dock.updated': string;
 };
 export type RollbackDict = LocaleDictOf<typeof NS>;

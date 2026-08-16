@@ -1,6 +1,7 @@
 import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { sandboxPolicyForCwd } from "./fs-policy.js";
 import { journalsPath, locksDir, readJsonFile, writeJsonFileAtomic } from "./snapshot.js";
 const GUARDS_FILE = 'guards.json';
 export class RollbackSafety {
@@ -126,7 +127,7 @@ export class RollbackSafety {
         await this.loadJournals();
         return this.journals.filter(entry => this.guards.get(entry.guardId ?? '')?.cwd === path.resolve(cwd));
     }
-    async rollbackGuard(ctx, provider, ledger, guardId, paths) {
+    async rollbackGuard(ctx, provider, ledger, guardId, paths, sandboxPolicy) {
         const guard = this.guards.get(guardId);
         if (guard === undefined)
             throw new Error(`guard ${guardId} is no longer available`);
@@ -138,7 +139,7 @@ export class RollbackSafety {
         for (const rel of [...new Set(ledgerPaths)]) {
             const file = guard.ledgerFiles.find(item => item.path === rel);
             if (file !== undefined)
-                await ledger.restoreGuardFile(guard.cwd, rel, file);
+                await ledger.restoreGuardFile(guard.cwd, rel, file, sandboxPolicy);
         }
     }
     async loadGuards() {
@@ -185,7 +186,7 @@ export class RollbackSafety {
                 continue;
             try {
                 const provider = snapshots.providerFor(guard.cwd);
-                await this.rollbackGuard(ctx, provider, ledger, entry.guardId, entry.paths);
+                await this.rollbackGuard(ctx, provider, ledger, entry.guardId, entry.paths, sandboxPolicyForCwd(guard.cwd));
                 await this.journalUpdate(entry.id, 'rolled-back');
             }
             catch (error) {
