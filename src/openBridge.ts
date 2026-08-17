@@ -17,6 +17,7 @@ import * as crypto from 'node:crypto'
 import * as fs from 'node:fs'
 import * as http from 'node:http'
 import * as vscode from 'vscode'
+import { logger } from './logger'
 
 function positiveInteger(value: string | null): number | undefined {
   if (value === null || value === '') return undefined
@@ -63,7 +64,7 @@ export class OpenBridge {
         const endColumn = positiveInteger(url.searchParams.get('endColumn'))
         void this.open(target, { line, column, endLine, endColumn })
       } catch (error) {
-        console.error('[dshui] open bridge request failed:', error)
+        logger.error('[dshui] open bridge request failed:', error)
         try {
           if (!res.headersSent) {
             res.writeHead(400, { 'content-type': 'text/plain' })
@@ -116,7 +117,7 @@ export class OpenBridge {
       }
       await vscode.window.showTextDocument(uri, options)
     } catch (error) {
-      console.error('[dshui] open bridge failed to open:', rawPath, error)
+      logger.error('[dshui] open bridge failed to open:', rawPath, error)
     }
   }
 

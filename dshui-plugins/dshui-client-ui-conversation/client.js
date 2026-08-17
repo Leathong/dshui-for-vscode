@@ -9767,7 +9767,16 @@ window.__ModuleLoader__.load({
 						fileMentions: (owner) => ctx.get("chatFileMentions")?.forClosing(owner),
 						openFile: (path) => {
 							const cwd = sessions.list.getSnapshot().byId[sessionId]?.cwd;
-							workspaces.openPath((0, _deepseek_ai_dsh_client_runtime_client.resolveWorkspacePath)(cwd, path)).catch(() => {});
+							const resolved = (0, _deepseek_ai_dsh_client_runtime_client.resolveWorkspacePath)(cwd, path);
+							if (cwd !== void 0 && cwd !== "") {
+								const payload = {
+									path: resolved,
+									dshuiOrigin: cwd
+								};
+								ctx.get("connection").api.host.openPath(payload).catch(() => {});
+								return;
+							}
+							workspaces.openPath(resolved).catch(() => {});
 						},
 						loadOlder: () => {
 							scoped.loadOlder();

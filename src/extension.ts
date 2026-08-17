@@ -12,6 +12,7 @@ import * as https from 'node:https'
 import * as path from 'node:path'
 import * as vscode from 'vscode'
 import { bundledCliPath, DshServer, probeDshuiServer } from './dshServer'
+import { installCrashHandlers, logger, setLogFile } from './logger'
 import { killProcessOnPort } from './killPort'
 import { OpenBridge } from './openBridge'
 import { patchFileOpener } from './openPatch'
@@ -31,15 +32,6 @@ const VIEW_ID = 'dshui.view'
 
 /** npm registry URL returning the latest published @deepseek-ai/dsh release as JSON `{ version }`. */
 const DSHD_REGISTRY_URL = 'https://registry.npmjs.org/@deepseek-ai%2Fdsh/latest'
-
-/** Minimal file logger for headless verification (the extension host console is not observable from the CLI). */
-function fileLog(dshHome: string, message: string): void {
-  try {
-    const logDir = path.join(dshHome, 'dshui-logs')
-    fs.mkdirSync(logDir, { recursive: true })
-    fs.appendFileSync(path.join(logDir, 'extension.log'), `${new Date().toISOString()} ${message}\n`)
-  } catch { /* logging must never break activation */ }
-}
 
 /** Prerelease-aware semver compare: <0 / 0 / >0 (e.g. 0.1.0 > 0.1.0-rc.6). */
 function compareVersions(a: string, b: string): number {
@@ -206,25 +198,29 @@ async function deleteSessionFile(dshHome: string, sessionId: string, cwd: string
 }
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
+  // Crashes inside the extension host leave a trace in the Output panel.
+  installCrashHandlers()
   const extensionRoot = context.extensionPath
   const pluginsDir = path.join(extensionRoot, 'dshui-plugins')
   const patchPath = path.join(extensionRoot, 'patch.yml')
   const cliPath = bundledCliPath(extensionRoot)
   const dshHome = resolveDshHome()
+  // File sink for headless verification (the extension host console is not
+  // observable from the CLI); every log line also goes to the Output panel.
+  setLogFile(path.join(dshHome, 'dshui-logs', 'extension.log'))
   // `code` CLI 绝对路径：应用内置 bin/code（Finder 启动的扩展宿主 PATH 精简，
   // 不能依赖 PATH 解析）。找不到时退回裸命令名，由补丁里的 runNativeCommand 按 PATH 尝试。
   const codeCli = (() => {
     const candidate = path.join(vscode.env.appRoot, 'bin', process.platform === 'win32' ? 'code.cmd' : 'code')
     return fs.existsSync(candidate) ? candidate : 'code'
   })()
-  fileLog(dshHome, `activate: ext=${extensionRoot} dshHome=${dshHome}`)
+  logger.info(`[dshui] activate: ext=${extensionRoot} dshHome=${dshHome}`)
   try {
     const installed = installPlugins(pluginsDir, dshHome, path.join(extensionRoot, 'node_modules'))
-    console.log(`[dshui] installed ${installed.length} plugin(s) into ${path.join(dshHome, 'profiles', 'node_modules')}`)
-    fileLog(dshHome, `plugins installed: ${installed.map(p => p.name).join(', ')}`)
+    logger.info(`[dshui] installed ${installed.length} plugin(s) (${installed.map(p => p.name).join(', ')}) into ${path.join(dshHome, 'profiles', 'node_modules')}`)
   } catch (error) {
+    logger.error('[dshui] failed to install dshui plugins:', error)
     vscode.window.showErrorMessage(`dshui: failed to install dshui plugins: ${String(error)}`)
-    fileLog(dshHome, `plugin install failed: ${String(error)}`)
   }
 
   let server: DshServer | null = null
@@ -249,22 +245,21 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   if (openInVscode) {
     try {
       await openBridge.start()
-      fileLog(dshHome, `open bridge listening at ${openBridge.endpoint}`)
+      logger.info(`[dshui] open bridge listening at ${openBridge.endpoint}`)
     } catch (error) {
-      fileLog(dshHome, `open bridge failed to start: ${String(error)}`)
-      console.error('[dshui] open bridge failed to start:', error)
+      logger.error('[dshui] open bridge failed to start:', error)
     }
     const result = patchFileOpener(
       path.join(extensionRoot, 'node_modules', '@deepseek-ai', 'dsh-host-apiproxy', 'lib', 'index.js'),
     )
-    fileLog(dshHome, `file opener patch: patched=${result.patched} note=${result.note ?? ''}`)
+    logger.info(`[dshui] file opener patch: patched=${result.patched} note=${result.note ?? ''}`)
     // 登记本窗口的桥：api-proxy 补丁按「打开路径所属工作区」路由到对应窗口的桥，
     // 这样共享后端下点开的文件能在当前窗口打开（而不总是落在 owner 窗口）。
     if (openBridge.running) {
       const initialWorkspace = currentWorkspace()
       if (initialWorkspace !== undefined) {
         void registerBridge(dshHome, initialWorkspace, openBridge.endpoint, openBridge.token).catch((error) => {
-          fileLog(dshHome, `bridge registration failed: ${String(error)}`)
+          logger.error('[dshui] bridge registration failed:', error)
         })
       }
     }
@@ -286,7 +281,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       const latest = await fetchLatestDshVersion()
       if (latest === null) return
       const outdated = compareVersions(latest, bundled) > 0
-      fileLog(dshHome, `dsh update check: bundled=${bundled} latest=${latest} outdated=${outdated}`)
+      logger.info(`[dshui] dsh update check: bundled=${bundled} latest=${latest} outdated=${outdated}`)
       if (!outdated || latest === context.globalState.get<string>('dshui.dshCheck.notified')) return
       await context.globalState.update('dshui.dshCheck.notified', latest)
       const action = await vscode.window.showInformationMessage(
@@ -297,7 +292,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         void vscode.env.openExternal(vscode.Uri.parse('https://www.npmjs.com/package/@deepseek-ai/dsh'))
       }
     } catch (error) {
-      fileLog(dshHome, `dsh update check failed: ${String(error)}`)
+      logger.error('[dshui] dsh update check failed:', error)
     }
   }
   void checkDshUpdates()
@@ -324,6 +319,18 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   /** Forward the active VS Code color scheme to the view shell (the theme relay). */
   function postTheme(webview: vscode.Webview): void {
     void webview.postMessage({ type: 'dshui:theme', colorScheme: activeColorScheme() })
+  }
+
+  /**
+   * Log a dsh server failure and notify the user, offering to open the
+   * "dsh UI" Output channel for the full detail (server stdout included).
+   */
+  function notifyServerFailure(message: string, error: unknown, language: 'zh' | 'en' = 'en'): void {
+    logger.error('[dshui] dsh server failure:', error)
+    const action = language === 'zh' ? '查看日志' : 'View Logs'
+    void vscode.window.showErrorMessage(message, action).then((choice) => {
+      if (choice === action) logger.show()
+    })
   }
 
   /** (Re)start the server for the given workspace, reusing a live one bound to the same folder. */
@@ -361,8 +368,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       }
     }
     const notifyReady = (boundPort: number): void => {
-      console.log(`[dshui] dsh web ready on port ${boundPort}`)
-      fileLog(dshHome, `server ready on port ${boundPort} for ${workspacePath}`)
+      logger.info(`[dshui] dsh web ready on port ${boundPort} for ${workspacePath}`)
       serverStart = null
       if (currentView !== null && currentWorkspacePath === workspacePath) {
         navigate(currentView.webview, workspacePath, boundPort)
@@ -375,7 +381,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       try {
         await registerServerUser(dshHome, boundPort, owner)
       } catch (error) {
-        fileLog(dshHome, `shared registry register failed: ${String(error)}`)
+        logger.error('[dshui] shared registry register failed:', error)
       }
     }
     serverStart = (async () => {
@@ -399,8 +405,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         sharedBackend: shared,
         onReady: notifyReady,
         onExit: (code, signal) => {
-          console.warn(`[dshui] dsh web exited (code ${String(code)}, signal ${String(signal)})`)
-          fileLog(dshHome, `server exited (code ${String(code)}, signal ${String(signal)})`)
+          logger.warn(`[dshui] dsh web exited (code ${String(code)}, signal ${String(signal)})`)
         },
         env: {
           ...(openBridge.running ? { DSHUI_OPEN_ENDPOINT: openBridge.endpoint, DSHUI_OPEN_TOKEN: openBridge.token } : {}),
@@ -413,9 +418,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
           DSHUI_SHARED_BACKEND: shared ? '1' : '0',
         },
       })
+      // 服务器自身（含 api-proxy 补丁）的 stdout/stderr 转发到输出面板与日志文件，
+      // 排查服务器侧问题（插件加载失败、补丁报错等）直接看 Output → dsh UI。
       server.onOutput((line) => {
-        console.log(`[dshui:server] ${line}`)
-        fileLog(dshHome, `server: ${line}`)
+        logger.info(`[dshui:server] ${line}`)
       })
       const boundPort = await server.start()
       if (shared) {
@@ -598,8 +604,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
               }
               return reviewManager.showFile(port, reviewSessionId, reviewPath)
             }).catch((error) => {
-              console.error('[dshui] failed to open rollback review:', error)
-              fileLog(dshHome, `rollback review open failed: ${String(error)}`)
+              logger.error('[dshui] failed to open rollback review:', error)
               void vscode.window.showErrorMessage(`dshui: 打开修改视图失败: ${String(error)}`)
             })
             return
@@ -647,9 +652,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         void startServer(workspacePath).then((port) => {
           if (currentView === webviewView) navigate(webviewView.webview, workspacePath, port)
         }).catch((error) => {
-          console.error('[dshui] failed to start dsh web:', error)
-          fileLog(dshHome, `server start failed: ${String(error)}`)
-          void vscode.window.showErrorMessage(`dshui: failed to start the dsh server: ${String(error)}`)
+          notifyServerFailure(`dshui: failed to start the dsh server: ${String(error)}`, error)
         })
         webviewView.onDidDispose(() => {
           if (currentView === webviewView) currentView = null
@@ -715,9 +718,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         await startServer(workspacePath)
         vscode.window.setStatusBarMessage('dsh UI: dsh server 已启动', 3000)
       } catch (error) {
-        console.error('[dshui] failed to start dsh web:', error)
-        fileLog(dshHome, `server start failed: ${String(error)}`)
-        void vscode.window.showErrorMessage(`dshui: 启动 dsh server 失败: ${String(error)}`)
+        notifyServerFailure(`dshui: 启动 dsh server 失败: ${String(error)}`, error, 'zh')
       }
       return
     }
@@ -752,9 +753,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       await startServer(workspacePath)
       vscode.window.setStatusBarMessage('dsh UI: dsh server 已重启', 3000)
     } catch (error) {
-      console.error('[dshui] dsh server restart failed:', error)
-      fileLog(dshHome, `server restart failed: ${String(error)}`)
-      void vscode.window.showErrorMessage(`dshui: 重启 dsh server 失败: ${String(error)}`)
+      notifyServerFailure(`dshui: 重启 dsh server 失败: ${String(error)}`, error, 'zh')
     }
   }
 
@@ -763,6 +762,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   context.subscriptions.push(
     vscode.commands.registerCommand('dshui.restartServer', () => {
       void restartServer()
+    }),
+  )
+
+  // Command: reveal the extension's Output channel (View → Output → dsh UI).
+  context.subscriptions.push(
+    vscode.commands.registerCommand('dshui.showLogs', () => {
+      logger.show()
     }),
   )
 
@@ -870,13 +876,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       currentWorkspacePath = workspacePath
       if (openBridge.running) {
         void registerBridge(dshHome, workspacePath, openBridge.endpoint, openBridge.token).catch((error) => {
-          fileLog(dshHome, `bridge registration failed: ${String(error)}`)
+          logger.error('[dshui] bridge registration failed:', error)
         })
       }
       void startServer(workspacePath).catch((error) => {
-        console.error('[dshui] failed to start dsh web after workspace change:', error)
-        fileLog(dshHome, `server start failed after workspace change: ${String(error)}`)
-        void vscode.window.showErrorMessage(`dshui: failed to start the dsh server: ${String(error)}`)
+        notifyServerFailure(`dshui: failed to start the dsh server: ${String(error)}`, error)
       })
     }),
   )
@@ -909,6 +913,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       void unregisterBridge(dshHome).catch(() => { /* best-effort */ })
       openBridge.dispose()
       reviewManager.dispose()
+      logger.dispose()
     },
   })
 
@@ -921,9 +926,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       // already bound — the iframe boots straight into the SPA instead of
       // sitting on a blank page while the server starts.
       void startServer(workspacePath).catch((error) => {
-        console.error('[dshui] pre-warm server start failed:', error)
-        fileLog(dshHome, `pre-warm server start failed: ${String(error)}`)
-        void vscode.window.showErrorMessage(`dshui: failed to start the dsh server: ${String(error)}`)
+        notifyServerFailure(`dshui: failed to start the dsh server: ${String(error)}`, error)
       })
       void vscode.commands.executeCommand(`${VIEW_ID}.focus`)
     }

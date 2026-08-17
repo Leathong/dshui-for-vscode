@@ -15,6 +15,7 @@
   - [文件打开](#文件打开)
   - [消息里的网络链接](#消息里的网络链接)
   - [多窗口（共享后端）](#多窗口共享后端)
+  - [修改回滚](#修改回滚)
 - [工作原理](#工作原理)
 - [开发流程](#开发流程)
   - [三级迭代，按需选择](#三级迭代按需选择)
@@ -65,17 +66,19 @@ agentic coding 框架，主张「一切皆插件」）的 Web UI 嵌入 VS Code 
   [引用文件与代码片段](#引用文件与代码片段)）。
 - **多窗口共享后端**：所有窗口复用同一个内嵌服务器，无端口冲突，会话数据一致（详见
   [多窗口（共享后端）](#多窗口共享后端)）。
+- **修改回滚**：agent 对工作区文件的每次修改都会进入侧边栏「修改列表」，可在 VS Code 原生 Diff
+  中逐文件审查、接受或撤销（详见 [修改回滚](#修改回滚)）。
 
 ## 环境要求
 
-- VS Code ≥ 1.85（回滚测试改动 A）
+- VS Code ≥ 1.85
 - 无需单独安装 Node：扩展使用扩展宿主内置的 Node（`ELECTRON_RUN_AS_NODE`）运行 dsh CLI。
 - 仅当需要**从源码重建客户端 bundle** 时才需要本机 Node ≥ 22.19 与 pnpm 11.7.0（见
   [开发流程](#开发流程)）。
 
 ## 安装
 
-**方式一：安装现成安装包**（推荐；内置 dsh 运行时，约 60 MB）（回滚测试改动 B）
+**方式一：安装现成安装包**（推荐；内置 dsh 运行时，约 60 MB）
 
 安装包随 [GitHub Releases](https://github.com/leathong/dshui-for-vscode/releases) 发布：
 
@@ -99,7 +102,7 @@ npx @vscode/vsce package              # 产出 dshui-for-vscode-<version>.vsix
 
 ## 快速开始
 
-1. 安装扩展（`dshui-for-vscode`）。（回滚测试改动 C）
+1. 安装扩展（`dshui-for-vscode`）。
 2. 打开一个文件夹——该文件夹即成为 dsh 工作区。
 3. 侧边栏出现 dsh UI（活动栏图标 → **dsh**）；打开文件夹时自动显示（可用 `dshui.autoOpen` 关闭，
    用 **dsh UI: Open** 命令重新打开）。
@@ -115,11 +118,24 @@ npx @vscode/vsce package              # 产出 dshui-for-vscode-<version>.vsix
 | `dshui.referenceFolder` | 将文件夹引用插入 dsh 输入框（资源管理器右键菜单） |
 | `dshui.referenceSelection` | 将选中代码片段（含行号）插入 dsh 输入框（编辑器右键菜单） |
 | `dshui.restartServer` | 重启内嵌 dsh 服务器并刷新侧边栏视图（仅命令面板调用，无视图按钮以防误触；服务器未运行时等同启动） |
+| `dshui.showLogs` | 在输出面板中显示 dsh UI 日志（View → Output → **dsh UI**），排查问题用 |
+| `dshui.rollback.accept` | 接受当前回滚 Diff 中的修改（原生 Diff 的 CodeLens / 右键菜单 / 命令面板） |
+| `dshui.rollback.undo` | 撤销当前回滚 Diff 中的修改（原生 Diff 的 CodeLens / 右键菜单 / 命令面板） |
 
 > 重启服务器会中断正在进行的 agent 任务（会话数据持久化于 `~/.dsh`，不会丢失）。共享后端下若
 > 服务器由**另一个窗口**启动，会先弹出确认框说明对其他窗口的影响；确认后本窗口接管：终止原监听
 > 进程并在同一端口重新拉起成为新 owner，其他窗口 URL 不变，重载后自动恢复。修改 `dshui.server.port`
 > 等设置后可用该命令立即生效，无需重载窗口。
+
+### 日志与排查
+
+扩展的报错、插件安装结果、内嵌 dsh 服务器自身的 stdout/stderr（含 api-proxy 补丁的告警）都会写入
+VS Code 的**输出面板**（View → Output → 下拉选择 **dsh UI**，或命令面板运行 **dsh UI: Show Logs**）：
+服务器启动/退出、共享后端注册、打开桥、版本检查等生命周期事件也记录在内。服务器启动失败时，
+错误通知会附带 **View Logs / 查看日志** 按钮，一键打开输出面板。
+
+同一份日志（时间戳 + 级别前缀）还会追加写入 `~/.dsh/dshui-logs/extension.log`（dsh home 下），
+便于命令行/无头环境排查；扩展宿主内部的未捕获异常与未处理的 Promise rejection 也会记录到输出面板。
 
 ### 设置
 
@@ -151,9 +167,11 @@ npx @vscode/vsce package              # 产出 dshui-for-vscode-<version>.vsix
 
 - 扩展内置一个本机 HTTP 桥（127.0.0.1 随机端口，随扩展生命周期启停），对 api-proxy 应用幂等小
   补丁，把「打开文件」请求转交该桥，由扩展经 **VS Code API** 打开文件；
-- 共享后端下每个窗口将自己的工作区与桥登记到 `$DSH_HOME/dshui-bridges.json`，补丁按「打开路径所属
-  工作区（最长前缀）」路由到**点击文件的窗口**的桥；工作区外路径、同目录多窗口等边界场景退回
-  owner 的桥；
+- 共享后端下每个窗口将自己的工作区与桥登记到 `$DSH_HOME/dshui-bridges.json`。补丁优先在**点击所在
+  窗口**打开：客户端把会话的工作区目录随打开请求一起带上（`dshuiOrigin`），目标路径在其中时即路由
+  到点击窗口的桥；否则按「打开路径所属工作区（最长前缀）」路由到**点击文件的窗口**的桥。嵌套工作区
+  （外层与子目录分别开窗）因此也能在点击的窗口打开，而不是总被最长前缀拉到子窗口。工作区外路径、
+  同目录多窗口等边界场景退回 owner 的桥；
 - 桥不可用时依次回退：`code` CLI（应用内路径经 `DSHUI_CODE_CLI` 传给服务器，走 CLI socket 协议
   打开正在运行的 VS Code，同样无确认弹窗）→ `open vscode://file/...`（带确认弹窗）；
 - `.html` / `.pdf` 仍走系统浏览器打开；可用 `dshui.openFilesInVscode` 关闭（恢复系统默认程序）。
@@ -180,16 +198,42 @@ host 插件轮询注册表，无存活窗口时自行退出。采纳方即使遇
 
 注意事项：
 
-- **文件打开**：各窗口登记自己的桥（`dshui-bridges.json`，按 pid 探活清理），补丁按打开路径的
-  工作区前缀路由——文件在哪个窗口的工作区下，就在**那个窗口**打开。边界场景退回 owner 的桥：
-  文件不在任何已登记工作区下（如 `/tmp/...`）、或两个窗口打开同一文件夹（无法区分，取最近登记的）。
-  owner 关闭后桥不可用，回退 `code` CLI（在**最近聚焦**的 VS Code 窗口打开，无确认弹窗），再退回
-  `vscode://file`（带确认弹窗）。
+- **文件打开**：各窗口登记自己的桥（`dshui-bridges.json`，按 pid 探活清理），补丁按「点击 origin
+  优先 → 最长工作区前缀 → owner 桥」路由。客户端随打开请求携带点击所在会话的工作区目录
+  （`dshuiOrigin`），目标路径在其中时就在**点击的窗口**打开——嵌套工作区（外层与子目录分别开窗）
+  下，外层窗口点击子工作区的文件也会在当前窗口打开，而不是被最长前缀拉到子窗口；否则文件在哪个
+  窗口的工作区下就在哪个窗口打开。边界场景退回 owner 的桥：文件不在任何已登记工作区下（如
+  `/tmp/...`）、或两个窗口打开同一文件夹（无法区分，取最近登记的）。owner 关闭后桥不可用，回退
+  `code` CLI（在**最近聚焦**的 VS Code 窗口打开，无确认弹窗），再退回 `vscode://file`（带确认弹窗）。
 - **localStorage 按工作区隔离**：页面注入的补丁把所有 localStorage 键按工作区前缀命名空间隔离
   （host 插件按 `?dshui_workspace` 解析作用域），因此每个工作区各自记住自己上次打开的会话与视图
   状态，互不串扰；同一工作区的多个窗口之间仍共享（如窗口内重载后恢复）。直接访问服务器根地址
   （无工作区查询参数）时保持原版无隔离行为。
 - 共享仅在固定端口（默认）下生效；`dshui.server.port = 0` 时每个窗口各起一个随机端口服务器。
+
+### 修改回滚
+
+扩展内置 `dsh-rollback-plugin`，把 agent 在会话中对工作区文件的每一次 `write` / `edit` 修改
+记录为「未接受修改」（相对会话基线快照），让你在 **VS Code 原生 Diff** 中审查并选择**接受**或
+**撤销**——这是原版 dsh 没有的能力：
+
+- **修改列表**：agent 产生修改后，会话视图中出现可折叠的「修改列表」面板，只列出修改过且尚未
+  接受的文件（含未接受数量、基线轮次）；文件行提供「在编辑器中打开」「接受此修改」「撤销此修改」
+  （撤销需确认），面板头部还有「全部接受」/「全部撤销」与「显示已接受」。
+- **原生 Diff 审查**：点击文件行 → 在 **VS Code 原生 Diff 编辑器**中打开（左侧基线、右侧当前
+  内容，带真实语法高亮）；每个变更 hunk 上方渲染 **Accept / Undo** CodeLens 按钮，也可在 Diff
+  中右键 **Accept This Change** / **Undo This Change**，或从命令面板调用
+  `dshui.rollback.accept` / `dshui.rollback.undo`。
+- **真正落盘**：接受/撤销直接调用 dsh rollback 的 RPC——接受即把修改写入工作区并从未接受列表
+  移除；撤销即把文件恢复到会话基线。操作成功后修改列表自动刷新，已过期的当前 Diff 会自动关闭。
+- **撤销粒度是「文件」**：撤销一个文件会把该文件整体恢复到会话基线（第 N 轮快照），基线之后的
+  修改会一并丢失；面板与确认框对此都有明确提示。
+
+<p align="center">
+  <img src="media/Screenshot_rollback.png" alt="修改回滚：在 VS Code 原生 Diff 中审查并接受/撤销 agent 的修改" width="90%">
+  <br>
+  <em>修改回滚：侧边栏「修改列表」点击文件后，在 VS Code 原生 Diff 中逐 hunk 接受或撤销修改。</em>
+</p>
 
 ## 工作原理
 
@@ -205,7 +249,7 @@ VS Code 侧边栏视图（webview）
 - **启动恢复上次会话**：固定端口复用同一 origin，客户端将当前会话写入 localStorage
   （`dsh.sessions.current`），下次启动原生恢复——打开的就是上次最后使用的会话；无历史会话时退回
   空白新会话。固定端口被占用时直接报错并提示修改 `dshui.server.port`，不再退回随机端口。
-- **插件装载**：激活时把三个 dshui 插件装入 `$DSH_HOME/profiles/node_modules`（同时装入扩展自身
+- **插件装载**：激活时把四个 dshui 插件装入 `$DSH_HOME/profiles/node_modules`（同时装入扩展自身
   `node_modules` 作为 loader 回退），并经 `--patch` 覆盖层接入（见 `patch.yml`）：
   - `dshui-host-ensure-workspace`——host 插件：启动时把工作目录注册为 Workspace，并向页面注入
     `window.__DSHUI_WORKSPACE__`（scope 路径）、`CSS_OVERRIDES` 免重建样式覆盖层（含字号收敛）、
@@ -219,6 +263,8 @@ VS Code 侧边栏视图（webview）
   - `dshui-client-ui-workspace` / `dshui-client-ui-conversation`——两个原版客户端包的**重新构建产物**，
     内含侧边栏过滤、底部输入框改动与「删除会话」菜单（删除经 webview 外壳 → 扩展宿主以 VS Code
     文件 API 完成）。
+  - `dsh-rollback-plugin`——修改回滚插件：记录 agent 的 `write` / `edit` 修改与会话基线快照，
+    提供「修改列表」dock 与原生 Diff 审查（详见 [修改回滚](#修改回滚)）。
 - **删除会话**：dsh 本身只有「归档」（隐藏会话、不删文件），没有删除 RPC。插件将会话行菜单的
   「归档会话」改为「删除会话」：点击后插件向 webview 外壳 postMessage（`dshui:deleteSession`，
   携带会话 id 与其工作区目录），外壳转发给扩展宿主；宿主按 dsh 的会话路径规则

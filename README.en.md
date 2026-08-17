@@ -15,6 +15,7 @@
   - [Opening Files](#opening-files)
   - [Network Links in Messages](#network-links-in-messages)
   - [Multiple Windows (Shared Backend)](#multiple-windows-shared-backend)
+  - [Rollback (Reviewing Modifications)](#rollback-reviewing-modifications)
 - [How It Works](#how-it-works)
 - [Development](#development)
   - [Three Tiers of Iteration](#three-tiers-of-iteration)
@@ -75,6 +76,9 @@ deep VS Code integrations:
   [Referencing Files and Code Selections](#referencing-files-and-code-selections)).
 - **Shared backend across windows:** all windows reuse a single embedded server — no port conflicts,
   consistent session data (see [Multiple Windows (Shared Backend)](#multiple-windows-shared-backend)).
+- **Modification rollback:** every file change the agent makes lands in the sidebar "Modifications"
+  panel; review each file in a native VS Code diff and accept or undo it (see
+  [Rollback (Reviewing Modifications)](#rollback-reviewing-modifications)).
 
 ## Requirements
 
@@ -128,6 +132,9 @@ For development, press **F5** (the repo ships `.vscode/launch.json`), or run
 | `dshui.referenceFolder` | Insert a folder reference into the dsh input box (Explorer context menu) |
 | `dshui.referenceSelection` | Insert the selected code (with line numbers) into the dsh input box (editor context menu) |
 | `dshui.restartServer` | Restart the embedded dsh server and refresh the sidebar view (also the ⟳ button in the view title bar; equivalent to starting when the server is not running) |
+| `dshui.showLogs` | Reveal the dsh UI logs in the Output panel (View → Output → **dsh UI**), for troubleshooting |
+| `dshui.rollback.accept` | Accept the modification in the active rollback diff (CodeLens / context menu / command palette) |
+| `dshui.rollback.undo` | Undo the modification in the active rollback diff (CodeLens / context menu / command palette) |
 
 > Restarting the server interrupts in-flight agent tasks (session data persists in `~/.dsh` and is not
 > lost). Under the shared backend, if the server was started by **another window**, a confirmation
@@ -135,6 +142,19 @@ For development, press **F5** (the repo ships `.vscode/launch.json`), or run
 > original listening process is terminated and a new one is started on the same port as the new owner.
 > Other windows keep their URLs and recover automatically after a reload. Use this command to apply
 > changes to settings such as `dshui.server.port` immediately, without reloading the window.
+
+### Logs & Troubleshooting
+
+Extension errors, plugin-install results, and the embedded dsh server's own stdout/stderr (including
+the api-proxy patch's warnings) are written to the VS Code **Output panel** (View → Output → pick
+**dsh UI**, or run **dsh UI: Show Logs** from the Command Palette). Lifecycle events — server
+start/exit, shared-backend registration, the open bridge, the update check — are recorded there too.
+When the server fails to start, the error notification offers a **View Logs** action that opens the
+panel directly.
+
+The same log lines (timestamp + level prefix) are also appended to
+`~/.dsh/dshui-logs/extension.log` (under your dsh home) for headless/CLI debugging, and uncaught
+exceptions and unhandled promise rejections inside the extension host are recorded as well.
 
 ### Settings
 
@@ -173,9 +193,14 @@ popup**:
   applies an idempotent patch to the api-proxy so "open file" requests are handed to the bridge, which
   opens the file via the **VS Code API**.
 - Under the shared backend, each window registers its workspace and bridge in
-  `$DSH_HOME/dshui-bridges.json`; the patch routes by "longest-prefix workspace of the opened path" to
-  the bridge of **the window where the file was clicked**. Edge cases (paths outside any workspace,
-  multiple windows on the same directory) fall back to the owner's bridge.
+  `$DSH_HOME/dshui-bridges.json`. The patch prefers the **window where the click happened**: the client
+  attaches the session's workspace directory to the open request (`dshuiOrigin`), and when that
+  workspace contains the target path the open is routed to the clicking window's bridge; otherwise it
+  routes by "longest-prefix workspace of the opened path" to the bridge of **the window where the file
+  was clicked**. Nested workspaces (the outer folder and a subdirectory open as separate windows)
+  therefore also open in the window you clicked in, instead of always being pulled into the child
+  window by the longest prefix. Edge cases (paths outside any workspace, multiple windows on the same
+  directory) fall back to the owner's bridge.
 - When the bridge is unavailable, the fallback chain is: the `code` CLI (in-app paths are passed to the
   server via `DSHUI_CODE_CLI`, which opens the running VS Code through the CLI socket protocol, also
   without a confirmation popup) → `open vscode://file/...` (with a confirmation popup).
@@ -211,12 +236,16 @@ disk-state warning from dsh's upstream README is avoided.
 Notes:
 
 - **File opening:** each window registers its own bridge (`dshui-bridges.json`, cleaned by pid
-  liveness), and the patch routes by the workspace prefix of the opened path — a file opens in
-  **whichever window** its workspace belongs to. Edge cases fall back to the owner's bridge: paths not
-  under any registered workspace (e.g. `/tmp/...`), or two windows on the same folder (indistinguishable;
-  the most recently registered one wins). When the owner closes and its bridge is gone, the fallback is
-  the `code` CLI (opens in the **most recently focused** VS Code window, no popup), then
-  `vscode://file` (with a confirmation popup).
+  liveness), and the patch routes by "click origin first → longest workspace prefix → owner bridge".
+  The client attaches the session's workspace directory to the open request (`dshuiOrigin`); when the
+  target path lies inside it, the file opens in **the window where it was clicked** — with nested
+  workspaces (outer folder and a subdirectory open as separate windows), clicking a child-workspace
+  file from the outer window opens it there instead of being pulled into the child window. Otherwise a
+  file opens in **whichever window** its workspace belongs to. Edge cases fall back to the owner's
+  bridge: paths not under any registered workspace (e.g. `/tmp/...`), or two windows on the same folder
+  (indistinguishable; the most recently registered one wins). When the owner closes and its bridge is
+  gone, the fallback is the `code` CLI (opens in the **most recently focused** VS Code window, no
+  popup), then `vscode://file` (with a confirmation popup).
 - **Per-workspace localStorage:** an injected patch namespaces every localStorage key by the
   workspace scope (resolved from `?dshui_workspace`), so each workspace remembers its own last-opened
   session and view state and never sees another workspace's. Windows on the same folder still share
@@ -224,6 +253,38 @@ Notes:
   query keeps stock unscoped behavior.
 - Sharing only applies on the fixed port (the default); with `dshui.server.port = 0`, every window
   starts its own server on a random port.
+
+### Rollback (Reviewing Modifications)
+
+The extension ships `dsh-rollback-plugin`, which records every `write` / `edit` the agent makes to
+workspace files during a session (against the session's baseline snapshot) as "unaccepted
+modifications", so you can review each one in a **native VS Code diff** and choose to **accept** or
+**undo** it — a capability the stock dsh does not have:
+
+- **The Modifications panel:** once the agent has made changes, a collapsible "Modifications" panel
+  appears in the conversation view listing only the modified, unaccepted files (with the unaccepted
+  count and baseline turn). Each file row offers "open in editor", "accept this modification", and
+  "undo this modification" (undo asks for confirmation); the panel header has "Accept all" / "Undo
+  all" and a "show accepted" toggle.
+- **Native diff review:** clicking a file row opens it in a **native VS Code diff editor** (baseline
+  on the left, current content on the right, with real syntax highlighting). **Accept / Undo** CodeLens
+  buttons render above each changed hunk; you can also right-click inside the diff → **Accept This
+  Change** / **Undo This Change**, or invoke `dshui.rollback.accept` / `dshui.rollback.undo` from the
+  command palette.
+- **Real on-disk effect:** Accept / Undo call the dsh rollback RPC directly — Accept writes the change
+  into the workspace and removes it from the unaccepted list; Undo restores the file to the session
+  baseline. After a successful operation the panel refreshes automatically and the now-stale diff
+  closes.
+- **Undo is whole-file:** undoing a file restores it entirely to the session baseline (turn N
+  snapshot); later modifications to that file are lost too. Both the panel and the confirmation dialog
+  make this explicit.
+
+<p align="center">
+  <img src="media/Screenshot_rollback.png" alt="Rollback: review the agent's modifications in a native VS Code diff and accept or undo them" width="90%">
+  <br>
+  <em>Rollback: after clicking a file in the sidebar "Modifications" panel, accept or undo each hunk in
+  a native VS Code diff.</em>
+</p>
 
 ## How It Works
 
@@ -240,7 +301,7 @@ VS Code sidebar view (webview)
   each folder restores its own last session on the next launch; with no history, it falls back to a
   blank new session. When the fixed port is taken, startup reports an error and asks you to change the
   port (no random-port fallback).
-- **Plugin loading:** on activation, three dshui plugins are installed into
+- **Plugin loading:** on activation, four dshui plugins are installed into
   `$DSH_HOME/profiles/node_modules` (with the extension's own `node_modules` as a loader fallback) and
   wired in through the `--patch` overlay (see `patch.yml`):
   - `dshui-host-ensure-workspace` — the host plugin: registers the working directory as a Workspace at
@@ -257,6 +318,9 @@ VS Code sidebar view (webview)
     stock client packages, containing the sidebar filtering, the bottom-pinned input box, and the
     "Delete Session" menu (deletion goes through the webview shell → the extension host via the VS
     Code file API).
+  - `dsh-rollback-plugin` — the modification-rollback plugin: records the agent's `write` / `edit`
+    modifications and the session baseline snapshot, and provides the "Modifications" dock and native
+    diff review (see [Rollback (Reviewing Modifications)](#rollback-reviewing-modifications)).
 - **Deleting sessions:** dsh itself only offers "archive" (hide the session, keep the files) and has no
   delete RPC. The plugin renames the session-row menu entry from "Archive Session" to "Delete Session":
   on click, the plugin posts a message to the webview shell (`dshui:deleteSession`, with the session id

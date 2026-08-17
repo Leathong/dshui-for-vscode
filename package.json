@@ -86,6 +86,11 @@
         "category": "dsh UI"
       },
       {
+        "command": "dshui.showLogs",
+        "title": "Show Logs",
+        "category": "dsh UI"
+      },
+      {
         "command": "dshui.rollback.accept",
         "title": "Accept This Change",
         "category": "dsh UI"

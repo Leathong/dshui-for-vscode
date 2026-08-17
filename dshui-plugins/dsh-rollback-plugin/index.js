@@ -1893,7 +1893,9 @@ var RollbackRestore = class {
 			opened: false,
 			reason: "invalid-path"
 		});
-		const bridge = await pickBridgeEndpoint(abs);
+		// dshui: the session's project cwd is the click origin — a nested
+		// workspace file opens in the window whose session it was clicked in.
+		const bridge = await pickBridgeEndpoint(abs, cwd);
 		if (bridge === null) return ok({
 			opened: false,
 			reason: "bridge-unavailable"
@@ -2191,7 +2193,14 @@ function recordHunks(record) {
 		newLine: 1
 	}];
 }
-async function pickBridgeEndpoint(abs) {
+async function pickBridgeEndpoint(abs, origin) {
+	if (origin !== void 0 && origin !== "" && (abs === origin || abs.startsWith(origin.endsWith(path.sep) ? origin : `${origin}${path.sep}`))) {
+		// dshui: the click origin (the session's project cwd) contains the
+		// opened path, so open in the origin window — nested workspaces make a
+		// path match several windows, and only the origin is unambiguous.
+		const own = await bridgeForWorkspace(origin);
+		if (own !== null) return own;
+	}
 	const bridgesFile = process.env.DSHUI_BRIDGES_FILE;
 	let best = null;
 	if (bridgesFile !== void 0 && bridgesFile !== "") try {
@@ -2219,6 +2228,22 @@ async function pickBridgeEndpoint(abs) {
 		endpoint,
 		...token === void 0 || token === "" ? {} : { token }
 	};
+}
+async function bridgeForWorkspace(workspace) {
+	const bridgesFile = process.env.DSHUI_BRIDGES_FILE;
+	if (bridgesFile === void 0 || bridgesFile === "") return null;
+	try {
+		const parsed = JSON.parse(fs.readFileSync(bridgesFile, "utf8"));
+		for (const entry of Object.values(parsed)) {
+			if (typeof entry.pid !== "number" || !isAlive$1(entry.pid)) continue;
+			if (typeof entry.workspace !== "string" || entry.workspace === "" || typeof entry.endpoint !== "string" || entry.endpoint === "") continue;
+			if (entry.workspace === workspace) return {
+				endpoint: entry.endpoint,
+				...typeof entry.token === "string" && entry.token !== "" ? { token: entry.token } : {}
+			};
+		}
+	} catch {}
+	return null;
 }
 function isAlive$1(pid) {
 	try {

@@ -15,6 +15,7 @@ import { spawn, type ChildProcess } from 'node:child_process'
 import * as fs from 'node:fs'
 import * as http from 'node:http'
 import * as path from 'node:path'
+import { logger } from './logger'
 
 export interface DshServerOptions {
   /** Absolute path of the folder opened in VS Code (the dsh workspace root). */
@@ -223,7 +224,7 @@ export class DshServer {
           this.restarts += 1
           this.spawn(this.options.port).then(this.options.onReady).catch((error) => {
             this.options.onExit?.(null, null)
-            console.error('[dshui] dsh web restart failed:', error)
+            logger.error('[dshui] dsh web restart failed:', error)
           })
         }
       })
@@ -260,7 +261,9 @@ export class DshServer {
         const detail = summary === undefined ? '' : ` — ${summary.slice(0, 240)}`
         throw new Error(
           `dsh web failed to start: ${cause}${detail}. `
-          + `Check ${path.join(this.options.dshHome, 'dshui-logs', 'extension.log')} for the server output.`,
+          + 'See the "dsh UI" output channel (View → Output → dsh UI, or run the '
+          + '"dshui: Show Logs" command) or '
+          + `${path.join(this.options.dshHome, 'dshui-logs', 'extension.log')} for the server output.`,
         )
       }
       throw error

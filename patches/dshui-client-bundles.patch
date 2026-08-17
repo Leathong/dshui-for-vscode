@@ -1,3 +1,43 @@
+diff --git a/packages/client/ui-conversation/src/client/apply.ts b/packages/client/ui-conversation/src/client/apply.ts
+index f57caea9e5..5798683fa5 100644
+--- a/packages/client/ui-conversation/src/client/apply.ts
++++ b/packages/client/ui-conversation/src/client/apply.ts
+@@ -4,6 +4,10 @@ import { resolveSlotLabel, type BoundActions } from '@deepseek-ai/dsh-client-ui-
+ import {
+   resolveWorkspacePath, type ISessions, type SessionId,
+ } from '@deepseek-ai/dsh-client-runtime/client'
++// Type-only: the shared wire client (ctx.connection, see the inject list);
++// the dshui server patch keeps the dshuiOrigin field in the host.openPath
++// payload, which the stock client schema predates.
++import type { ConnectionHandle } from '@deepseek-ai/dsh-client-connection/client'
+ // Type-only: the ctx.settingsScope Context merge. Cross-plugin collaboration
+ // goes through the service, never a value import (client bundle purity gate).
+ import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
+@@ -394,7 +398,23 @@ export function apply(ctx: Context): void {
+         fileMentions: owner => ctx.get('chatFileMentions')?.forClosing(owner),
+         openFile: (path) => {
+           const cwd = sessions.list.getSnapshot().byId[sessionId]?.cwd
+-          void workspaces.openPath(resolveWorkspacePath(cwd, path)).catch(() => {
++          const resolved = resolveWorkspacePath(cwd, path)
++          // dshui: attach the click origin (the session's project directory —
++          // this window's workspace) so a file that also belongs to a nested
++          // workspace opens in the window where it was clicked, not in the
++          // most specific workspace window. The stock call remains the
++          // fallback when the origin is unknown (e.g. a session without cwd).
++          if (cwd !== undefined && cwd !== '') {
++            // The dshui server patch keeps this extra field in the payload;
++            // the shared client schema predates it, hence the widened type.
++            const payload: { path: string; dshuiOrigin?: string } = { path: resolved, dshuiOrigin: cwd }
++            void (ctx.get('connection') as ConnectionHandle).api.host.openPath(payload).catch(() => {
++              // Host/OS open failures stay silent in the chat row; the native
++              // app surfaces its own error dialog when the path is unusable.
++            })
++            return
++          }
++          void workspaces.openPath(resolved).catch(() => {
+             // Host/OS open failures stay silent in the chat row; the native
+             // app surfaces its own error dialog when the path is unusable.
+           })
 diff --git a/packages/client/ui-conversation/src/client/skeleton/ConversationRoot.module.css b/packages/client/ui-conversation/src/client/skeleton/ConversationRoot.module.css
 index 6146d42810..ebdac94c44 100644
 --- a/packages/client/ui-conversation/src/client/skeleton/ConversationRoot.module.css
@@ -224,7 +264,7 @@ index 3a2c2da24d..27b1570b44 100644
 -export default clientBundle('@deepseek-ai/dsh-client-ui-conversation', ['lib/types/index.js', 'lib/types/invariant.js'])
 +export default clientBundle('dshui-client-ui-conversation', ['lib/types/index.js', 'lib/types/invariant.js'])
 diff --git a/packages/client/ui-workspace/src/client/WorkspaceBrowser.tsx b/packages/client/ui-workspace/src/client/WorkspaceBrowser.tsx
-index d0f6835472..e7e9005166 100644
+index d0f6835472..4d52371bea 100644
 --- a/packages/client/ui-workspace/src/client/WorkspaceBrowser.tsx
 +++ b/packages/client/ui-workspace/src/client/WorkspaceBrowser.tsx
 @@ -20,7 +20,7 @@ import type {
@@ -241,7 +281,7 @@ index d0f6835472..e7e9005166 100644
  const COLLAPSED_SESSION_LIMIT = 5
  
 +/** The dshui workspace scope (VSCode workspace root), resolved once at load. */
-+const SCOPE = scopedWorkspacePath()
++const SCOPE = typeof window === 'undefined' ? '' : scopedWorkspacePath()
 +
  /** Keep controlled input and RPC payload inside the session.search wire contract. */
  function sanitizeSearchQuery(value: string): string {
@@ -280,7 +320,7 @@ index d0f6835472..e7e9005166 100644
    const ungroupedSessionIds = useMemo(() => {
      const accounted = new Set(workspaces.flatMap(workspace => workspace.sessionIds))
 -    return list.ids.filter(id => list.byId[id] !== undefined && !accounted.has(id))
-+    return list.ids.filter(id => {
++    return list.ids.filter((id) => {
 +      const summary = list.byId[id]
 +      return summary !== undefined && !accounted.has(id) && (SCOPE === '' || summary.cwd === SCOPE)
 +    })
@@ -439,42 +479,226 @@ index d0f6835472..e7e9005166 100644
      })
    }
  
-@@ -974,6 +996,10 @@ export function WorkspaceBrowser({
+@@ -974,116 +996,122 @@ export function WorkspaceBrowser({
  
    return (
      <div className={clsx(css.root, !wide && css.rail)}>
+-      <div className={css.sectionHeader}>
+-        {wide && (
+-          <span className={clsx(css.sectionLabel, css.wide, searchExpanded && css.sectionLabelHidden)}>
+-            {groupBy === 'flat' ? t('section.sessions') : t('section.workspaces')}
+-          </span>
+-        )}
+-        {wide && (
+-          <div className={clsx(css.searchSlot, searchExpanded && css.searchSlotExpanded)}>
+-            <div
+-              ref={searchRoot}
+-              className={clsx(css.search, searchExpanded && css.searchExpanded)}
+-              onClick={() => {
+-                setWsPickerOpen(false)
+-                setSearchExpanded(true)
+-                searchInput.current?.focus()
+-              }}
+-            >
+-              <Tooltip label={t('search')} side="bottom" delayMs={500} disabled={searchExpanded}>
+-                <button
+-                  type="button"
+-                  className={css.searchButton}
+-                  aria-label={t('search.sessions.aria')}
+-                  aria-expanded={searchExpanded}
+-                  onClick={() => {
+-                    setWsPickerOpen(false)
+-                    setSearchExpanded(true)
+-                  }}
+-                >
+-                  <IconSearchOutline16 size={searchExpanded ? 11 : 14} />
+-                </button>
+-              </Tooltip>
+-              <input
+-                ref={searchInput}
+-                className={css.searchInput}
+-                type="text"
+-                placeholder={t('search.placeholder')}
+-                maxLength={SEARCH_QUERY_MAX_CODE_UNITS}
+-                value={query}
+-                tabIndex={searchExpanded ? 0 : -1}
+-                onChange={(e) => { setQuery(sanitizeSearchQuery(e.target.value)) }}
+-                onKeyDown={(e) => {
+-                  if (e.key !== 'Escape') return
+-                  setQuery('')
+-                  setSearchExpanded(false)
 +      {/* Under the dshui scope the rail section header holds nothing (the add
 +          action is hidden), so it would render as a blank 36px column between
 +          New Session and the rail search — skip it entirely. */}
 +      {SCOPE !== '' && !wide ? null : (
-       <div className={css.sectionHeader}>
-         {wide && (
-           <span className={clsx(css.sectionLabel, css.wide, searchExpanded && css.sectionLabelHidden)}>
-@@ -1038,7 +1064,7 @@ export function WorkspaceBrowser({
-           </div>
-         )}
-         <div className={clsx(css.headerActions, wide && searchExpanded && css.headerActionsHidden)}>
--          {wide && (
-+          {wide && SCOPE === '' && (
-             <ViewOptionsMenu
-               groupBy={groupBy}
-               orderBy={orderBy}
-@@ -1049,8 +1075,9 @@ export function WorkspaceBrowser({
-           )}
-           {/* Adding is the button's one action, so a composition with no
-               picking affordance has nothing to offer here: the region hides the
--              button rather than leaving a dead one in the header. */}
--          {directoryFlowAvailable && (
++        <div className={css.sectionHeader}>
++          {wide && (
++            <span className={clsx(css.sectionLabel, css.wide, searchExpanded && css.sectionLabelHidden)}>
++              {groupBy === 'flat' ? t('section.sessions') : t('section.workspaces')}
++            </span>
++          )}
++          {wide && (
++            <div className={clsx(css.searchSlot, searchExpanded && css.searchSlotExpanded)}>
++              <div
++                ref={searchRoot}
++                className={clsx(css.search, searchExpanded && css.searchExpanded)}
++                onClick={() => {
++                  setWsPickerOpen(false)
++                  setSearchExpanded(true)
++                  searchInput.current?.focus()
+                 }}
++              >
++                <Tooltip label={t('search')} side="bottom" delayMs={500} disabled={searchExpanded}>
++                  <button
++                    type="button"
++                    className={css.searchButton}
++                    aria-label={t('search.sessions.aria')}
++                    aria-expanded={searchExpanded}
++                    onClick={() => {
++                      setWsPickerOpen(false)
++                      setSearchExpanded(true)
++                    }}
++                  >
++                    <IconSearchOutline16 size={searchExpanded ? 11 : 14} />
++                  </button>
++                </Tooltip>
++                <input
++                  ref={searchInput}
++                  className={css.searchInput}
++                  type="text"
++                  placeholder={t('search.placeholder')}
++                  maxLength={SEARCH_QUERY_MAX_CODE_UNITS}
++                  value={query}
++                  tabIndex={searchExpanded ? 0 : -1}
++                  onChange={(e) => { setQuery(sanitizeSearchQuery(e.target.value)) }}
++                  onKeyDown={(e) => {
++                    if (e.key !== 'Escape') return
++                    setQuery('')
++                    setSearchExpanded(false)
++                  }}
++                />
++                {searchExpanded && (
++                  <button
++                    type="button"
++                    className={css.clearButton}
++                    aria-label={t('search.clear')}
++                    onClick={(e) => {
++                      e.stopPropagation()
++                      setQuery('')
++                      setSearchExpanded(false)
++                    }}
++                  >
++                    <IconCloseFill14 />
++                  </button>
++                )}
++              </div>
++            </div>
++          )}
++          <div className={clsx(css.headerActions, wide && searchExpanded && css.headerActionsHidden)}>
++            {wide && SCOPE === '' && (
++              <ViewOptionsMenu
++                groupBy={groupBy}
++                orderBy={orderBy}
++                onGroupPick={(mode) => { actions.setGroupBy(mode) }}
++                onOrderPick={(mode) => { actions.setOrderBy(mode) }}
++                t={t}
+               />
+-              {searchExpanded && (
++            )}
++            {/* Adding is the button's one action, so a composition with no
++              picking affordance has nothing to offer here: the region hides the
 +              button rather than leaving a dead one in the header. Under the
 +              dshui scope the workspace is fixed, so the add action is hidden. */}
-+          {SCOPE === '' && directoryFlowAvailable && (
-             <Tooltip label={t('workspace.add')} side="bottom" delayMs={500}>
-               <button
-                 ref={wsPlusRef}
-@@ -1084,6 +1111,7 @@ export function WorkspaceBrowser({
-           onClose={() => { setWsPickerOpen(false) }}
-         />
-       </div>
++            {SCOPE === '' && directoryFlowAvailable && (
++              <Tooltip label={t('workspace.add')} side="bottom" delayMs={500}>
+                 <button
++                  ref={wsPlusRef}
+                   type="button"
+-                  className={css.clearButton}
+-                  aria-label={t('search.clear')}
+-                  onClick={(e) => {
+-                    e.stopPropagation()
+-                    setQuery('')
+-                    setSearchExpanded(false)
++                  className={css.iconButton}
++                  aria-label={t('workspace.add')}
++                  onClick={() => {
++                    setWsPickerOpen(v => !v)
+                   }}
+                 >
+-                  <IconCloseFill14 />
++                  <IconProjectAddOutline16 size={wide ? 16 : 18} />
+                 </button>
+-              )}
+-            </div>
++              </Tooltip>
++            )}
+           </div>
+-        )}
+-        <div className={clsx(css.headerActions, wide && searchExpanded && css.headerActionsHidden)}>
+-          {wide && (
+-            <ViewOptionsMenu
+-              groupBy={groupBy}
+-              orderBy={orderBy}
+-              onGroupPick={(mode) => { actions.setGroupBy(mode) }}
+-              onOrderPick={(mode) => { actions.setOrderBy(mode) }}
+-              t={t}
+-            />
+-          )}
+-          {/* Adding is the button's one action, so a composition with no
+-              picking affordance has nothing to offer here: the region hides the
+-              button rather than leaving a dead one in the header. */}
+-          {directoryFlowAvailable && (
+-            <Tooltip label={t('workspace.add')} side="bottom" delayMs={500}>
+-              <button
+-                ref={wsPlusRef}
+-                type="button"
+-                className={css.iconButton}
+-                aria-label={t('workspace.add')}
+-                onClick={() => {
+-                  setWsPickerOpen(v => !v)
+-                }}
+-              >
+-                <IconProjectAddOutline16 size={wide ? 16 : 18} />
+-              </button>
+-            </Tooltip>
+-          )}
++          {/* Add flow + its error dialog (same package — direct composition). */}
++          <WorkspacePickFlow
++            t={t}
++            open={wsPickerOpen}
++            anchorRef={wsPlusRef}
++            useWorkspaces={useWorkspaces}
++            createWorkspace={createWorkspace}
++            useDirectoryFlow={useDirectoryFlow}
++            renderDirectoryFlow={owner => renderSlot('sidebar.workspaces.directoryFlow', owner)}
++            addOnly
++            side="right"
++            onPick={(workspaceId) => {
++              setWsPickerOpen(false)
++              startSession(workspaceId)
++            }}
++            onClose={() => { setWsPickerOpen(false) }}
++          />
+         </div>
+-        {/* Add flow + its error dialog (same package — direct composition). */}
+-        <WorkspacePickFlow
+-          t={t}
+-          open={wsPickerOpen}
+-          anchorRef={wsPlusRef}
+-          useWorkspaces={useWorkspaces}
+-          createWorkspace={createWorkspace}
+-          useDirectoryFlow={useDirectoryFlow}
+-          renderDirectoryFlow={owner => renderSlot('sidebar.workspaces.directoryFlow', owner)}
+-          addOnly
+-          side="right"
+-          onPick={(workspaceId) => {
+-            setWsPickerOpen(false)
+-            startSession(workspaceId)
+-          }}
+-          onClose={() => { setWsPickerOpen(false) }}
+-        />
+-      </div>
 +      )}
  
        {/* The collapsed rail keeps search as its own 36px control. */}
@@ -538,21 +762,39 @@ index 8027a3623a..976c5f1ea9 100644
     * Reorder a session inside its Workspace account (DOM-insertBefore
     * semantics: omitted anchor appends to the end). The view refreshes from
 diff --git a/packages/client/ui-workspace/src/client/index.ts b/packages/client/ui-workspace/src/client/index.ts
-index 6b14243ecf..8f23d5c28f 100644
+index 6b14243ecf..54cf25d43e 100644
 --- a/packages/client/ui-workspace/src/client/index.ts
 +++ b/packages/client/ui-workspace/src/client/index.ts
 @@ -10,6 +10,7 @@
   */
  import type { HostObservable } from '@deepseek-ai/dsh-client-ui-slots'
  import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
-+import type { SessionId } from '@deepseek-ai/dsh-client-runtime/client'
++import type { SessionId, WorkspaceId } from '@deepseek-ai/dsh-client-runtime/client'
  // Type-only: pulls the locale plugin's Context merge (ctx.locale).
  import type {} from '@deepseek-ai/dsh-client-locale/client'
  import type { WorkspaceBrowserInjected, WorkspacePickerInjected } from './contract/slots.ts'
-@@ -34,6 +35,15 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
+@@ -17,6 +18,7 @@ import { createWorkspaceViewStore } from './stores.ts'
+ import { WorkspaceBrowser } from './WorkspaceBrowser.tsx'
+ import { WorkspacePicker } from './WorkspacePicker.tsx'
+ import { en, zh, type WorkspaceKey } from './locales.ts'
++import { scopedWorkspacePath } from './tree.ts'
+ 
+ export type {
+   DirectoryFlowOwnerProps, DirectoryFlowSlotName, DirectoryPickingHooks, DirectoryPickingInjected,
+@@ -34,6 +36,25 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
  /** Dictionary namespace owned by this plugin. */
  const NS = 'workspace'
  
++/**
++ * The dshui workspace scope (same value the browser derives): the VS Code
++ * workspace root published by the host plugin. Empty in a plain browser tab.
++ * Resolved lazily inside the effect so importing this module never touches
++ * `window` (the apply spec runs in a node environment).
++ */
++function workspaceScope(): string {
++  return typeof window === 'undefined' ? '' : scopedWorkspacePath()
++}
++
 +/** One session-delete request's host-reply timeout (ms). */
 +const DELETE_TIMEOUT_MS = 15_000
 +
@@ -565,10 +807,60 @@ index 6b14243ecf..8f23d5c28f 100644
  /**
   * Required services (cordis fiber inject). The target slots are declared by
   * the ui-sidebar / ui-conversation applies, whose activation order relative
-@@ -53,6 +63,52 @@ export const inject = ['slots', 'sessions', 'workspaces', 'locale']
+@@ -53,6 +74,105 @@ export const inject = ['slots', 'sessions', 'workspaces', 'locale']
  export function apply(ctx: ClientContext): void {
    ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'ui-workspace: dictionaries')
  
++  // ── Scoped new-session routing ────────────────────────────────────────────
++  // With the shared backend every window scopes the UI to its own folder
++  // (the dshui workspace scope), but the runtime's New Session flow resolves
++  // its target from the current Session's Workspace, then the
++  // most-recently-active Workspace — and in a multi-window setup that
++  // recency projection can belong to ANOTHER window's folder, so a New
++  // Session would be created there instead of here. In scoped mode every
++  // session connect (the initial selection, the sidebar New Session button,
++  // the browser group action) funnels through WorkspaceRuntime
++  // .connectWorkspace; it is routed to the scoped Workspace instead. The
++  // host registers the folder shortly after this window attaches to the
++  // shared server (marker poll), so a connect that finds no scoped Workspace
++  // yet waits for that registration rather than falling back to a foreign
++  // Workspace.
++  ctx.effect(() => {
++    const scope = workspaceScope()
++    if (scope === '') return () => {}
++    const service = ctx.workspaces
++    const originalConnect = service.connectWorkspace.bind(service)
++    const scopedWorkspaceId = (): WorkspaceId | undefined =>
++      service.list.getSnapshot().items.find(item => item.path === scope)?.workspaceId
++    const connectScoped = (): Promise<SessionId> => {
++      const id = scopedWorkspaceId()
++      if (id !== undefined) return originalConnect(id)
++      return new Promise((resolve, reject) => {
++        const timer = window.setTimeout(() => {
++          unsubscribe()
++          reject(new Error(`dshui: scoped workspace "${scope}" was not registered within 15s`))
++        }, 15_000)
++        const unsubscribe = service.list.subscribe(() => {
++          const now = scopedWorkspaceId()
++          if (now === undefined) return
++          unsubscribe()
++          window.clearTimeout(timer)
++          originalConnect(now).then(resolve, reject)
++        })
++        // Close the subscribe race: the workspace may have been registered
++        // between the check above and this subscription.
++        const now = scopedWorkspaceId()
++        if (now !== undefined) {
++          unsubscribe()
++          window.clearTimeout(timer)
++          originalConnect(now).then(resolve, reject)
++        }
++      })
++    }
++    service.connectWorkspace = () => connectScoped()
++    return () => { service.connectWorkspace = originalConnect }
++  }, 'ui-workspace: scoped session-connect routing')
++
 +  // ── Session deletion through the hosting VS Code ──────────────────────────
 +  // The browser cannot delete a dsh session file (dsh exposes no delete RPC).
 +  // The plugin posts { type: 'dshui:deleteSession', sessionId, cwd } to the
@@ -591,6 +883,9 @@ index 6b14243ecf..8f23d5c28f 100644
 +    pending.resolve(data.ok === true, typeof data.error === 'string' ? data.error : undefined)
 +  }
 +  ctx.effect(() => {
++    // The host relay only exists in the VS Code webview; the node test
++    // environment has no `window`, so the listener is a no-op there.
++    if (typeof window === 'undefined') return () => {}
 +    window.addEventListener('message', onHostMessage)
 +    return () => {
 +      window.removeEventListener('message', onHostMessage)
@@ -618,7 +913,7 @@ index 6b14243ecf..8f23d5c28f 100644
    const searchSessions: WorkspaceBrowserInjected['searchSessions'] = async (query, signal) => {
      const result = await ctx.sessions.search(query, signal)
      if (!result.ok) throw new Error(result.error.message)
-@@ -94,7 +150,17 @@ export function apply(ctx: ClientContext): void {
+@@ -94,7 +214,17 @@ export function apply(ctx: ClientContext): void {
      insertWorkspaceBefore: async (workspaceId, beforeWorkspaceId) => {
        await ctx.workspaces.insertBefore(workspaceId, beforeWorkspaceId)
      },

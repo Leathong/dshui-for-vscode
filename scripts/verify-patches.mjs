@@ -20,7 +20,7 @@ const CHECKS = [
   },
   {
     file: 'packages/client/ui-workspace/src/client/WorkspaceBrowser.tsx',
-    markers: ["const SCOPE = scopedWorkspacePath()", 'SCOPE === \'\' && directoryFlowAvailable', "SCOPE !== '' && !wide ? null", 'onSessionDelete', 'deletedSessionIds'],
+    markers: ["typeof window === 'undefined' ? '' : scopedWorkspacePath()", 'SCOPE === \'\' && directoryFlowAvailable', "SCOPE !== '' && !wide ? null", 'onSessionDelete', 'deletedSessionIds'],
   },
   {
     file: 'packages/client/ui-workspace/src/client/contract/slots.ts',
@@ -69,6 +69,10 @@ const CHECKS = [
   {
     file: 'packages/client/ui-conversation/src/client/skeleton/HeroShell.module.css',
     markers: ['.workspaceStatic'],
+  },
+  {
+    file: 'packages/client/ui-conversation/src/client/apply.ts',
+    markers: ['dshuiOrigin: cwd', 'ctx.get(\'connection\') as ConnectionHandle'],
   },
   {
     file: 'packages/client/ui-conversation/tsdown.config.ts',

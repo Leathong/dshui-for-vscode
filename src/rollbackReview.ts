@@ -21,6 +21,7 @@
 import * as crypto from 'node:crypto'
 import * as fs from 'node:fs'
 import * as vscode from 'vscode'
+import { logger } from './logger'
 
 export const ROLLBACK_SCHEME = 'dshui-rollback'
 
@@ -397,6 +398,7 @@ export class RollbackReviewManager {
   async showFile(port: number, sessionId: string, path: string): Promise<void> {
     const remote = await rollbackSessionChanges(port, sessionId)
     if (!remote.ok) {
+      logger.error(`[dshui] rollback/sessionChanges failed (port ${port}): ${remote.error.message}`)
       void vscode.window.showErrorMessage(`dshui: ${L('failed to load modification list', '加载修改列表失败')}: ${remote.error.message}`)
       return
     }
@@ -435,6 +437,7 @@ export class RollbackReviewManager {
   async showModification(port: number, sessionId: string, path: string, modificationId: string): Promise<void> {
     const remote = await rollbackSessionChanges(port, sessionId)
     if (!remote.ok) {
+      logger.error(`[dshui] rollback/sessionChanges failed (port ${port}): ${remote.error.message}`)
       void vscode.window.showErrorMessage(`dshui: ${L('failed to load modification list', '加载修改列表失败')}: ${remote.error.message}`)
       return
     }
@@ -562,6 +565,7 @@ export class RollbackReviewManager {
 
   private finishMutation(result: RpcResult<unknown>, action: string): void {
     if (!result.ok) {
+      logger.error(`[dshui] ${action} failed: ${result.error.message}`)
       void vscode.window.showErrorMessage(`dshui: ${action} failed: ${result.error.message}`)
       return
     }
