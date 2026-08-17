@@ -10,6 +10,7 @@
 #   make publish    发布到 VS Code 市场（默认不递增版本，BUMP=... 时递增）
 #   make publish-vsix    直接上传当前 vsix（不递增版本）
 #   make publish-ovsx    发布到 Open VSX 市场（需 OVSX_TOKEN）
+#   make release    发布 vsix 到 GitHub Release（需 gh CLI 已登录）
 #   make unpublish  从 VS Code 市场下架（危险，需 FORCE=1 确认）
 #   make clean      清理 out/ 与 vsix
 #   make help       列出目标
@@ -40,8 +41,13 @@ AZURE     ?=                   # 非空则用 Microsoft Entra ID 认证（--azur
 # 认证参数拼接：AZURE=1 → --azure-credential；否则 VSCE_PAT 非空 → --pat。
 AUTH_FLAG := $(if $(AZURE),--azure-credential,$(if $(VSCE_PAT),--pat '$(VSCE_PAT)',))
 
+# GitHub Release 相关参数（均可覆盖：make release GH_TAG=v0.2.0 GH_REPO=owner/repo）
+# GH_TAG：发布使用的 git tag / release 名；GH_REPO：非空则指定目标仓库（默认取 git origin）。
+GH_TAG    ?= v$(VERSION)
+GH_REPO   ?=
+
 .PHONY: all deploy package install compile sync clean help \
-        login verify-pat publish publish-vsix publish-ovsx unpublish
+        login verify-pat publish publish-vsix publish-ovsx release unpublish
 
 all: deploy
 
@@ -96,6 +102,15 @@ publish-ovsx: package
 	@test -n "$(OVSX_TOKEN)" || (echo "错误：需要 OVSX_TOKEN（Open VSX 访问令牌）" && exit 1)
 	$(OVSX) publish $(VSIX) -p $(OVSX_TOKEN)
 
+# 发布 vsix 到 GitHub Release：tag 对应的 release 不存在则创建，已存在则覆盖上传。
+# 需要 gh CLI 且已 gh auth login；仓库默认取 git origin，可用 GH_REPO=owner/repo 覆盖。
+release: package
+	@command -v gh >/dev/null || (echo "错误：需要 GitHub CLI（brew install gh 并 gh auth login）" && exit 1)
+	gh release view $(GH_TAG) $(if $(GH_REPO),--repo $(GH_REPO),) >/dev/null 2>&1 || \
+		gh release create $(GH_TAG) --title "$(GH_TAG)" --notes "" \
+			$(if $(GH_REPO),--repo $(GH_REPO),)
+	gh release upload $(GH_TAG) $(VSIX) --clobber $(if $(GH_REPO),--repo $(GH_REPO),)
+
 # 从 VS Code 市场下架，不可撤销，需显式 FORCE=1 确认。
 unpublish:
 	@test "$(FORCE)" = "1" || (echo "危险：将下架 $(EXT_ID)，不可撤销。确认请用 FORCE=1 make unpublish" && exit 1)
@@ -132,6 +147,7 @@ help:
 	@echo "                  认证：默认已存 PAT；VSCE_PAT=xxx 临时 PAT；AZURE=1 用 Entra ID"
 	@echo "  make publish-vsix   直接上传当前 vsix（不递增版本）"
 	@echo "  make publish-ovsx   发布到 Open VSX 市场（需 OVSX_TOKEN）"
+	@echo "  make release    发布 vsix 到 GitHub Release（需 gh 已登录，GH_TAG/GH_REPO 可覆盖）"
 	@echo "  make unpublish  从市场下架（危险，需 FORCE=1 确认）"
 	@echo "  make clean      清理 out/ 与 vsix"
 	@echo "  make help       本帮助"
