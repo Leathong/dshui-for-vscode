@@ -72,6 +72,10 @@ export declare class ChangeLedger {
     /** Record a successful fs observation against a pending write/edit capture. */
     observe(target: FsTarget, observation: FsObservation, actor: RollbackToolActor | undefined): void;
     list(sessionId?: string): readonly LedgerModificationRecord[];
+    /** Workspace-relative paths with records in this session. */
+    pathsForSession(sessionId: string, cwd: string): Set<string>;
+    /** Workspace-relative paths with records in any session other than this one. */
+    foreignPathsForSession(sessionId: string, cwd: string): Set<string>;
     listForTurn(sessionId: string, turn: number): LedgerModificationRecord[];
     /** Earliest before-image for one path during the target turn. */
     baselineForTurn(sessionId: string, turn: number, filePath: string): LedgerModificationRecord | undefined;

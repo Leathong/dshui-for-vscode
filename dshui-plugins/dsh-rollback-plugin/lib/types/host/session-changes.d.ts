@@ -28,6 +28,19 @@ export declare class SessionChangeManager {
     acceptModification(request: RollbackAcceptModificationRequest): Promise<RollbackAcceptResult>;
     undoFile(request: RollbackUndoFileRequest): Promise<RollbackUndoFileResult>;
     undoModification(request: RollbackUndoModificationRequest): Promise<RollbackUndoModificationResult>;
+    /**
+     * Paths that changed during this session's own activity windows. Every
+     * snapshot this session captured opens a window that closes at the next
+     * snapshot captured by any session in the same workspace (treeless
+     * manifests extend the window); the last window ends at the current
+     * worktree. Changes outside these windows belong to other sessions and
+     * must not appear in this session's list. Returns undefined when window
+     * attribution is impossible (no own snapshot in the workspace timeline,
+     * or snapshot objects were garbage collected) — partial attribution
+     * would hide the session's own changes, which is worse than showing
+     * foreign ones.
+     */
+    private ownWindowPaths;
     private liveSession;
     /** Accept every unaccepted file of the bound list (with patch cascades). */
     acceptAll(request: RollbackAcceptAllRequest): Promise<RollbackAcceptResult>;

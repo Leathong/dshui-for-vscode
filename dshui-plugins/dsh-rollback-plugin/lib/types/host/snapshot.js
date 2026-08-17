@@ -136,6 +136,14 @@ export class SnapshotManager {
             .filter(item => item.sessionId === sessionId)
             .sort((a, b) => b.turn - a.turn || b.createdAt - a.createdAt);
     }
+    /** All manifests captured in one workspace (any session), oldest first. */
+    async listForWorkspace(cwd) {
+        await this.load();
+        const resolved = path.resolve(cwd);
+        return this.manifests
+            .filter(item => path.resolve(item.cwd) === resolved)
+            .sort((a, b) => a.createdAt - b.createdAt || a.snapshotId.localeCompare(b.snapshotId));
+    }
     async load() {
         if (this.loaded)
             return;

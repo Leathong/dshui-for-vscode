@@ -555,6 +555,12 @@ var SnapshotManager = class {
 		await this.load();
 		return this.manifests.filter((item) => item.sessionId === sessionId).sort((a, b) => b.turn - a.turn || b.createdAt - a.createdAt);
 	}
+	/** All manifests captured in one workspace (any session), oldest first. */
+	async listForWorkspace(cwd) {
+		await this.load();
+		const resolved = path.resolve(cwd);
+		return this.manifests.filter((item) => path.resolve(item.cwd) === resolved).sort((a, b) => a.createdAt - b.createdAt || a.snapshotId.localeCompare(b.snapshotId));
+	}
 	async load() {
 		if (this.loaded) return;
 		this.loaded = true;
@@ -1021,6 +1027,25 @@ var ChangeLedger = class {
 	}
 	list(sessionId) {
 		return sessionId === void 0 ? [...this.records] : this.records.filter((record) => record.sessionId === sessionId);
+	}
+	/** Workspace-relative paths with records in this session. */
+	pathsForSession(sessionId, cwd) {
+		const result = /* @__PURE__ */ new Set();
+		for (const record of this.list(sessionId)) {
+			const rel = relPathWithin(cwd, record.path);
+			if (rel !== void 0) result.add(rel);
+		}
+		return result;
+	}
+	/** Workspace-relative paths with records in any session other than this one. */
+	foreignPathsForSession(sessionId, cwd) {
+		const result = /* @__PURE__ */ new Set();
+		for (const record of this.records) {
+			if (record.sessionId === sessionId) continue;
+			const rel = relPathWithin(cwd, record.path);
+			if (rel !== void 0) result.add(rel);
+		}
+		return result;
 	}
 	listForTurn(sessionId, turn) {
 		return this.records.filter((record) => record.sessionId === sessionId && record.turn === turn).sort((a, b) => a.seq - b.seq || a.createdAt - b.createdAt);
@@ -2442,11 +2467,17 @@ var SessionChangeManager = class {
 			baselineUsable = true;
 			preparedTree = await provider.captureTree();
 			const entries = await provider.diffEntries(earliest.tree, preparedTree);
+			const ownWindows = await this.ownWindowPaths(sessionId, cwd, earliest.tree, preparedTree, entries, provider);
+			const ledgerPaths = this.ledger.pathsForSession(sessionId, cwd);
+			const foreignPaths = this.ledger.foreignPathsForSession(sessionId, cwd);
 			for (const entry of entries) {
 				if (entry.oldMode === "160000" || entry.newMode === "160000") {
 					warnings.push(entry.oldMode !== "160000" ? `nested git repository "${entry.path}" appeared after the baseline snapshot; it is outside the list scope and will not be deleted or restored` : `nested git repository "${entry.path}" is tracked as a gitlink; its internal changes are outside the list scope (only tool-written files inside it can be restored)`);
 					continue;
 				}
+				const windowClaimed = ownWindows === void 0 || ownWindows.has(entry.path);
+				const ledgerClaimed = ledgerPaths.has(entry.path);
+				if (!windowClaimed && !ledgerClaimed || foreignPaths.has(entry.path) && !ledgerClaimed) continue;
 				if (entry.status === "A") {
 					const abs = provider.absolutePath(entry.path);
 					const hunks = await createdFileHunks(abs, this.options.maxDiffBytesPerFile);
@@ -2702,6 +2733,44 @@ var SessionChangeManager = class {
 		} finally {
 			if (acquired) await this.safety.release();
 		}
+	}
+	/**
+	* Paths that changed during this session's own activity windows. Every
+	* snapshot this session captured opens a window that closes at the next
+	* snapshot captured by any session in the same workspace (treeless
+	* manifests extend the window); the last window ends at the current
+	* worktree. Changes outside these windows belong to other sessions and
+	* must not appear in this session's list. Returns undefined when window
+	* attribution is impossible (no own snapshot in the workspace timeline,
+	* or snapshot objects were garbage collected) — partial attribution
+	* would hide the session's own changes, which is worse than showing
+	* foreign ones.
+	*/
+	async ownWindowPaths(sessionId, cwd, baselineTree, preparedTree, preparedEntries, provider) {
+		const timeline = await this.snapshots.listForWorkspace(cwd);
+		const own = /* @__PURE__ */ new Set();
+		let found = false;
+		for (let index = 0; index < timeline.length; index += 1) {
+			const manifest = timeline[index];
+			if (manifest.sessionId !== sessionId || manifest.tree === void 0) continue;
+			found = true;
+			const endTrees = [];
+			for (let next = index + 1; next < timeline.length; next += 1) {
+				const tree = timeline[next].tree;
+				if (tree !== void 0 && tree !== manifest.tree && !endTrees.includes(tree)) endTrees.push(tree);
+			}
+			if (preparedTree !== manifest.tree && !endTrees.includes(preparedTree)) endTrees.push(preparedTree);
+			if (endTrees.length === 0) continue;
+			let entries;
+			if (manifest.tree === baselineTree && endTrees[0] === preparedTree) entries = preparedEntries;
+			else for (const endTree of endTrees) {
+				entries = await provider.diffEntries(manifest.tree, endTree).catch(() => void 0);
+				if (entries !== void 0) break;
+			}
+			if (entries === void 0) return void 0;
+			for (const entry of entries) own.add(entry.path);
+		}
+		return found ? own : void 0;
 	}
 	liveSession(sessionId) {
 		const session = this.ctx.sessions.get(sessionId);

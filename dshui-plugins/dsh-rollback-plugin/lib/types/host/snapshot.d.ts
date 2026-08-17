@@ -36,6 +36,8 @@ export declare class SnapshotManager {
     ensureTreeAvailable(manifest: RollbackSnapshotManifest, provider: GitProvider): Promise<boolean>;
     snapshotInfo(manifest: RollbackSnapshotManifest, degraded: boolean): RollbackSnapshotInfo;
     listForSession(sessionId: string): Promise<RollbackSnapshotManifest[]>;
+    /** All manifests captured in one workspace (any session), oldest first. */
+    listForWorkspace(cwd: string): Promise<RollbackSnapshotManifest[]>;
     private load;
     private enqueuePersist;
     /** Open the storage-domain table when the Host composition provides one. */

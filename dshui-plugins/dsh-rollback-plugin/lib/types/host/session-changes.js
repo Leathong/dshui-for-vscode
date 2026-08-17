@@ -52,6 +52,9 @@ export class SessionChangeManager {
                 baselineUsable = true;
                 preparedTree = await provider.captureTree();
                 const entries = await provider.diffEntries(earliest.tree, preparedTree);
+                const ownWindows = await this.ownWindowPaths(sessionId, cwd, earliest.tree, preparedTree, entries, provider);
+                const ledgerPaths = this.ledger.pathsForSession(sessionId, cwd);
+                const foreignPaths = this.ledger.foreignPathsForSession(sessionId, cwd);
                 for (const entry of entries) {
                     if (entry.oldMode === '160000' || entry.newMode === '160000') {
                         warnings.push(entry.oldMode !== '160000'
@@ -59,6 +62,15 @@ export class SessionChangeManager {
                             : `nested git repository "${entry.path}" is tracked as a gitlink; its internal changes are outside the list scope (only tool-written files inside it can be restored)`);
                         continue;
                     }
+                    // Attribution: a path belongs to this session's list only when it
+                    // changed during one of this session's own snapshot windows or is
+                    // claimed by this session's ledger. Paths claimed solely by other
+                    // sessions' ledgers never leak in, even when window attribution is
+                    // unavailable or the other session left no snapshot behind.
+                    const windowClaimed = ownWindows === undefined || ownWindows.has(entry.path);
+                    const ledgerClaimed = ledgerPaths.has(entry.path);
+                    if ((!windowClaimed && !ledgerClaimed) || (foreignPaths.has(entry.path) && !ledgerClaimed))
+                        continue;
                     if (entry.status === 'A') {
                         const abs = provider.absolutePath(entry.path);
                         const hunks = await createdFileHunks(abs, this.options.maxDiffBytesPerFile);
@@ -375,6 +387,55 @@ export class SessionChangeManager {
             if (acquired)
                 await this.safety.release();
         }
+    }
+    /**
+     * Paths that changed during this session's own activity windows. Every
+     * snapshot this session captured opens a window that closes at the next
+     * snapshot captured by any session in the same workspace (treeless
+     * manifests extend the window); the last window ends at the current
+     * worktree. Changes outside these windows belong to other sessions and
+     * must not appear in this session's list. Returns undefined when window
+     * attribution is impossible (no own snapshot in the workspace timeline,
+     * or snapshot objects were garbage collected) — partial attribution
+     * would hide the session's own changes, which is worse than showing
+     * foreign ones.
+     */
+    async ownWindowPaths(sessionId, cwd, baselineTree, preparedTree, preparedEntries, provider) {
+        const timeline = await this.snapshots.listForWorkspace(cwd);
+        const own = new Set();
+        let found = false;
+        for (let index = 0; index < timeline.length; index += 1) {
+            const manifest = timeline[index];
+            if (manifest.sessionId !== sessionId || manifest.tree === undefined)
+                continue;
+            found = true;
+            const endTrees = [];
+            for (let next = index + 1; next < timeline.length; next += 1) {
+                const tree = timeline[next].tree;
+                if (tree !== undefined && tree !== manifest.tree && !endTrees.includes(tree))
+                    endTrees.push(tree);
+            }
+            if (preparedTree !== manifest.tree && !endTrees.includes(preparedTree))
+                endTrees.push(preparedTree);
+            if (endTrees.length === 0)
+                continue;
+            let entries;
+            if (manifest.tree === baselineTree && endTrees[0] === preparedTree) {
+                entries = preparedEntries;
+            }
+            else {
+                for (const endTree of endTrees) {
+                    entries = await provider.diffEntries(manifest.tree, endTree).catch(() => undefined);
+                    if (entries !== undefined)
+                        break;
+                }
+            }
+            if (entries === undefined)
+                return undefined;
+            for (const entry of entries)
+                own.add(entry.path);
+        }
+        return found ? own : undefined;
     }
     liveSession(sessionId) {
         const session = this.ctx.sessions.get(sessionId);

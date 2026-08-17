@@ -322,6 +322,28 @@ export class ChangeLedger {
             ? [...this.records]
             : this.records.filter(record => record.sessionId === sessionId);
     }
+    /** Workspace-relative paths with records in this session. */
+    pathsForSession(sessionId, cwd) {
+        const result = new Set();
+        for (const record of this.list(sessionId)) {
+            const rel = relPathWithin(cwd, record.path);
+            if (rel !== undefined)
+                result.add(rel);
+        }
+        return result;
+    }
+    /** Workspace-relative paths with records in any session other than this one. */
+    foreignPathsForSession(sessionId, cwd) {
+        const result = new Set();
+        for (const record of this.records) {
+            if (record.sessionId === sessionId)
+                continue;
+            const rel = relPathWithin(cwd, record.path);
+            if (rel !== undefined)
+                result.add(rel);
+        }
+        return result;
+    }
     listForTurn(sessionId, turn) {
         return this.records
             .filter(record => record.sessionId === sessionId && record.turn === turn)
