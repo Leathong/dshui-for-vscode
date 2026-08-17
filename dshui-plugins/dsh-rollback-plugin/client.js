@@ -671,13 +671,9 @@ window.__ModuleLoader__.load({
 											},
 											title: change.absolutePath,
 											children: change.path
-										}), (0, react_jsx_runtime.jsxs)("span", {
+										}), (0, react_jsx_runtime.jsx)("span", {
 											className: "dsh-mod-status",
-											children: [
-												t(`status.${change.status}`),
-												" · ",
-												t("dock.accepted")
-											]
+											children: t("dock.accepted")
 										})]
 									})
 								}, change.path))
@@ -733,17 +729,16 @@ window.__ModuleLoader__.load({
 							title: `${change.absolutePath} · ${t("openInEditor")}`,
 							children: [(0, react_jsx_runtime.jsx)("span", { className: `dsh-mod-status-dot dsh-mod-status-${change.status}` }), change.path]
 						}),
-						(0, react_jsx_runtime.jsx)("button", {
-							type: "button",
-							className: "dsh-mod-link",
-							onClick: onOpenFile,
-							title: t("openAt"),
-							"aria-label": t("openAt"),
-							children: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconRightUpOutline16, { size: 8 })
-						}),
-						(0, react_jsx_runtime.jsx)("span", {
-							className: "dsh-mod-status",
-							children: t(`status.${change.status}`)
+						(0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Tooltip, {
+							label: t("openAt"),
+							side: "bottom",
+							children: (0, react_jsx_runtime.jsx)("button", {
+								type: "button",
+								className: "dsh-mod-link",
+								onClick: onOpenFile,
+								"aria-label": t("openAt"),
+								children: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconRightUpOutline16, { size: 8 })
+							})
 						}),
 						(0, react_jsx_runtime.jsxs)("span", {
 							className: "dsh-mod-actions",

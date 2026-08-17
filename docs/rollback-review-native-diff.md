@@ -151,7 +151,7 @@ RollbackReviewManager 调用 rollback/acceptFile | undoFile
 为了让按钮"贴住变更"，hunk 新增两个可选字段：
 
 - `firstChangedOldLine` / `firstChangedNewLine`：hunk 内**首个变更行**（跳过上下文前缀），1-based。
-- `git.ts parseDiffHunks`：解析 body 时记录首个 `+`/`-` 行，`header 起始行 + 偏移` 即首个变更行。
+- `git.ts parseDiffHunks`：解析 body 时记录首个 `+`/`-` 行，`header 起始行 + 偏移` 即首个变更行。**纯删除/纯插入 hunk**（如删掉一个空白行）body 里只有一侧的标记行：首个 `-` 行会同时把新侧锚点设为删除边界（`newBefore`），首个 `+` 行会同时把旧侧锚点设为插入边界（`oldBefore`）——否则按钮会回退到 hunk 的上下文前缀，落在空白行上。
 - `ledger.ts lineDiffHunks(before, after)`：ledger 文件级修改不再是一个整文件 hunk，而是用行级 LCS diff 拆成带 3 行上下文的 git 风格多 hunk（公共前后缀裁剪 + 中间 LCS，超过 100 万格子回退整文件 hunk；两次变更间隔 > 6 行时拆成两个 hunk）。这样台账方式的文件 Diff 也能在每个变更处渲染按钮。
 - 客户端"在编辑器中打开"的滚动定位（`ModificationDock` / `RollbackAction`）同样优先使用 `firstChangedNewLine`。
 

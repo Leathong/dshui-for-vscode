@@ -29,11 +29,13 @@
  * the child window even when the click happened in the outer window. The
  * dshui client bundle attaches the click origin (the session's project
  * directory) to the `host.openPath` payload as `dshuiOrigin`; this patch
- * threads it through to the darwin branch, and the bridge selection prefers
- * the origin's own window whenever the origin workspace contains the opened
- * path. Only when the path lies outside the origin workspace does the
- * longest-prefix registry lookup decide (a file clicked in window A that
- * belongs to window B still opens in B).
+ * threads it through to the darwin branch, and the origin's own window is
+ * the first choice for every open — the user is looking at that window,
+ * whether the path lies inside its workspace, inside another window's
+ * workspace, or outside every workspace (e.g. a file under the extension
+ * install directory). Workspace routing (longest path prefix, then the
+ * owner's bridge) only applies when no origin was attached, e.g. non-client
+ * callers.
  */
 import * as fs from 'node:fs'
 import { SERVER_USER_LEASE_TTL_MS } from './sharedBackend'
@@ -96,22 +98,27 @@ const OLD_BRIDGE_HELPER = `async function dshuiOpenViaBridge(path, signal) {
 /**
  * Bridge helpers: origin-aware bridge selection, inserted before
  * `openNativePathWithIntent`. The click origin (`dshuiOrigin`, attached by
- * the dshui client bundle and threaded through `internals`) wins when it
- * contains the opened path — nested workspaces make a path match several
- * windows, and only the origin is unambiguous. Otherwise the window whose
- * registered workspace is the longest path prefix of the opened file handles
- * the open, so a file clicked in window B opens in B — the owner bridge is
- * only the fallback.
+ * the dshui client bundle and threaded through `internals`) is authoritative
+ * — the open lands in the window the click happened in, whether or not the
+ * path lies inside its workspace. Only when the origin is absent does
+ * workspace routing decide: the window whose registered workspace is the
+ * longest path prefix of the opened file handles the open, with the owner
+ * bridge as the last-resort fallback.
  */
 const BRIDGE_FUNCTIONS = `/**
  * dshui patch: ask the hosting VS Code (via a window's local open bridge) to
  * open a path, avoiding the OS external-scheme confirmation popup. The click
- * origin wins when its workspace contains the path (nested workspaces make a
- * path match several windows; only the origin is unambiguous); otherwise the
- * bridge is chosen by workspace: the registration whose workspace is the
- * longest path prefix of the opened file (DSHUI_BRIDGES_FILE, written by
- * every window's extension), falling back to the owner's bridge
- * (DSHUI_OPEN_ENDPOINT). Returns false so the caller can try the code CLI.
+ * origin is authoritative: the user is looking at that window, so the path
+ * opens there whenever the origin's bridge is reachable — inside the origin
+ * workspace, inside another window's workspace, or outside every workspace
+ * alike (e.g. a file under the extension install directory). The origin's own
+ * bridge is looked up by exact workspace match (a shared backend serves
+ * several windows, so the origin need not be the owner). Only when the origin
+ * is unknown (non-client callers) does workspace routing decide: the
+ * registration whose workspace is the longest path prefix of the opened file
+ * (DSHUI_BRIDGES_FILE, written by every window's extension), falling back to
+ * the owner's bridge (DSHUI_OPEN_ENDPOINT). Returns false so the caller can
+ * try the code CLI.
  * @param path - absolute filesystem path (POSIX separators).
  * @param signal - caller/connection lifetime (aborts the bridge request).
  * @param origin - workspace of the window the click happened in, when the
@@ -120,18 +127,16 @@ const BRIDGE_FUNCTIONS = `/**
  */
 async function dshuiOpenViaBridge(path, signal, origin) {
 	const originWs = dshuiOriginWorkspace(origin);
-	if (originWs !== null && (path === originWs || path.startsWith(originWs + "/"))) {
-		// Origin preference: the click happened in a window whose workspace
-		// contains this path, so open it there. The origin's own bridge is
-		// looked up by exact workspace match (a shared backend serves several
-		// windows, so the origin need not be the owner); the owner bridge is
-		// the fallback when that window's bridge is unreachable.
+	if (originWs !== null) {
+		// dshuiBridgeOriginFirst marker: the origin window's bridge is tried
+		// first, ahead of workspace ownership, so clicks land in the window
+		// the user is looking at — whether the path lies inside the origin
+		// workspace, inside another window's workspace, or outside every
+		// workspace. Workspace ownership is only a guess; the origin is
+		// where the user is looking. The owner bridge is the fallback when
+		// that window's bridge is unreachable.
 		const own = await dshuiBridgeForWorkspace(originWs);
 		if (own !== null && await dshuiBridgeRequest(own, path, signal)) return true;
-		const endpoint = process.env.DSHUI_OPEN_ENDPOINT;
-		const token = process.env.DSHUI_OPEN_TOKEN;
-		if (endpoint !== undefined && await dshuiBridgeRequest({ endpoint, token }, path, signal)) return true;
-		return false;
 	}
 	const target = await dshuiPickBridgeForPath(path);
 	if (target !== null && await dshuiBridgeRequest(target, path, signal)) return true;
@@ -278,6 +283,8 @@ function dshuiPidAlive(pid) {
 const BRIDGE_LEASE_PATCH_MARKER = 'function dshuiBridgeLeaseLive'
 const BRIDGE_TOKEN_PATCH_MARKER = 'typeof target.token'
 const BRIDGE_ORIGIN_MARKER = 'dshuiBridgeForWorkspace'
+/** The origin window's bridge is tried first, ahead of workspace ownership. */
+const BRIDGE_ORIGIN_FIRST_MARKER = 'dshuiBridgeOriginFirst marker'
 
 /** The extended host.openPath request schema keeping the click origin. */
 const OPEN_PATH_SCHEMA = 'const hostOpenPathRequestSchema = z$1.object({ path: z$1.string().min(1) });'
@@ -346,7 +353,8 @@ export function patchFileOpener(apiProxyLibPath: string): { patched: boolean; no
     const hasCurrentDarwinBranch = source.includes(PATCHED_DARWIN_BRANCH)
     if (hasCurrentDarwinBranch
       && source.includes(BRIDGE_LEASE_PATCH_MARKER) && source.includes(BRIDGE_TOKEN_PATCH_MARKER)
-      && source.includes(BRIDGE_ORIGIN_MARKER) && source.includes(OPEN_PATH_SCHEMA_ORIGIN)
+      && source.includes(BRIDGE_ORIGIN_MARKER) && source.includes(BRIDGE_ORIGIN_FIRST_MARKER)
+      && source.includes(OPEN_PATH_SCHEMA_ORIGIN)
       && source.includes(OPEN_PATH_CALLER_ORIGIN)) {
       return { patched: true, note: 'already patched' }
     }
@@ -370,14 +378,19 @@ export function patchFileOpener(apiProxyLibPath: string): { patched: boolean; no
     const openerSignature = 'async function openNativePathWithIntent(path, signal, intent, internals = {}) {'
     // Bridge helpers: upgrade in place, never duplicate.
     if (next.includes('function dshuiPickBridgeForPath')) {
-      if (!next.includes(BRIDGE_TOKEN_PATCH_MARKER) || !next.includes(BRIDGE_ORIGIN_MARKER)) {
+      if (!next.includes(BRIDGE_TOKEN_PATCH_MARKER) || !next.includes(BRIDGE_ORIGIN_MARKER)
+        || !next.includes(BRIDGE_ORIGIN_FIRST_MARKER)) {
         // Replace the entire old bridge-helper block. It was inserted either
         // directly before `openNativePathWithIntent` or together with the
         // `dshuiVscodeFileUrl` helper; preserve the URL helper when present.
         const bridgeComment = 'dshui patch: ask the hosting VS Code'
         const bridgeAt = next.indexOf(bridgeComment)
         const blockStart = bridgeAt === -1 ? -1 : next.lastIndexOf('/**', bridgeAt)
-        const urlHelperAt = next.indexOf('dshui patch: absolute path as a', bridgeAt)
+        // The URL helper's doc comment starts at `/**` — cutting at the marker
+        // text inside the comment would orphan the comment opener and leave
+        // invalid JS behind the replaced block.
+        const urlHelperMarkerAt = next.indexOf('dshui patch: absolute path as a', bridgeAt)
+        const urlHelperAt = urlHelperMarkerAt === -1 ? -1 : next.lastIndexOf('/**', urlHelperMarkerAt)
         const openerAt = next.indexOf(openerSignature, bridgeAt)
         let blockEnd = openerAt
         if (urlHelperAt !== -1 && urlHelperAt < openerAt) blockEnd = urlHelperAt

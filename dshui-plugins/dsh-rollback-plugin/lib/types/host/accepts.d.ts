@@ -13,6 +13,9 @@ export interface AcceptRecord {
     key: string;
     /** File-kind only: state identity captured at accept time. */
     fingerprint?: RollbackAcceptFingerprint;
+    /** File-kind only: bounded text content at accept time — the diff baseline
+     *  for later changes, so a re-appearing file only shows post-accept edits. */
+    content?: string;
     createdAt: number;
 }
 export interface AcceptLedgerOptions {
@@ -20,7 +23,11 @@ export interface AcceptLedgerOptions {
     maxAcceptRecordsPerSession?: number;
     /** Override the persistence file (tests and tooling). */
     acceptsFile?: string;
+    /** Cap on stored accept-time content (bytes); oversized files keep only the fingerprint. */
+    maxContentBytes?: number;
 }
+/** Default cap on stored accept-time content; matches the ledger text bound. */
+export declare const DEFAULT_ACCEPT_CONTENT_MAX_BYTES: number;
 export declare function acceptsPath(): string;
 export declare class AcceptLedger {
     private readonly options;
@@ -28,14 +35,17 @@ export declare class AcceptLedger {
     private loaded;
     private writeTail;
     private readonly maxPerSession;
+    private readonly maxContentBytes;
     private readonly file;
     constructor(options?: AcceptLedgerOptions);
     private load;
     private upsert;
     private persist;
-    acceptFile(sessionId: string, filePath: string, fingerprint?: RollbackAcceptFingerprint): void;
+    acceptFile(sessionId: string, filePath: string, fingerprint?: RollbackAcceptFingerprint, content?: string): void;
     acceptModification(sessionId: string, modificationId: string): void;
     fileAccepted(sessionId: string, filePath: string, fingerprint?: RollbackAcceptFingerprint): boolean;
+    /** Bounded text content captured at accept time (diff baseline for later changes). */
+    acceptedContent(sessionId: string, filePath: string): string | undefined;
     modificationAccepted(sessionId: string, modificationId: string): boolean;
     acceptedFiles(sessionId: string): string[];
     acceptedModifications(sessionId: string): string[];

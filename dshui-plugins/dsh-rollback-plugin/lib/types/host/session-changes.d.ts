@@ -1,5 +1,5 @@
 import type { RollbackAcceptAllRequest, RollbackAcceptFileRequest, RollbackAcceptModificationRequest, RollbackAcceptFingerprint, RollbackAcceptResult, RollbackSessionChangesResult, RollbackUndoAllRequest, RollbackUndoAllResult, RollbackUndoFileRequest, RollbackUndoFileResult, RollbackUndoModificationRequest, RollbackUndoModificationResult } from '../shared/types.ts';
-import type { RollbackCordisContext } from './context.ts';
+import type { RollbackCordisContext, Session } from './context.ts';
 import { AcceptLedger } from './accepts.ts';
 import { ChangeLedger } from './ledger.ts';
 import { RollbackSafety } from './safety.ts';
@@ -8,6 +8,8 @@ export interface SessionChangesOptions {
     spawnTimeoutMs: number;
     maxDiffHunksPerFile: number;
     maxDiffBytesPerFile: number;
+    /** Bound (bytes) on accept-time content snapshots used as later diff baselines. */
+    acceptContentMaxBytes?: number;
 }
 /**
  * The session modification list: a live, session-wide diff against the
@@ -23,6 +25,8 @@ export declare class SessionChangeManager {
     private readonly options;
     private readonly bound;
     constructor(ctx: RollbackCordisContext, snapshots: SnapshotManager, ledger: ChangeLedger, safety: RollbackSafety, accepts: AcceptLedger, options: SessionChangesOptions);
+    /** Bound (bytes) on accept-time content snapshots kept as later diff baselines. */
+    private get acceptContentMaxBytes();
     sessionChanges(sessionId: string): Promise<RollbackSessionChangesResult>;
     acceptFile(request: RollbackAcceptFileRequest): Promise<RollbackAcceptResult>;
     acceptModification(request: RollbackAcceptModificationRequest): Promise<RollbackAcceptResult>;
@@ -49,7 +53,32 @@ export declare class SessionChangeManager {
     private attachToolCalls;
     /** Every write/edit patch id (ledger + session-log only) attributed to a path. */
     private patchIdsForPath;
+    /**
+     * Re-diff a previously accepted file against the accepted content, so a
+     * second round of changes shows only what happened after acceptance instead
+     * of the whole session diff against the earliest snapshot. Falls back to
+     * the original hunks (git / ledger baseline) when the current file is
+     * missing, binary, oversized, or unreadable.
+     */
+    private rebaseHunksOnAccepted;
     private mutationFailure;
 }
+/**
+ * The session's real starting turn: the first `turn/start` this session
+ * produced itself. Plain new sessions start at turn 1; forked/resumed
+ * sessions inherit seed events (which keep their original seq numbers), so
+ * their real start is the first turn/start at or after the seed boundary.
+ */
+export declare function sessionStartTurn(session: Session): number;
 /** Content fingerprint of a file; falls back to stat identity for unreadable files. */
 export declare function fingerprintOfAbs(abs: string): Promise<RollbackAcceptFingerprint | undefined>;
+/**
+ * Accept-marker data for a file: the content fingerprint (whole file, so
+ * later state changes are detected) plus the bounded text content kept as
+ * the diff baseline once the file changes again. Binary or oversized files
+ * keep only the fingerprint.
+ */
+export declare function acceptSnapshotOf(abs: string, maxBytes: number): Promise<{
+    fingerprint: RollbackAcceptFingerprint | undefined;
+    content?: string;
+}>;

@@ -127,7 +127,7 @@ let RollbackService = (() => {
                 ledgerDir,
                 lockTimeoutMs: 10_000,
             });
-            this.accepts = new AcceptLedger();
+            this.accepts = new AcceptLedger({ maxContentBytes: this.config.ledgerMaxTextBytes });
             this.restore = new RollbackRestore(this.host, this.snapshots, this.ledger, this.safety, {
                 maxDiffHunksPerFile: this.config.maxDiffHunksPerFile,
                 maxDiffBytesPerFile: this.config.maxDiffBytesPerFile,
@@ -138,6 +138,7 @@ let RollbackService = (() => {
                 maxDiffHunksPerFile: this.config.maxDiffHunksPerFile,
                 maxDiffBytesPerFile: this.config.maxDiffBytesPerFile,
                 spawnTimeoutMs: this.config.spawnTimeoutMs,
+                acceptContentMaxBytes: this.config.ledgerMaxTextBytes,
             });
         }
         prepare(sessionId, messageId, _signal) {

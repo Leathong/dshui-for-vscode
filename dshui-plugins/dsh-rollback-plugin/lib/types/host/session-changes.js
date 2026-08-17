@@ -3,9 +3,11 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { ok, fail } from "./errors.js";
 import { sandboxPolicyFor } from "./fs-policy.js";
-import { createdFileHunks } from "./ledger.js";
+import { createdFileHunks, lineDiffHunks, normalizeLf } from "./ledger.js";
 import { buildModificationsFromRecords, parseRecordArgs } from "./restore.js";
 import { restoreModification } from "./modification.js";
+/** Default bound on stored accept-time content; matches the ledger text bound. */
+const DEFAULT_ACCEPT_CONTENT_MAX_BYTES = 256 * 1024;
 /**
  * The session modification list: a live, session-wide diff against the
  * earliest session snapshot merged with ledger-covered tool changes, plus
@@ -26,6 +28,10 @@ export class SessionChangeManager {
         this.safety = safety;
         this.accepts = accepts;
         this.options = options;
+    }
+    /** Bound (bytes) on accept-time content snapshots kept as later diff baselines. */
+    get acceptContentMaxBytes() {
+        return this.options.acceptContentMaxBytes ?? DEFAULT_ACCEPT_CONTENT_MAX_BYTES;
     }
     async sessionChanges(sessionId) {
         const live = this.liveSession(sessionId);
@@ -126,6 +132,17 @@ export class SessionChangeManager {
         for (const modification of modifications) {
             modification.accepted = this.accepts.modificationAccepted(sessionId, modification.modificationId);
         }
+        // A file accepted earlier and changed again re-enters the list; its diff
+        // baseline must be the accepted content, not the earliest snapshot, so
+        // only the post-accept changes are shown.
+        for (const change of changes) {
+            if (change.accepted === true)
+                continue;
+            const acceptedContent = this.accepts.acceptedContent(sessionId, change.path);
+            if (acceptedContent === undefined)
+                continue;
+            await this.rebaseHunksOnAccepted(change, acceptedContent);
+        }
         const listId = crypto.randomUUID();
         this.bound.set(listId, {
             listId,
@@ -146,7 +163,7 @@ export class SessionChangeManager {
         }
         return ok({
             listId,
-            ...(earliest === undefined ? {} : { baseline: baselineInfo(earliest) }),
+            ...(earliest === undefined ? {} : { baseline: baselineInfo(earliest, sessionStartTurn(session)) }),
             changes,
             modifications,
             acceptedFiles: this.accepts.acceptedFiles(sessionId),
@@ -170,7 +187,8 @@ export class SessionChangeManager {
         catch {
             return fail('path-not-in-snapshot', `path "${request.path}" is not a valid workspace path`, { sessionId: request.sessionId });
         }
-        this.accepts.acceptFile(request.sessionId, rel, await fingerprintOfAbs(provider.absolutePath(rel)));
+        const acceptSnapshot = await acceptSnapshotOf(provider.absolutePath(rel), this.acceptContentMaxBytes);
+        this.accepts.acceptFile(request.sessionId, rel, acceptSnapshot.fingerprint, acceptSnapshot.content);
         // Cascade: accepting a file accepts every patch attributed to it.
         for (const id of this.patchIdsForPath(live.value, bound.cwd, rel)) {
             this.accepts.acceptModification(request.sessionId, id);
@@ -200,7 +218,8 @@ export class SessionChangeManager {
         if (rel !== undefined) {
             const patchIds = this.patchIdsForPath(live.value, bound.cwd, rel);
             if (patchIds.length > 0 && patchIds.every(id => this.accepts.modificationAccepted(request.sessionId, id))) {
-                this.accepts.acceptFile(request.sessionId, rel, await fingerprintOfAbs(provider.absolutePath(rel)));
+                const acceptSnapshot = await acceptSnapshotOf(provider.absolutePath(rel), this.acceptContentMaxBytes);
+                this.accepts.acceptFile(request.sessionId, rel, acceptSnapshot.fingerprint, acceptSnapshot.content);
             }
         }
         return ok({
@@ -285,7 +304,8 @@ export class SessionChangeManager {
                 }
                 await this.safety.journalUpdate(journalId, 'completed');
                 // Undoing is itself an accept: the restored state leaves the default list.
-                this.accepts.acceptFile(request.sessionId, rel, await fingerprintOfAbs(provider.absolutePath(rel)));
+                const acceptSnapshot = await acceptSnapshotOf(provider.absolutePath(rel), this.acceptContentMaxBytes);
+                this.accepts.acceptFile(request.sessionId, rel, acceptSnapshot.fingerprint, acceptSnapshot.content);
                 return ok({
                     guardId,
                     restored,
@@ -454,7 +474,8 @@ export class SessionChangeManager {
             return live;
         const session = live.value;
         for (const change of bound.changes) {
-            this.accepts.acceptFile(request.sessionId, change.path, await fingerprintOfAbs(change.absolutePath));
+            const acceptSnapshot = await acceptSnapshotOf(change.absolutePath, this.acceptContentMaxBytes);
+            this.accepts.acceptFile(request.sessionId, change.path, acceptSnapshot.fingerprint, acceptSnapshot.content);
             for (const id of this.patchIdsForPath(session, bound.cwd, change.path)) {
                 this.accepts.acceptModification(request.sessionId, id);
             }
@@ -563,7 +584,8 @@ export class SessionChangeManager {
                 await this.safety.journalUpdate(journalId, 'completed');
                 // Undoing is itself an accept: the restored state leaves the default list.
                 for (const rel of rels) {
-                    this.accepts.acceptFile(request.sessionId, rel, await fingerprintOfAbs(provider.absolutePath(rel)));
+                    const acceptSnapshot = await acceptSnapshotOf(provider.absolutePath(rel), this.acceptContentMaxBytes);
+                    this.accepts.acceptFile(request.sessionId, rel, acceptSnapshot.fingerprint, acceptSnapshot.content);
                 }
                 return ok({
                     guardId,
@@ -627,6 +649,51 @@ export class SessionChangeManager {
         }
         return [...ids];
     }
+    /**
+     * Re-diff a previously accepted file against the accepted content, so a
+     * second round of changes shows only what happened after acceptance instead
+     * of the whole session diff against the earliest snapshot. Falls back to
+     * the original hunks (git / ledger baseline) when the current file is
+     * missing, binary, oversized, or unreadable.
+     */
+    async rebaseHunksOnAccepted(change, acceptedContent) {
+        const abs = change.absolutePath;
+        const maxBytes = this.acceptContentMaxBytes;
+        let current;
+        let missing = false;
+        try {
+            const stat = await fs.promises.stat(abs);
+            if (!stat.isFile() || stat.size > maxBytes)
+                return;
+            const data = await fs.promises.readFile(abs);
+            if (data.includes(0))
+                return;
+            current = data.toString('utf8');
+        }
+        catch (error) {
+            if (error.code === 'ENOENT')
+                missing = true;
+            else
+                return;
+        }
+        const hunks = missing
+            ? lineDiffHunks(normalizeLf(acceptedContent), '')
+            : lineDiffHunks(normalizeLf(acceptedContent), normalizeLf(current ?? ''));
+        if (hunks.length === 0)
+            return;
+        const maxHunks = this.options.maxDiffHunksPerFile;
+        if (hunks.length > maxHunks) {
+            change.hunks = hunks.slice(0, maxHunks);
+            change.truncated = true;
+        }
+        else {
+            change.hunks = hunks;
+            delete change.truncated;
+        }
+        delete change.binary;
+        delete change.createdAfterSnapshot;
+        change.status = missing ? 'deleted' : 'modified';
+    }
     async mutationFailure(error, sessionId, bound, guardId, journalId, affected, policy) {
         const message = error instanceof Error ? error.message : String(error);
         const code = message.includes('workspace lock timeout') ? 'lock-timeout'
@@ -650,12 +717,26 @@ export class SessionChangeManager {
         return fail(code, message, { sessionId, paths: affected });
     }
 }
-function baselineInfo(manifest) {
+/**
+ * The session's real starting turn: the first `turn/start` this session
+ * produced itself. Plain new sessions start at turn 1; forked/resumed
+ * sessions inherit seed events (which keep their original seq numbers), so
+ * their real start is the first turn/start at or after the seed boundary.
+ */
+export function sessionStartTurn(session) {
+    const seedLength = session.header.seedLength ?? 0;
+    for (const event of session.events) {
+        if (event.type === 'turn/start' && event.seq >= seedLength)
+            return event.data.turn;
+    }
+    return 1;
+}
+function baselineInfo(manifest, startTurn) {
     return {
         turn: manifest.turn,
         createdAt: manifest.createdAt,
         mode: manifest.tree === undefined ? 'ledger' : 'git',
-        ...(manifest.turn > 1 ? { degraded: true } : {}),
+        ...(manifest.turn > startTurn ? { degraded: true } : {}),
     };
 }
 /** Content fingerprint of a file; falls back to stat identity for unreadable files. */
@@ -671,6 +752,34 @@ export async function fingerprintOfAbs(abs) {
         }
         catch {
             return undefined;
+        }
+    }
+}
+/**
+ * Accept-marker data for a file: the content fingerprint (whole file, so
+ * later state changes are detected) plus the bounded text content kept as
+ * the diff baseline once the file changes again. Binary or oversized files
+ * keep only the fingerprint.
+ */
+export async function acceptSnapshotOf(abs, maxBytes) {
+    try {
+        const stat = await fs.promises.stat(abs);
+        if (!stat.isFile())
+            return { fingerprint: { kind: 'stat', size: stat.size, mtimeMs: stat.mtimeMs } };
+        const data = await fs.promises.readFile(abs);
+        const fingerprint = { kind: 'content', hash: crypto.createHash('sha256').update(data).digest('hex') };
+        if (data.length <= maxBytes && !data.includes(0)) {
+            return { fingerprint, content: data.toString('utf8') };
+        }
+        return { fingerprint };
+    }
+    catch {
+        try {
+            const stat = await fs.promises.stat(abs);
+            return { fingerprint: { kind: 'stat', size: stat.size, mtimeMs: stat.mtimeMs } };
+        }
+        catch {
+            return { fingerprint: undefined };
         }
     }
 }

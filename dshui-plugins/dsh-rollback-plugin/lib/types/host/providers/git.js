@@ -344,14 +344,23 @@ export function parseDiffHunks(stdout, maxHunks, maxBytes) {
                 newBefore += 1;
             }
             else if (body.startsWith('-')) {
+                // A deleted line anchors the old side at itself and the new side at
+                // the deletion boundary — without this, pure-deletion hunks (e.g. a
+                // removed blank line) would fall back to the hunk's context prefix.
                 if (firstOld === undefined)
                     firstOld = oldBefore;
+                if (firstNew === undefined)
+                    firstNew = newBefore;
                 oldLines.push(body.slice(1));
                 oldBefore += 1;
             }
             else if (body.startsWith('+')) {
+                // Symmetrically, an added line anchors the new side at itself and the
+                // old side at the insertion boundary.
                 if (firstNew === undefined)
                     firstNew = newBefore;
+                if (firstOld === undefined)
+                    firstOld = oldBefore;
                 newLines.push(body.slice(1));
                 newBefore += 1;
             }
