@@ -112,12 +112,30 @@ export const logger = {
  * host registers its own listeners too, so the user still gets VS Code's
  * error dialog; this handler only records the detail (it deliberately does
  * not rethrow, which would double-report and could terminate the host).
+ *
+ * The extension host is a single Node process SHARED by every extension, so a
+ * plain `process.on('unhandledRejection')` also captures other extensions'
+ * rejections and mislabels them as `[dshui]` — e.g. VS Code's built-in Git
+ * extension rejects with "Error: Git error" whenever a git command exits
+ * non-zero, flooding the dsh UI output channel with noise that looks like
+ * this plugin is broken. Only errors whose stack references this extension's
+ * own files (`extensionRoot`) are recorded; everything else is left to the
+ * extension that produced it.
  */
-export function installCrashHandlers(): void {
+export function installCrashHandlers(extensionRoot: string): void {
+  const owns = (reason: unknown): boolean => {
+    if (reason instanceof Error && typeof reason.stack === 'string') {
+      return reason.stack.includes(extensionRoot)
+    }
+    // Non-Error reasons carry no stack to attribute — rare, keep the trace
+    // (other extensions' real failures are Error objects with their own
+    // stacks, so they are filtered out above).
+    return true
+  }
   process.on('uncaughtException', (error) => {
-    logger.error('[dshui] uncaught exception:', error)
+    if (owns(error)) logger.error('[dshui] uncaught exception:', error)
   })
   process.on('unhandledRejection', (reason) => {
-    logger.error('[dshui] unhandled promise rejection:', reason)
+    if (owns(reason)) logger.error('[dshui] unhandled promise rejection:', reason)
   })
 }

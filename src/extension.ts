@@ -224,14 +224,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   if (compareVersions(process.versions.node, MIN_NODE) < 0) {
     const message = `dsh UI: 当前 VS Code 内嵌 Node.js v${process.versions.node} 过低（dsh rc7 需要 ≥ ${MIN_NODE}）。请升级 VS Code 到 ${MIN_VSCODE} 或更高版本后重载窗口。`
     vscode.window.showErrorMessage(message)
-    installCrashHandlers()
+    installCrashHandlers(context.extensionPath)
     setLogFile(path.join(resolveDshHome(), 'dshui-logs', 'extension.log'))
     logger.error(`[dshui] activation blocked: embedded node ${process.versions.node} < ${MIN_NODE} (upgrade VS Code to >= ${MIN_VSCODE})`)
     logger.dispose()
     return
   }
   // Crashes inside the extension host leave a trace in the Output panel.
-  installCrashHandlers()
+  installCrashHandlers(context.extensionPath)
   const extensionRoot = context.extensionPath
   const pluginsDir = path.join(extensionRoot, 'dshui-plugins')
   const patchPath = path.join(extensionRoot, 'patch.yml')
