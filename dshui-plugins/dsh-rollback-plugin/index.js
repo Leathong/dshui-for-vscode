@@ -15,11 +15,15 @@ const RUNNING_OPS = [
 function isHash(value) {
 	return HEX_RE.test(value);
 }
-function spawnGit(cwd, args, env, timeoutMs, signal) {
+function spawnGit(cwd, args, env, timeoutMs, signal, gitDir, workTree) {
+	const flags = [];
+	if (gitDir !== void 0 && gitDir !== "") flags.push(`--git-dir=${gitDir}`);
+	if (workTree !== void 0 && workTree !== "") flags.push(`--work-tree=${workTree}`);
 	return new Promise((resolve, reject) => {
 		const child = spawn("git", [
 			"-C",
 			cwd,
+			...flags,
 			...args
 		], {
 			env: {
@@ -89,8 +93,10 @@ var GitProvider = class {
 	cwd;
 	options;
 	baseEnv;
-	isGit;
-	gitDir;
+	/** Isolated snapshot repo readiness (undefined = not yet probed). */
+	isolatedReady;
+	/** The project's own git dir (read-only fence/head queries); null = not a git worktree. */
+	projectGitDir;
 	constructor(cwd, options) {
 		this.cwd = cwd;
 		this.options = options;
@@ -100,22 +106,52 @@ var GitProvider = class {
 		delete env.GIT_INDEX_FILE;
 		this.baseEnv = env;
 	}
+	/**
+	* Whether git snapshotting is usable. With the isolated snapshot repo this
+	* no longer depends on the project being a git repository: every workspace
+	* (git or not) can be captured at full fidelity, and non-git workspaces get
+	* the same whole-worktree rollback capability as git ones.
+	*/
 	async available(signal) {
-		if (this.isGit !== void 0) return this.isGit;
-		try {
-			const result = await this.run(["rev-parse", "--is-inside-work-tree"], signal);
-			this.isGit = result.code === 0 && result.stdout.trim() === "true";
-			if (this.isGit) {
-				const gitDir = await this.run(["rev-parse", "--absolute-git-dir"], signal);
-				if (gitDir.code === 0) this.gitDir = path.resolve(this.cwd, gitDir.stdout.trim());
+		if (this.isolatedReady !== void 0) return this.isolatedReady;
+		const ready = await this.ensureIsolated(signal);
+		if (ready) try {
+			if (!fs.statSync(this.cwd).isDirectory()) {
+				this.isolatedReady = false;
+				return false;
 			}
 		} catch {
-			this.isGit = false;
+			this.isolatedReady = false;
+			return false;
 		}
-		return this.isGit;
+		return ready;
 	}
+	/** Lazily create (idempotent) the session's isolated bare snapshot repo. */
+	async ensureIsolated(signal) {
+		const dir = this.options.isolatedRepoDir;
+		if (dir === void 0 || dir === "") return false;
+		if (this.isolatedReady !== void 0) return this.isolatedReady;
+		const init = this.options.isolatedRepoInit;
+		if (init !== void 0) this.isolatedReady = await init.catch(() => false);
+		else try {
+			const result = await spawnGit(this.cwd, [
+				"init",
+				"--bare",
+				"--quiet",
+				dir
+			], this.baseEnv, this.options.spawnTimeoutMs, signal);
+			this.isolatedReady = result.code === 0;
+		} catch {
+			this.isolatedReady = false;
+		}
+		return this.isolatedReady;
+	}
+	/**
+	* The project HEAD, for snapshot metadata only (read-only query of the
+	* project's own repo; absent in non-git workspaces).
+	*/
 	async head(signal) {
-		const result = await this.run([
+		const result = await this.runProject([
 			"rev-parse",
 			"--verify",
 			"HEAD"
@@ -286,18 +322,39 @@ var GitProvider = class {
 		}
 	}
 	async assertNoGitOperation(signal) {
-		await this.available(signal);
-		if (this.gitDir === void 0) return false;
-		for (const marker of RUNNING_OPS) if (fs.existsSync(path.join(this.gitDir, marker))) return true;
-		for (const dir of ["rebase-merge", "rebase-apply"]) if (fs.existsSync(path.join(this.gitDir, dir))) return true;
+		const dir = await this.resolveProjectGitDir(signal);
+		if (dir === void 0) return false;
+		for (const marker of RUNNING_OPS) if (fs.existsSync(path.join(dir, marker))) return true;
+		for (const sub of ["rebase-merge", "rebase-apply"]) if (fs.existsSync(path.join(dir, sub))) return true;
 		return false;
 	}
+	/** All snapshot object operations run against the isolated repo. */
 	async run(args, signal, indexFile) {
+		if (!await this.ensureIsolated(signal)) return {
+			code: 128,
+			stdout: "",
+			stderr: "rollback: isolated snapshot repository is unavailable"
+		};
 		const env = indexFile === void 0 ? this.baseEnv : {
 			...this.baseEnv,
 			GIT_INDEX_FILE: indexFile
 		};
-		return spawnGit(this.cwd, args, env, this.options.spawnTimeoutMs, signal);
+		return spawnGit(this.cwd, args, env, this.options.spawnTimeoutMs, signal, this.options.isolatedRepoDir, this.cwd);
+	}
+	/** Read-only queries against the project's own repo (head, fences). */
+	async runProject(args, signal) {
+		return spawnGit(this.cwd, args, this.baseEnv, this.options.spawnTimeoutMs, signal);
+	}
+	/** The project's git dir (`.git`), or undefined outside a git worktree. */
+	async resolveProjectGitDir(signal) {
+		if (this.projectGitDir != null) return this.projectGitDir;
+		this.projectGitDir = null;
+		const result = await this.runProject(["rev-parse", "--absolute-git-dir"], signal);
+		if (result.code === 0) {
+			const out = result.stdout.trim();
+			if (out !== "" && out !== ".") this.projectGitDir = path.resolve(this.cwd, out);
+		}
+		return this.projectGitDir ?? void 0;
 	}
 	normalizeRelPath(input) {
 		this.assertSafeRelPath(input);
@@ -536,6 +593,60 @@ function buildFileChange(cwd, entry, hunks, truncated, binary) {
 }
 //#endregion
 //#region lib/types/host/snapshot.js
+/**
+* Encode an arbitrary string as one filesystem-safe path segment, mirroring
+* the JSONL session persistence layout (`@deepseek-ai/dsh-session-persistence-jsonl`):
+* safe code units stay literal, everything else becomes `~XXXX`.
+*/
+function encodeSessionSegment(raw) {
+	if (raw === ".") return "~002E";
+	if (raw === "..") return "~002E~002E";
+	let out = "";
+	for (let i = 0; i < raw.length; i += 1) {
+		const code = raw.charCodeAt(i);
+		const ch = String.fromCharCode(code);
+		if (ch !== "~" && /^[A-Za-z0-9._-]$/.test(ch)) out += ch;
+		else out += `~${code.toString(16).toUpperCase().padStart(4, "0")}`;
+	}
+	return out;
+}
+/**
+* The readable per-project directory key, mirroring the JSONL persistence
+* layout: separators become `-`, unsafe units `~XXXX`, bounded and wrapped
+* in `--…--`.
+*/
+function projectDirKey(cwd) {
+	let readable = "";
+	let separatorRun = false;
+	for (let i = 0; i < cwd.length; i += 1) {
+		const code = cwd.charCodeAt(i);
+		const ch = String.fromCharCode(code);
+		if (ch === "/" || ch === "\\" || ch === ":") {
+			if (!separatorRun) readable += "-";
+			separatorRun = true;
+		} else if (ch !== "~" && /^[A-Za-z0-9._-]$/.test(ch)) {
+			readable += ch;
+			separatorRun = false;
+		} else {
+			readable += `~${code.toString(16).toUpperCase().padStart(4, "0")}`;
+			separatorRun = false;
+		}
+	}
+	return `--${(readable.replace(/^-+/, "") || "root").slice(0, 251)}--`;
+}
+/**
+* The on-disk directory DSH owns for one session, mirroring the JSONL
+* persistence backend: `<DSH_HOME>/sessions/<projectKey(cwd)>/<sessionId>`.
+* Session-local artifacts placed here are removed together with the session.
+*/
+function sessionDirFor(dshHome, cwd, sessionId) {
+	const project = cwd === void 0 || cwd === "" ? "_no-cwd" : projectDirKey(cwd);
+	return path.join(dshHome, "sessions", project, encodeSessionSegment(sessionId));
+}
+/** The isolated bare snapshot repo for one session, inside its session dir. */
+function sessionSnapshotRepo(dshHome, cwd, sessionId) {
+	return path.join(sessionDirFor(dshHome, cwd, sessionId), "rollback.git");
+}
 function resolveDshHome() {
 	const configured = process.env.DSH_HOME;
 	return configured !== void 0 && configured !== "" ? configured : path.join(os.homedir(), ".dsh");
@@ -573,21 +684,49 @@ var SnapshotManager = class {
 	loaded = false;
 	writeTail = Promise.resolve();
 	domainStorePromise;
+	dshHome;
+	/** In-flight isolated repo inits, keyed by repo dir (dedupe across providers). */
+	isolatedInit = /* @__PURE__ */ new Map();
 	constructor(options, ctx) {
 		this.options = options;
 		this.ctx = ctx;
+		this.dshHome = options.dshHome ?? resolveDshHome();
 	}
 	get ledgerDir() {
 		return this.options.ledgerDir;
 	}
-	providerFor(cwd) {
+	/**
+	* Provider bound to one session's isolated snapshot repo (kept inside the
+	* session's own directory, so deleting the session removes the objects).
+	* `sessionId` undefined degrades to ledger-only coverage.
+	*/
+	providerFor(cwd, sessionId) {
+		const isolatedRepoDir = sessionId === void 0 || sessionId === "" ? void 0 : sessionSnapshotRepo(this.dshHome, cwd, sessionId);
+		const isolatedRepoInit = isolatedRepoDir === void 0 ? void 0 : this.ensureIsolatedRepo(isolatedRepoDir);
 		return new GitProvider(cwd, {
 			spawnTimeoutMs: this.options.spawnTimeoutMs,
 			maxDiffHunksPerFile: this.options.maxDiffHunksPerFile,
 			maxDiffBytesPerFile: this.options.maxDiffBytesPerFile,
 			restoreChunkSize: this.options.restoreChunkSize,
-			ledgerDir: this.options.ledgerDir
+			ledgerDir: this.options.ledgerDir,
+			isolatedRepoDir,
+			isolatedRepoInit
 		});
+	}
+	ensureIsolatedRepo(dir) {
+		const existing = this.isolatedInit.get(dir);
+		if (existing !== void 0) return existing;
+		const init = spawnGit(process.cwd(), [
+			"init",
+			"--bare",
+			"--quiet",
+			dir
+		], process.env, this.options.spawnTimeoutMs).then((result) => result.code === 0).catch(() => false);
+		this.isolatedInit.set(dir, init);
+		init.then((ok) => {
+			if (!ok) this.isolatedInit.delete(dir);
+		});
+		return init;
 	}
 	/** Capture the pre-step baseline. Failures are caught by the caller and never block the agent. */
 	async capture(session, turn) {
@@ -595,7 +734,7 @@ var SnapshotManager = class {
 		if (cwd === void 0 || cwd === "") return void 0;
 		await this.load();
 		if (this.manifests.some((item) => item.sessionId === session.id && item.turn === turn)) return void 0;
-		const provider = this.providerFor(cwd);
+		const provider = this.providerFor(cwd, session.id);
 		const head = await provider.head().catch(() => void 0);
 		let tree;
 		let mode = "ledger";
@@ -1750,7 +1889,7 @@ var LedgerProvider = class {
 			if (byPath.has(change.path)) continue;
 			byPath.set(change.path, change);
 		}
-		if (!gitAvailable) warnings.push("workspace is not inside a git work tree; only tool write/edit modifications captured by the ledger can be restored");
+		if (!gitAvailable) warnings.push("git snapshotting is unavailable for this workspace; only tool write/edit modifications captured by the ledger can be restored");
 		return {
 			changes: [...byPath.values()],
 			warnings
@@ -1808,9 +1947,9 @@ var RollbackRestore = class {
 			sessionId,
 			messageId
 		});
-		const provider = this.snapshots.providerFor(cwd);
+		const provider = this.snapshots.providerFor(cwd, base.session.id);
 		const gitAvailable = await provider.available();
-		if (found.manifest.tree !== void 0 && !await this.snapshots.ensureTreeAvailable(found.manifest, provider)) return fail("snapshot-expired", "the snapshot git objects have been garbage collected", {
+		if (found.manifest.tree !== void 0 && !await this.snapshots.ensureTreeAvailable(found.manifest, provider)) return fail("snapshot-expired", "the snapshot objects are no longer available (the session store was removed or garbage collected)", {
 			sessionId,
 			messageId
 		});
@@ -1848,7 +1987,7 @@ var RollbackRestore = class {
 					...diff.hunks.length > 0 ? { hunks: diff.hunks } : {}
 				});
 			}
-		} else if (found.manifest.tree !== void 0) warnings.push("workspace is no longer inside a git work tree; only ledger-covered paths are shown");
+		} else if (found.manifest.tree !== void 0) warnings.push("the isolated snapshot store is unavailable; only ledger-covered paths are shown");
 		const merged = await new LedgerProvider(this.ctx, this.ledger).mergeChanges(sessionId, found.manifest.turn, cwd, changes, gitAvailable && found.manifest.tree !== void 0);
 		changes = merged.changes;
 		warnings.push(...merged.warnings);
@@ -1898,7 +2037,7 @@ var RollbackRestore = class {
 		const live = this.liveSession(request.sessionId);
 		if (!live.ok) return live;
 		const session = live.value;
-		const provider = this.snapshots.providerFor(prepared.cwd);
+		const provider = this.snapshots.providerFor(prepared.cwd, prepared.sessionId);
 		let guardId = "";
 		let journalId;
 		let guardTree;
@@ -1922,7 +2061,7 @@ var RollbackRestore = class {
 			if (!selected.ok) return selected;
 			for (const item of selected.value.all) affected.add(item);
 			const ledgerPaths = selected.value.ledger.map((item) => item.rel);
-			guardId = (await this.safety.captureGuard(this.ctx, provider, prepared.cwd, guardTree, ledgerPaths, this.ledger)).guardId;
+			guardId = (await this.safety.captureGuard(this.ctx, provider, prepared.cwd, guardTree, ledgerPaths, this.ledger, prepared.sessionId)).guardId;
 			journalId = (await this.safety.journalStart(guardId, selected.value.all)).id;
 			const restored = [];
 			const kept = [];
@@ -2004,7 +2143,7 @@ var RollbackRestore = class {
 		if (!live.ok) return live;
 		const cwd = live.value.header.cwd;
 		if (cwd === void 0) return fail("session-not-live", `session "${sessionId}" has no workspace cwd`);
-		const provider = this.snapshots.providerFor(cwd);
+		const provider = this.snapshots.providerFor(cwd, live.value.id);
 		let rel;
 		try {
 			rel = provider.normalizeRelPath(request.path);
@@ -2132,7 +2271,7 @@ var RollbackRestore = class {
 		}
 		const paths = [...byPath.keys()];
 		for (const item of paths) affected.add(item);
-		const guard = await this.safety.captureGuard(this.ctx, provider, prepared.cwd, guardTree, paths, this.ledger);
+		const guard = await this.safety.captureGuard(this.ctx, provider, prepared.cwd, guardTree, paths, this.ledger, prepared.sessionId);
 		const journalId = (await this.safety.journalStart(guard.guardId, paths)).id;
 		const results = [];
 		const restoredPaths = [];
@@ -2187,7 +2326,7 @@ var RollbackRestore = class {
 		const code = message.includes("workspace lock timeout") ? "lock-timeout" : message.includes("running agent") ? "agent-running" : message.includes("git operation") ? "git-operation-in-progress" : "rollback-failed";
 		let guardRolledBack = guardId === "";
 		if (guardId !== "" && affected.size > 0) try {
-			const provider = this.snapshots.providerFor(prepared.cwd);
+			const provider = this.snapshots.providerFor(prepared.cwd, prepared.sessionId);
 			const liveSession = this.ctx.sessions.get(request.sessionId);
 			const policy = liveSession === void 0 ? sandboxPolicyForCwd(prepared.cwd) : sandboxPolicyFor(this.ctx, liveSession);
 			await this.safety.rollbackGuard(this.ctx, provider, this.ledger, guardId, [...affected], policy);
@@ -2425,7 +2564,7 @@ var RollbackSafety = class {
 		}) !== void 0) throw new Error("a running agent shares this workspace; wait for it to become idle");
 		if (await provider.assertNoGitOperation()) throw new Error("a git operation (merge/rebase/cherry-pick/…) is in progress");
 	}
-	async captureGuard(ctx, provider, cwd, tree, ledgerPaths, ledger) {
+	async captureGuard(ctx, provider, cwd, tree, ledgerPaths, ledger, sessionId) {
 		const ledgerFiles = [];
 		for (const rel of [...new Set(ledgerPaths)]) {
 			const current = await ledger.readCurrentForGuard(cwd, rel);
@@ -2441,7 +2580,8 @@ var RollbackSafety = class {
 		const record = {
 			...tree === void 0 ? {} : { tree },
 			ledgerFiles,
-			cwd
+			cwd,
+			...sessionId === void 0 || sessionId === "" ? {} : { sessionId }
 		};
 		this.guards.set(guardId, record);
 		await this.persistGuards();
@@ -2518,7 +2658,12 @@ var RollbackSafety = class {
 			const lock = await this.readLock(guard.cwd);
 			if (lock !== void 0 && isAlive(lock.ownerPid) && Date.now() - lock.createdAt <= this.options.lockStaleMs) continue;
 			try {
-				const provider = snapshots.providerFor(guard.cwd);
+				if (guard.sessionId === void 0 || guard.sessionId === "") {
+					ctx.logger.warn(`rollback: journal ${entry.id} has no session id; marking interrupted`);
+					await this.journalUpdate(entry.id, "interrupted");
+					continue;
+				}
+				const provider = snapshots.providerFor(guard.cwd, guard.sessionId);
 				await this.rollbackGuard(ctx, provider, ledger, entry.guardId, entry.paths, sandboxPolicyForCwd(guard.cwd));
 				await this.journalUpdate(entry.id, "rolled-back");
 			} catch (error) {
@@ -2592,13 +2737,13 @@ var SessionChangeManager = class {
 		if (cwd === void 0) return fail("session-not-live", `session "${sessionId}" has no workspace cwd`);
 		const manifests = await this.snapshots.listForSession(sessionId);
 		const earliest = manifests[manifests.length - 1];
-		const provider = this.snapshots.providerFor(cwd);
+		const provider = this.snapshots.providerFor(cwd, sessionId);
 		const gitAvailable = await provider.available();
 		const warnings = [];
 		let preparedTree;
 		let baselineUsable = false;
 		let changes = [];
-		if (earliest !== void 0 && earliest.tree !== void 0 && gitAvailable) if (!await this.snapshots.ensureTreeAvailable(earliest, provider)) warnings.push("the session baseline snapshot objects have been garbage collected; only ledger-covered paths are shown");
+		if (earliest !== void 0 && earliest.tree !== void 0 && gitAvailable) if (!await this.snapshots.ensureTreeAvailable(earliest, provider)) warnings.push("the session baseline snapshot objects are no longer available (the session store was removed); only ledger-covered paths are shown");
 		else {
 			baselineUsable = true;
 			preparedTree = await provider.captureTree();
@@ -2707,7 +2852,7 @@ var SessionChangeManager = class {
 		if (bound === void 0 || bound.sessionId !== request.sessionId) return fail("workspace-changed", "the modification list is stale; refresh it and try again", { sessionId: request.sessionId });
 		const live = this.liveSession(request.sessionId);
 		if (!live.ok) return live;
-		const provider = this.snapshots.providerFor(bound.cwd);
+		const provider = this.snapshots.providerFor(bound.cwd, bound.sessionId);
 		let rel;
 		try {
 			rel = provider.normalizeRelPath(request.path);
@@ -2728,7 +2873,7 @@ var SessionChangeManager = class {
 		const live = this.liveSession(request.sessionId);
 		if (!live.ok) return live;
 		this.accepts.acceptModification(request.sessionId, request.modificationId);
-		const provider = this.snapshots.providerFor(bound.cwd);
+		const provider = this.snapshots.providerFor(bound.cwd, bound.sessionId);
 		let rel;
 		try {
 			rel = provider.normalizeRelPath(request.path);
@@ -2754,7 +2899,7 @@ var SessionChangeManager = class {
 		if (!live.ok) return live;
 		const session = live.value;
 		const policy = sandboxPolicyFor(this.ctx, session);
-		const provider = this.snapshots.providerFor(bound.cwd);
+		const provider = this.snapshots.providerFor(bound.cwd, bound.sessionId);
 		let rel;
 		try {
 			rel = provider.normalizeRelPath(request.path);
@@ -2772,7 +2917,7 @@ var SessionChangeManager = class {
 			acquired = true;
 			await this.safety.assertFences(this.ctx, bound.cwd, provider);
 			await this.ctx.sessions.flush(session);
-			guardId = (await this.safety.captureGuard(this.ctx, provider, bound.cwd, bound.preparedTree, [rel], this.ledger)).guardId;
+			guardId = (await this.safety.captureGuard(this.ctx, provider, bound.cwd, bound.preparedTree, [rel], this.ledger, bound.sessionId)).guardId;
 			journalId = (await this.safety.journalStart(guardId, [rel])).id;
 			const restored = [];
 			const deleted = [];
@@ -2835,7 +2980,7 @@ var SessionChangeManager = class {
 		const policy = sandboxPolicyFor(this.ctx, session);
 		const record = this.ledger.recordById(request.sessionId, request.modificationId);
 		if (record === void 0) return fail("rollback-failed", `modification "${request.modificationId}" has no live ledger record; refresh the list and undo at file level instead`, { sessionId: request.sessionId });
-		const provider = this.snapshots.providerFor(bound.cwd);
+		const provider = this.snapshots.providerFor(bound.cwd, bound.sessionId);
 		let rel;
 		try {
 			rel = provider.normalizeRelPath(path.relative(bound.cwd, record.path));
@@ -2854,7 +2999,7 @@ var SessionChangeManager = class {
 			await this.safety.assertFences(this.ctx, bound.cwd, provider);
 			await this.ctx.sessions.flush(session);
 			const fileGuard = await this.ledger.readCurrentForGuard(bound.cwd, rel);
-			guardId = (await this.safety.captureGuard(this.ctx, provider, bound.cwd, bound.preparedTree, [rel], this.ledger)).guardId;
+			guardId = (await this.safety.captureGuard(this.ctx, provider, bound.cwd, bound.preparedTree, [rel], this.ledger, bound.sessionId)).guardId;
 			journalId = (await this.safety.journalStart(guardId, [rel])).id;
 			try {
 				const outcome = await restoreModification(this.ctx, this.ledger, bound.cwd, record, true, this.options.spawnTimeoutMs, policy);
@@ -2963,7 +3108,7 @@ var SessionChangeManager = class {
 		if (!live.ok) return live;
 		const session = live.value;
 		const policy = sandboxPolicyFor(this.ctx, session);
-		const provider = this.snapshots.providerFor(bound.cwd);
+		const provider = this.snapshots.providerFor(bound.cwd, bound.sessionId);
 		const changes = bound.changes;
 		if (changes.length === 0) return ok({
 			guardId: "",
@@ -2988,7 +3133,7 @@ var SessionChangeManager = class {
 			acquired = true;
 			await this.safety.assertFences(this.ctx, bound.cwd, provider);
 			await this.ctx.sessions.flush(session);
-			guardId = (await this.safety.captureGuard(this.ctx, provider, bound.cwd, bound.preparedTree, ledgerChanges.map((change) => change.path), this.ledger)).guardId;
+			guardId = (await this.safety.captureGuard(this.ctx, provider, bound.cwd, bound.preparedTree, ledgerChanges.map((change) => change.path), this.ledger, bound.sessionId)).guardId;
 			journalId = (await this.safety.journalStart(guardId, rels)).id;
 			const restored = [];
 			const deleted = [];
@@ -3125,7 +3270,7 @@ var SessionChangeManager = class {
 		const code = message.includes("workspace lock timeout") ? "lock-timeout" : message.includes("running agent") ? "agent-running" : message.includes("git operation") ? "git-operation-in-progress" : "rollback-failed";
 		let guardRolledBack = guardId === "";
 		if (guardId !== "" && affected.length > 0) try {
-			const provider = this.snapshots.providerFor(bound.cwd);
+			const provider = this.snapshots.providerFor(bound.cwd, bound.sessionId);
 			await this.safety.rollbackGuard(this.ctx, provider, this.ledger, guardId, affected, policy);
 			guardRolledBack = true;
 		} catch {}
@@ -3783,6 +3928,6 @@ function installLedgerListeners(ctx, service) {
 	});
 }
 //#endregion
-export { ChangeLedger, DEFAULT_ROLLBACK_CONFIG, GitProvider, RollbackService, SnapshotManager, apply, boundaryInfo, buildFileChange, changeLedgerRoot, createdFileHunks, findPreviousTurnEnd, inject, installLedgerListeners, isHash, journalsPath, ledgerRecordsPath, lineDiffHunks, locksDir, manifestsPath, mergeFiles, name, normalizeLf, parseDiffHunks, parseDiffTreeZ, readJsonFile, resolveBoundary, resolveBoundaryForTurn, resolveDshHome, restoreModification, sessionTurnPosition, spawnGit, splitDiffByPath, splitDiffSections, unquoteGitPath, wholeFileHunk, writeJsonFileAtomic };
+export { ChangeLedger, DEFAULT_ROLLBACK_CONFIG, GitProvider, RollbackService, SnapshotManager, apply, boundaryInfo, buildFileChange, changeLedgerRoot, createdFileHunks, encodeSessionSegment, findPreviousTurnEnd, inject, installLedgerListeners, isHash, journalsPath, ledgerRecordsPath, lineDiffHunks, locksDir, manifestsPath, mergeFiles, name, normalizeLf, parseDiffHunks, parseDiffTreeZ, projectDirKey, readJsonFile, resolveBoundary, resolveBoundaryForTurn, resolveDshHome, restoreModification, sessionDirFor, sessionSnapshotRepo, sessionTurnPosition, spawnGit, splitDiffByPath, splitDiffSections, unquoteGitPath, wholeFileHunk, writeJsonFileAtomic };
 
 //# sourceMappingURL=index.js.map

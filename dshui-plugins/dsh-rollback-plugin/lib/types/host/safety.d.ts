@@ -23,12 +23,13 @@ export declare class RollbackSafety {
     release(): Promise<void>;
     readLock(cwd: string): Promise<RollbackLockInfo | undefined>;
     assertFences(ctx: RollbackCordisContext, cwd: string, provider: GitProvider): Promise<void>;
-    captureGuard(ctx: RollbackCordisContext, provider: GitProvider, cwd: string, tree: string | undefined, ledgerPaths: readonly string[], ledger: ChangeLedger): Promise<{
+    captureGuard(ctx: RollbackCordisContext, provider: GitProvider, cwd: string, tree: string | undefined, ledgerPaths: readonly string[], ledger: ChangeLedger, sessionId?: string): Promise<{
         guardId: string;
         record: {
             tree?: string;
             ledgerFiles: RollbackGuardFile[];
             cwd: string;
+            sessionId?: string;
         };
     }>;
     journalStart(guardId: string, paths: readonly string[]): Promise<RollbackJournalEntry>;

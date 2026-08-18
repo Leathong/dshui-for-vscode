@@ -1,7 +1,68 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { GitProvider } from "./providers/git.js";
+import { GitProvider, spawnGit } from "./providers/git.js";
+/**
+ * Encode an arbitrary string as one filesystem-safe path segment, mirroring
+ * the JSONL session persistence layout (`@deepseek-ai/dsh-session-persistence-jsonl`):
+ * safe code units stay literal, everything else becomes `~XXXX`.
+ */
+export function encodeSessionSegment(raw) {
+    if (raw === '.')
+        return '~002E';
+    if (raw === '..')
+        return '~002E~002E';
+    let out = '';
+    for (let i = 0; i < raw.length; i += 1) {
+        const code = raw.charCodeAt(i);
+        const ch = String.fromCharCode(code);
+        if (ch !== '~' && /^[A-Za-z0-9._-]$/.test(ch))
+            out += ch;
+        else
+            out += `~${code.toString(16).toUpperCase().padStart(4, '0')}`;
+    }
+    return out;
+}
+/**
+ * The readable per-project directory key, mirroring the JSONL persistence
+ * layout: separators become `-`, unsafe units `~XXXX`, bounded and wrapped
+ * in `--…--`.
+ */
+export function projectDirKey(cwd) {
+    let readable = '';
+    let separatorRun = false;
+    for (let i = 0; i < cwd.length; i += 1) {
+        const code = cwd.charCodeAt(i);
+        const ch = String.fromCharCode(code);
+        if (ch === '/' || ch === '\\' || ch === ':') {
+            if (!separatorRun)
+                readable += '-';
+            separatorRun = true;
+        }
+        else if (ch !== '~' && /^[A-Za-z0-9._-]$/.test(ch)) {
+            readable += ch;
+            separatorRun = false;
+        }
+        else {
+            readable += `~${code.toString(16).toUpperCase().padStart(4, '0')}`;
+            separatorRun = false;
+        }
+    }
+    return `--${(readable.replace(/^-+/, '') || 'root').slice(0, 251)}--`;
+}
+/**
+ * The on-disk directory DSH owns for one session, mirroring the JSONL
+ * persistence backend: `<DSH_HOME>/sessions/<projectKey(cwd)>/<sessionId>`.
+ * Session-local artifacts placed here are removed together with the session.
+ */
+export function sessionDirFor(dshHome, cwd, sessionId) {
+    const project = cwd === undefined || cwd === '' ? '_no-cwd' : projectDirKey(cwd);
+    return path.join(dshHome, 'sessions', project, encodeSessionSegment(sessionId));
+}
+/** The isolated bare snapshot repo for one session, inside its session dir. */
+export function sessionSnapshotRepo(dshHome, cwd, sessionId) {
+    return path.join(sessionDirFor(dshHome, cwd, sessionId), 'rollback.git');
+}
 export function resolveDshHome() {
     const configured = process.env.DSH_HOME;
     return configured !== undefined && configured !== '' ? configured : path.join(os.homedir(), '.dsh');
@@ -41,21 +102,47 @@ export class SnapshotManager {
     loaded = false;
     writeTail = Promise.resolve();
     domainStorePromise;
+    dshHome;
+    /** In-flight isolated repo inits, keyed by repo dir (dedupe across providers). */
+    isolatedInit = new Map();
     constructor(options, ctx) {
         this.options = options;
         this.ctx = ctx;
+        this.dshHome = options.dshHome ?? resolveDshHome();
     }
     get ledgerDir() {
         return this.options.ledgerDir;
     }
-    providerFor(cwd) {
+    /**
+     * Provider bound to one session's isolated snapshot repo (kept inside the
+     * session's own directory, so deleting the session removes the objects).
+     * `sessionId` undefined degrades to ledger-only coverage.
+     */
+    providerFor(cwd, sessionId) {
+        const isolatedRepoDir = sessionId === undefined || sessionId === ''
+            ? undefined
+            : sessionSnapshotRepo(this.dshHome, cwd, sessionId);
+        const isolatedRepoInit = isolatedRepoDir === undefined ? undefined : this.ensureIsolatedRepo(isolatedRepoDir);
         return new GitProvider(cwd, {
             spawnTimeoutMs: this.options.spawnTimeoutMs,
             maxDiffHunksPerFile: this.options.maxDiffHunksPerFile,
             maxDiffBytesPerFile: this.options.maxDiffBytesPerFile,
             restoreChunkSize: this.options.restoreChunkSize,
             ledgerDir: this.options.ledgerDir,
+            isolatedRepoDir,
+            isolatedRepoInit,
         });
+    }
+    ensureIsolatedRepo(dir) {
+        const existing = this.isolatedInit.get(dir);
+        if (existing !== undefined)
+            return existing;
+        const init = spawnGit(process.cwd(), ['init', '--bare', '--quiet', dir], process.env, this.options.spawnTimeoutMs).then(result => result.code === 0).catch(() => false);
+        this.isolatedInit.set(dir, init);
+        // Failed inits are forgotten so a later call can retry.
+        void init.then(ok => { if (!ok)
+            this.isolatedInit.delete(dir); });
+        return init;
     }
     /** Capture the pre-step baseline. Failures are caught by the caller and never block the agent. */
     async capture(session, turn) {
@@ -65,7 +152,7 @@ export class SnapshotManager {
         await this.load();
         if (this.manifests.some(item => item.sessionId === session.id && item.turn === turn))
             return undefined;
-        const provider = this.providerFor(cwd);
+        const provider = this.providerFor(cwd, session.id);
         const head = await provider.head().catch(() => undefined);
         let tree;
         let mode = 'ledger';

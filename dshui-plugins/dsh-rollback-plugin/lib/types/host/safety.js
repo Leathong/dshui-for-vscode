@@ -82,7 +82,7 @@ export class RollbackSafety {
             throw new Error('a git operation (merge/rebase/cherry-pick/…) is in progress');
         }
     }
-    async captureGuard(ctx, provider, cwd, tree, ledgerPaths, ledger) {
+    async captureGuard(ctx, provider, cwd, tree, ledgerPaths, ledger, sessionId) {
         const ledgerFiles = [];
         for (const rel of [...new Set(ledgerPaths)]) {
             const current = await ledger.readCurrentForGuard(cwd, rel);
@@ -95,7 +95,12 @@ export class RollbackSafety {
             });
         }
         const guardId = `guard-${Date.now().toString(36)}-${crypto.randomUUID().slice(0, 8)}`;
-        const record = { ...(tree === undefined ? {} : { tree }), ledgerFiles, cwd };
+        const record = {
+            ...(tree === undefined ? {} : { tree }),
+            ledgerFiles,
+            cwd,
+            ...(sessionId === undefined || sessionId === '' ? {} : { sessionId }),
+        };
         this.guards.set(guardId, record);
         await this.persistGuards();
         return { guardId, record };
@@ -185,7 +190,14 @@ export class RollbackSafety {
             if (lock !== undefined && isAlive(lock.ownerPid) && Date.now() - lock.createdAt <= this.options.lockStaleMs)
                 continue;
             try {
-                const provider = snapshots.providerFor(guard.cwd);
+                if (guard.sessionId === undefined || guard.sessionId === '') {
+                    // Pre-isolation guards have no isolated repo; their tree objects may
+                    // live in the project repo and are not resolvable here.
+                    ctx.logger.warn(`rollback: journal ${entry.id} has no session id; marking interrupted`);
+                    await this.journalUpdate(entry.id, 'interrupted');
+                    continue;
+                }
+                const provider = snapshots.providerFor(guard.cwd, guard.sessionId);
                 await this.rollbackGuard(ctx, provider, ledger, entry.guardId, entry.paths, sandboxPolicyForCwd(guard.cwd));
                 await this.journalUpdate(entry.id, 'rolled-back');
             }

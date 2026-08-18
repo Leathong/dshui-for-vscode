@@ -7,9 +7,14 @@ const RUNNING_OPS = ['MERGE_HEAD', 'CHERRY_PICK_HEAD', 'REVERT_HEAD', 'BISECT_LO
 export function isHash(value) {
     return HEX_RE.test(value);
 }
-export function spawnGit(cwd, args, env, timeoutMs, signal) {
+export function spawnGit(cwd, args, env, timeoutMs, signal, gitDir, workTree) {
+    const flags = [];
+    if (gitDir !== undefined && gitDir !== '')
+        flags.push(`--git-dir=${gitDir}`);
+    if (workTree !== undefined && workTree !== '')
+        flags.push(`--work-tree=${workTree}`);
     return new Promise((resolve, reject) => {
-        const child = spawn('git', ['-C', cwd, ...args], {
+        const child = spawn('git', ['-C', cwd, ...flags, ...args], {
             env: {
                 ...env,
                 GIT_TERMINAL_PROMPT: '0',
@@ -69,8 +74,10 @@ export class GitProvider {
     cwd;
     options;
     baseEnv;
-    isGit;
-    gitDir;
+    /** Isolated snapshot repo readiness (undefined = not yet probed). */
+    isolatedReady;
+    /** The project's own git dir (read-only fence/head queries); null = not a git worktree. */
+    projectGitDir;
     constructor(cwd, options) {
         this.cwd = cwd;
         this.options = options;
@@ -80,25 +87,58 @@ export class GitProvider {
         delete env.GIT_INDEX_FILE;
         this.baseEnv = env;
     }
+    /**
+     * Whether git snapshotting is usable. With the isolated snapshot repo this
+     * no longer depends on the project being a git repository: every workspace
+     * (git or not) can be captured at full fidelity, and non-git workspaces get
+     * the same whole-worktree rollback capability as git ones.
+     */
     async available(signal) {
-        if (this.isGit !== undefined)
-            return this.isGit;
-        try {
-            const result = await this.run(['rev-parse', '--is-inside-work-tree'], signal);
-            this.isGit = result.code === 0 && result.stdout.trim() === 'true';
-            if (this.isGit) {
-                const gitDir = await this.run(['rev-parse', '--absolute-git-dir'], signal);
-                if (gitDir.code === 0)
-                    this.gitDir = path.resolve(this.cwd, gitDir.stdout.trim());
+        if (this.isolatedReady !== undefined)
+            return this.isolatedReady;
+        const ready = await this.ensureIsolated(signal);
+        if (ready) {
+            try {
+                if (!fs.statSync(this.cwd).isDirectory()) {
+                    this.isolatedReady = false;
+                    return false;
+                }
+            }
+            catch {
+                this.isolatedReady = false;
+                return false;
             }
         }
-        catch {
-            this.isGit = false;
-        }
-        return this.isGit;
+        return ready;
     }
+    /** Lazily create (idempotent) the session's isolated bare snapshot repo. */
+    async ensureIsolated(signal) {
+        const dir = this.options.isolatedRepoDir;
+        if (dir === undefined || dir === '')
+            return false;
+        if (this.isolatedReady !== undefined)
+            return this.isolatedReady;
+        const init = this.options.isolatedRepoInit;
+        if (init !== undefined) {
+            this.isolatedReady = await init.catch(() => false);
+        }
+        else {
+            try {
+                const result = await spawnGit(this.cwd, ['init', '--bare', '--quiet', dir], this.baseEnv, this.options.spawnTimeoutMs, signal);
+                this.isolatedReady = result.code === 0;
+            }
+            catch {
+                this.isolatedReady = false;
+            }
+        }
+        return this.isolatedReady;
+    }
+    /**
+     * The project HEAD, for snapshot metadata only (read-only query of the
+     * project's own repo; absent in non-git workspaces).
+     */
     async head(signal) {
-        const result = await this.run(['rev-parse', '--verify', 'HEAD'], signal);
+        const result = await this.runProject(['rev-parse', '--verify', 'HEAD'], signal);
         if (result.code !== 0 || !isHash(result.stdout.trim()))
             return undefined;
         return result.stdout.trim();
@@ -233,22 +273,44 @@ export class GitProvider {
         }
     }
     async assertNoGitOperation(signal) {
-        await this.available(signal);
-        if (this.gitDir === undefined)
+        const dir = await this.resolveProjectGitDir(signal);
+        if (dir === undefined)
             return false;
         for (const marker of RUNNING_OPS) {
-            if (fs.existsSync(path.join(this.gitDir, marker)))
+            if (fs.existsSync(path.join(dir, marker)))
                 return true;
         }
-        for (const dir of ['rebase-merge', 'rebase-apply']) {
-            if (fs.existsSync(path.join(this.gitDir, dir)))
+        for (const sub of ['rebase-merge', 'rebase-apply']) {
+            if (fs.existsSync(path.join(dir, sub)))
                 return true;
         }
         return false;
     }
+    /** All snapshot object operations run against the isolated repo. */
     async run(args, signal, indexFile) {
+        const ready = await this.ensureIsolated(signal);
+        if (!ready) {
+            return { code: 128, stdout: '', stderr: 'rollback: isolated snapshot repository is unavailable' };
+        }
         const env = indexFile === undefined ? this.baseEnv : { ...this.baseEnv, GIT_INDEX_FILE: indexFile };
-        return spawnGit(this.cwd, args, env, this.options.spawnTimeoutMs, signal);
+        return spawnGit(this.cwd, args, env, this.options.spawnTimeoutMs, signal, this.options.isolatedRepoDir, this.cwd);
+    }
+    /** Read-only queries against the project's own repo (head, fences). */
+    async runProject(args, signal) {
+        return spawnGit(this.cwd, args, this.baseEnv, this.options.spawnTimeoutMs, signal);
+    }
+    /** The project's git dir (`.git`), or undefined outside a git worktree. */
+    async resolveProjectGitDir(signal) {
+        if (this.projectGitDir != null)
+            return this.projectGitDir;
+        this.projectGitDir = null;
+        const result = await this.runProject(['rev-parse', '--absolute-git-dir'], signal);
+        if (result.code === 0) {
+            const out = result.stdout.trim();
+            if (out !== '' && out !== '.')
+                this.projectGitDir = path.resolve(this.cwd, out);
+        }
+        return this.projectGitDir ?? undefined;
     }
     normalizeRelPath(input) {
         this.assertSafeRelPath(input);

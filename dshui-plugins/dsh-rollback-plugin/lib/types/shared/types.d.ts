@@ -168,6 +168,8 @@ export interface RollbackSnapshotManifest {
 export interface RollbackGuardRecord {
     guardId: string;
     cwd: string;
+    /** Session owning the guard; resolves the isolated snapshot repo for tree restore. */
+    sessionId?: string;
     tree?: string;
     ledgerFiles: RollbackGuardFile[];
     createdAt: number;

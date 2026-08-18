@@ -44,7 +44,7 @@ export class SessionChangeManager {
         }
         const manifests = await this.snapshots.listForSession(sessionId);
         const earliest = manifests[manifests.length - 1];
-        const provider = this.snapshots.providerFor(cwd);
+        const provider = this.snapshots.providerFor(cwd, sessionId);
         const gitAvailable = await provider.available();
         const warnings = [];
         let preparedTree;
@@ -52,7 +52,7 @@ export class SessionChangeManager {
         let changes = [];
         if (earliest !== undefined && earliest.tree !== undefined && gitAvailable) {
             if (!(await this.snapshots.ensureTreeAvailable(earliest, provider))) {
-                warnings.push('the session baseline snapshot objects have been garbage collected; only ledger-covered paths are shown');
+                warnings.push('the session baseline snapshot objects are no longer available (the session store was removed); only ledger-covered paths are shown');
             }
             else {
                 baselineUsable = true;
@@ -203,7 +203,7 @@ export class SessionChangeManager {
         const live = this.liveSession(request.sessionId);
         if (!live.ok)
             return live;
-        const provider = this.snapshots.providerFor(bound.cwd);
+        const provider = this.snapshots.providerFor(bound.cwd, bound.sessionId);
         let rel;
         try {
             rel = provider.normalizeRelPath(request.path);
@@ -231,7 +231,7 @@ export class SessionChangeManager {
         if (!live.ok)
             return live;
         this.accepts.acceptModification(request.sessionId, request.modificationId);
-        const provider = this.snapshots.providerFor(bound.cwd);
+        const provider = this.snapshots.providerFor(bound.cwd, bound.sessionId);
         let rel;
         try {
             rel = provider.normalizeRelPath(request.path);
@@ -261,7 +261,7 @@ export class SessionChangeManager {
             return live;
         const session = live.value;
         const policy = sandboxPolicyFor(this.ctx, session);
-        const provider = this.snapshots.providerFor(bound.cwd);
+        const provider = this.snapshots.providerFor(bound.cwd, bound.sessionId);
         let rel;
         try {
             rel = provider.normalizeRelPath(request.path);
@@ -283,7 +283,7 @@ export class SessionChangeManager {
             acquired = true;
             await this.safety.assertFences(this.ctx, bound.cwd, provider);
             await this.ctx.sessions.flush(session);
-            guardId = (await this.safety.captureGuard(this.ctx, provider, bound.cwd, bound.preparedTree, [rel], this.ledger)).guardId;
+            guardId = (await this.safety.captureGuard(this.ctx, provider, bound.cwd, bound.preparedTree, [rel], this.ledger, bound.sessionId)).guardId;
             journalId = (await this.safety.journalStart(guardId, [rel])).id;
             const restored = [];
             const deleted = [];
@@ -368,7 +368,7 @@ export class SessionChangeManager {
         if (record === undefined) {
             return fail('rollback-failed', `modification "${request.modificationId}" has no live ledger record; refresh the list and undo at file level instead`, { sessionId: request.sessionId });
         }
-        const provider = this.snapshots.providerFor(bound.cwd);
+        const provider = this.snapshots.providerFor(bound.cwd, bound.sessionId);
         let rel;
         try {
             rel = provider.normalizeRelPath(path.relative(bound.cwd, record.path));
@@ -391,7 +391,7 @@ export class SessionChangeManager {
             await this.safety.assertFences(this.ctx, bound.cwd, provider);
             await this.ctx.sessions.flush(session);
             const fileGuard = await this.ledger.readCurrentForGuard(bound.cwd, rel);
-            guardId = (await this.safety.captureGuard(this.ctx, provider, bound.cwd, bound.preparedTree, [rel], this.ledger)).guardId;
+            guardId = (await this.safety.captureGuard(this.ctx, provider, bound.cwd, bound.preparedTree, [rel], this.ledger, bound.sessionId)).guardId;
             journalId = (await this.safety.journalStart(guardId, [rel])).id;
             try {
                 const outcome = await restoreModification(this.ctx, this.ledger, bound.cwd, record, true, this.options.spawnTimeoutMs, policy);
@@ -520,7 +520,7 @@ export class SessionChangeManager {
             return live;
         const session = live.value;
         const policy = sandboxPolicyFor(this.ctx, session);
-        const provider = this.snapshots.providerFor(bound.cwd);
+        const provider = this.snapshots.providerFor(bound.cwd, bound.sessionId);
         const changes = bound.changes;
         if (changes.length === 0) {
             return ok({
@@ -550,7 +550,7 @@ export class SessionChangeManager {
             acquired = true;
             await this.safety.assertFences(this.ctx, bound.cwd, provider);
             await this.ctx.sessions.flush(session);
-            guardId = (await this.safety.captureGuard(this.ctx, provider, bound.cwd, bound.preparedTree, ledgerChanges.map(change => change.path), this.ledger)).guardId;
+            guardId = (await this.safety.captureGuard(this.ctx, provider, bound.cwd, bound.preparedTree, ledgerChanges.map(change => change.path), this.ledger, bound.sessionId)).guardId;
             journalId = (await this.safety.journalStart(guardId, rels)).id;
             const restored = [];
             const deleted = [];
@@ -727,7 +727,7 @@ export class SessionChangeManager {
         let guardRolledBack = guardId === '';
         if (guardId !== '' && affected.length > 0) {
             try {
-                const provider = this.snapshots.providerFor(bound.cwd);
+                const provider = this.snapshots.providerFor(bound.cwd, bound.sessionId);
                 await this.safety.rollbackGuard(this.ctx, provider, this.ledger, guardId, affected, policy);
                 guardRolledBack = true;
             }

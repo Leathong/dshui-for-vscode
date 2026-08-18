@@ -21,7 +21,7 @@ export class LedgerProvider {
             byPath.set(change.path, change);
         }
         if (!gitAvailable) {
-            warnings.push('workspace is not inside a git work tree; only tool write/edit modifications captured by the ledger can be restored');
+            warnings.push('git snapshotting is unavailable for this workspace; only tool write/edit modifications captured by the ledger can be restored');
         }
         return { changes: [...byPath.values()], warnings };
     }

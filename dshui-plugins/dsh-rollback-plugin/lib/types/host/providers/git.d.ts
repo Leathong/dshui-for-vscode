@@ -5,6 +5,17 @@ export interface GitProviderOptions {
     maxDiffBytesPerFile: number;
     restoreChunkSize: number;
     ledgerDir?: string;
+    /**
+     * Absolute path to the session's isolated bare snapshot repository. Every
+     * snapshot object (blobs/trees) is written and read here instead of the
+     * project's own `.git/objects`, so rollback activity never touches the
+     * user's repository (VSCode SCM stays undisturbed) and is never pruned by
+     * the project's `git gc`. Optional: without it the provider is degraded
+     * (no git snapshotting).
+     */
+    isolatedRepoDir?: string;
+    /** In-flight `git init` for the isolated repo (avoids concurrent inits). */
+    isolatedRepoInit?: Promise<boolean>;
 }
 export interface GitTreeEntry {
     path: string;
@@ -20,15 +31,29 @@ export interface GitRunResult {
     stderr: string;
 }
 export declare function isHash(value: string): boolean;
-export declare function spawnGit(cwd: string, args: readonly string[], env: NodeJS.ProcessEnv, timeoutMs: number, signal?: AbortSignal): Promise<GitRunResult>;
+export declare function spawnGit(cwd: string, args: readonly string[], env: NodeJS.ProcessEnv, timeoutMs: number, signal?: AbortSignal, gitDir?: string, workTree?: string): Promise<GitRunResult>;
 export declare class GitProvider {
     readonly cwd: string;
     private readonly options;
     private readonly baseEnv;
-    private isGit?;
-    private gitDir?;
+    /** Isolated snapshot repo readiness (undefined = not yet probed). */
+    private isolatedReady?;
+    /** The project's own git dir (read-only fence/head queries); null = not a git worktree. */
+    private projectGitDir?;
     constructor(cwd: string, options: GitProviderOptions);
+    /**
+     * Whether git snapshotting is usable. With the isolated snapshot repo this
+     * no longer depends on the project being a git repository: every workspace
+     * (git or not) can be captured at full fidelity, and non-git workspaces get
+     * the same whole-worktree rollback capability as git ones.
+     */
     available(signal?: AbortSignal): Promise<boolean>;
+    /** Lazily create (idempotent) the session's isolated bare snapshot repo. */
+    private ensureIsolated;
+    /**
+     * The project HEAD, for snapshot metadata only (read-only query of the
+     * project's own repo; absent in non-git workspaces).
+     */
     head(signal?: AbortSignal): Promise<string | undefined>;
     /** Snapshot the entire worktree into a temporary-index tree object. */
     captureTree(signal?: AbortSignal): Promise<string>;
@@ -55,7 +80,12 @@ export declare class GitProvider {
     fileHash(relPath: string, signal?: AbortSignal): Promise<string | undefined>;
     restorePaths(tree: string, relPaths: readonly string[], signal?: AbortSignal): Promise<void>;
     assertNoGitOperation(signal?: AbortSignal): Promise<boolean>;
+    /** All snapshot object operations run against the isolated repo. */
     run(args: readonly string[], signal?: AbortSignal, indexFile?: string): Promise<GitRunResult>;
+    /** Read-only queries against the project's own repo (head, fences). */
+    private runProject;
+    /** The project's git dir (`.git`), or undefined outside a git worktree. */
+    private resolveProjectGitDir;
     normalizeRelPath(input: string): string;
     isWithin(input: string): boolean;
     assertSafeRelPath(input: string): void;

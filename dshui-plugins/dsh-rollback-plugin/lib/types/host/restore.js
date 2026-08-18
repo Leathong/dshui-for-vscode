@@ -61,10 +61,10 @@ export class RollbackRestore {
         if (found === undefined) {
             return fail('snapshot-unavailable', `no rollback snapshot is available for turn ${boundary.targetTurn}`, { sessionId, messageId });
         }
-        const provider = this.snapshots.providerFor(cwd);
+        const provider = this.snapshots.providerFor(cwd, base.session.id);
         const gitAvailable = await provider.available();
         if (found.manifest.tree !== undefined && !(await this.snapshots.ensureTreeAvailable(found.manifest, provider))) {
-            return fail('snapshot-expired', 'the snapshot git objects have been garbage collected', { sessionId, messageId });
+            return fail('snapshot-expired', 'the snapshot objects are no longer available (the session store was removed or garbage collected)', { sessionId, messageId });
         }
         const warnings = [...(found.degraded ? [`snapshot is from turn ${found.manifest.turn}, before the requested turn ${boundary.targetTurn}`] : [])];
         let preparedTree;
@@ -104,7 +104,7 @@ export class RollbackRestore {
             }
         }
         else if (found.manifest.tree !== undefined) {
-            warnings.push('workspace is no longer inside a git work tree; only ledger-covered paths are shown');
+            warnings.push('the isolated snapshot store is unavailable; only ledger-covered paths are shown');
         }
         const ledgerProvider = new LedgerProvider(this.ctx, this.ledger);
         const merged = await ledgerProvider.mergeChanges(sessionId, found.manifest.turn, cwd, changes, gitAvailable && found.manifest.tree !== undefined);
@@ -170,7 +170,7 @@ export class RollbackRestore {
         if (!live.ok)
             return live;
         const session = live.value;
-        const provider = this.snapshots.providerFor(prepared.cwd);
+        const provider = this.snapshots.providerFor(prepared.cwd, prepared.sessionId);
         let guardId = '';
         let journalId;
         let guardTree;
@@ -201,7 +201,7 @@ export class RollbackRestore {
             for (const item of selected.value.all)
                 affected.add(item);
             const ledgerPaths = selected.value.ledger.map(item => item.rel);
-            guardId = (await this.safety.captureGuard(this.ctx, provider, prepared.cwd, guardTree, ledgerPaths, this.ledger)).guardId;
+            guardId = (await this.safety.captureGuard(this.ctx, provider, prepared.cwd, guardTree, ledgerPaths, this.ledger, prepared.sessionId)).guardId;
             journalId = (await this.safety.journalStart(guardId, selected.value.all)).id;
             const restored = [];
             const kept = [];
@@ -304,7 +304,7 @@ export class RollbackRestore {
         const cwd = live.value.header.cwd;
         if (cwd === undefined)
             return fail('session-not-live', `session "${sessionId}" has no workspace cwd`);
-        const provider = this.snapshots.providerFor(cwd);
+        const provider = this.snapshots.providerFor(cwd, live.value.id);
         let rel;
         try {
             rel = provider.normalizeRelPath(request.path);
@@ -433,7 +433,7 @@ export class RollbackRestore {
         const paths = [...byPath.keys()];
         for (const item of paths)
             affected.add(item);
-        const guard = await this.safety.captureGuard(this.ctx, provider, prepared.cwd, guardTree, paths, this.ledger);
+        const guard = await this.safety.captureGuard(this.ctx, provider, prepared.cwd, guardTree, paths, this.ledger, prepared.sessionId);
         const journalId = (await this.safety.journalStart(guard.guardId, paths)).id;
         const results = [];
         const restoredPaths = [];
@@ -493,7 +493,7 @@ export class RollbackRestore {
         let guardRolledBack = guardId === '';
         if (guardId !== '' && affected.size > 0) {
             try {
-                const provider = this.snapshots.providerFor(prepared.cwd);
+                const provider = this.snapshots.providerFor(prepared.cwd, prepared.sessionId);
                 const liveSession = this.ctx.sessions.get(request.sessionId);
                 const policy = liveSession === undefined ? sandboxPolicyForCwd(prepared.cwd) : sandboxPolicyFor(this.ctx, liveSession);
                 await this.safety.rollbackGuard(this.ctx, provider, this.ledger, guardId, [...affected], policy);
