@@ -2,7 +2,7 @@
   "name": "dshui-for-vscode",
   "displayName": "dsh UI for VS Code",
   "description": "The DeepSeek Harness (dsh) web UI embedded in VS Code, scoped to the workspace you have open. No workspace selection: the opened folder IS the dsh workspace, the sidebar lists only its sessions, and the input box always stays at the bottom.",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "publisher": "Leathong",
   "icon": "media/icon.png",
   "author": "Leathong",
