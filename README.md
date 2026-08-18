@@ -71,7 +71,8 @@ agentic coding 框架，主张「一切皆插件」）的 Web UI 嵌入 VS Code 
 
 ## 环境要求
 
-- VS Code ≥ 1.85
+- VS Code ≥ 1.105（内置 dsh ≥ rc7 需要扩展宿主 Node ≥ 22.19；VS Code 1.105 起内嵌 Node 22.19，
+  1.104 及更早不满足——`engines.vscode` 会在安装时就拦截，运行时也有守卫提示）
 - 无需单独安装 Node：扩展使用扩展宿主内置的 Node（`ELECTRON_RUN_AS_NODE`）运行 dsh CLI。
 - 仅当需要**从源码重建客户端 bundle** 时才需要本机 Node ≥ 22.19 与 pnpm 11.7.0（见
   [开发流程](#开发流程)）。
@@ -345,9 +346,10 @@ code --extensionDevelopmentPath="$PWD" <文件夹>
 
 扩展把两处 dsh 版本绑定在一起，升级时需要一起对齐：
 
-1. **CLI 运行时**：`package.json` 的 `dependencies["@deepseek-ai/dsh"]`（当前 `0.1.0-rc.6`）。
-2. **客户端 bundle 的源码**：`.dsh-src` 检出（当前对应 rc.6 发布的相近提交；由于仓库 master 可能
-   落后于 npm 发布，对齐方式是查看各包 `package.json` 的版本号，并以实际运行测试为准）。
+1. **CLI 运行时**：`package.json` 的 `dependencies["@deepseek-ai/dsh"]`（当前 `0.1.0-rc.7`）。
+2. **客户端 bundle 的源码**：`.dsh-src` 检出（当前对应 rc.7 发布（`dsh-v0.1.0-rc.7`）加两个 dshui
+   提交；由于仓库 master 可能落后于 npm 发布，对齐方式是查看各包 `package.json` 的版本号，
+   并以实际运行测试为准）。
 
 升级步骤：
 

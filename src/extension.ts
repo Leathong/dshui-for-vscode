@@ -212,6 +212,24 @@ async function deleteSessionFile(dshHome: string, sessionId: string, cwd: string
 }
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
+  // dsh ≥ 0.1.0-rc.7 requires embedded Node ≥ 22.19 (`^22.19.0 || >=24.0.0`);
+  // the server runs on the SAME executable as the extension host (Electron +
+  // ELECTRON_RUN_AS_NODE=1), so the host's `process.versions.node` is the
+  // runtime version. `engines.vscode ^1.105.0` already blocks older VS Code
+  // at install time (1.105.0 bundles Node 22.19.0); this guard is the
+  // fail-fast backstop with an actionable message instead of a cryptic server
+  // boot failure.
+  const MIN_NODE = '22.19.0'
+  const MIN_VSCODE = '1.105.0'
+  if (compareVersions(process.versions.node, MIN_NODE) < 0) {
+    const message = `dsh UI: 当前 VS Code 内嵌 Node.js v${process.versions.node} 过低（dsh rc7 需要 ≥ ${MIN_NODE}）。请升级 VS Code 到 ${MIN_VSCODE} 或更高版本后重载窗口。`
+    vscode.window.showErrorMessage(message)
+    installCrashHandlers()
+    setLogFile(path.join(resolveDshHome(), 'dshui-logs', 'extension.log'))
+    logger.error(`[dshui] activation blocked: embedded node ${process.versions.node} < ${MIN_NODE} (upgrade VS Code to >= ${MIN_VSCODE})`)
+    logger.dispose()
+    return
+  }
   // Crashes inside the extension host leave a trace in the Output panel.
   installCrashHandlers()
   const extensionRoot = context.extensionPath

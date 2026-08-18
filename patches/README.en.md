@@ -3,7 +3,7 @@
 > English · [中文](README.md)
 
 `dshui-client-bundles.patch` contains the dshui modifications to the client source of
-[deepseek-harness](https://github.com/deepseek-ai/deepseek-harness) (15 files across two packages):
+[deepseek-harness](https://github.com/deepseek-ai/deepseek-harness) (16 files across two packages):
 
 - `ui-workspace`: `tree.ts` (`scopedWorkspacePath`, the scope params on the derives, and the
   locally-deleted-session hide set), `WorkspaceBrowser.tsx` (the `SCOPE` constant,
@@ -13,10 +13,12 @@
   `rows/Rows.tsx` ("Delete Session" menu / trash icon / danger style, `onArchive` → `onDelete`),
   `locales.ts` (`menu.archiveSession` → `menu.deleteSession`), and `tsdown.config.ts` (bundle id →
   `dshui-client-ui-workspace`);
-- `ui-conversation`: `ConversationRoot.tsx` (the `SCOPE` constant, the static chip, hero hiding,
-  `data-dshui-scope`), `EmptyHero.tsx` (the `staticChip` prop of `WorkspaceChip`),
-  `ConversationRoot.module.css` (scoped hero pinned to the bottom), `HeroShell.module.css`
-  (`.workspaceStatic`), and `tsdown.config.ts` (bundle id → `dshui-client-ui-conversation`).
+- `ui-conversation`: `apply.ts` (attaches the click origin `dshuiOrigin` to `host.openPath` so a
+  nested-workspace file opens in the window where it was clicked), `ConversationRoot.tsx` (the
+  `SCOPE` constant, the static chip, hero hiding, `data-dshui-scope`), `EmptyHero.tsx` (the
+  `staticChip` prop of `WorkspaceChip`), `ConversationRoot.module.css` (scoped hero pinned to the
+  bottom), `HeroShell.module.css` (`.workspaceStatic`), and `tsdown.config.ts` (bundle id →
+  `dshui-client-ui-conversation`).
 
 Effect: the sidebar lists only the current workspace's sessions, the input box stays pinned to the
 bottom (no centered hero), and the session menu reads "Delete Session" (the extension host deletes
@@ -30,13 +32,13 @@ above (three specs under `tests/`).
 The patch targets this base commit (**pinned; it must not drift**):
 
 ```
-47f943859bef60e4160492346772ded9b24f765a
+99f6f02fecdb7dff40c3fbc9470f5907c29f74ca
 ```
 
 ```sh
 git clone https://github.com/deepseek-ai/deepseek-harness.git .dsh-src
 cd .dsh-src
-git fetch origin 47f943859bef60e4160492346772ded9b24f765a && git checkout FETCH_HEAD
+git fetch origin 99f6f02fecdb7dff40c3fbc9470f5907c29f74ca && git checkout FETCH_HEAD
 git apply ../patches/dshui-client-bundles.patch     # fails safely if the base commit mismatches
 pnpm install                                        # requires pnpm 11.7.0, Node ^22.19 || >=24
 pnpm run build:lib:host

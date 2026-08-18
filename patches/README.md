@@ -3,7 +3,7 @@
 > 中文 · [English](README.en.md)
 
 `dshui-client-bundles.patch` 是对 [deepseek-harness](https://github.com/deepseek-ai/deepseek-harness)
-客户端源码的 dshui 修改（15 个文件，两个包）：
+客户端源码的 dshui 修改（16 个文件，两个包）：
 
 - `ui-workspace`：`tree.ts`（scopedWorkspacePath 与各 derive 的 scope 参数、
   本地删除会话隐藏集）、`WorkspaceBrowser.tsx`（SCOPE 常量、workspaces/ungrouped
@@ -12,7 +12,8 @@
   `rows/Rows.tsx`（会话菜单「删除会话」/垃圾桶图标/danger 样式、`onArchive` 改为 `onDelete`）、
   `locales.ts`（`menu.archiveSession` 改为 `menu.deleteSession`）、
   `tsdown.config.ts`（bundle id 改为 `dshui-client-ui-workspace`）；
-- `ui-conversation`：`ConversationRoot.tsx`（SCOPE 常量、静态 chip、hero 隐藏、`data-dshui-scope`）、
+- `ui-conversation`：`apply.ts`（`host.openPath` 附带点击来源 `dshuiOrigin`，嵌套工作区文件在
+  点击窗口打开）、`ConversationRoot.tsx`（SCOPE 常量、静态 chip、hero 隐藏、`data-dshui-scope`）、
   `EmptyHero.tsx`（WorkspaceChip 的 staticChip prop）、`ConversationRoot.module.css`（scoped hero
   贴底）、`HeroShell.module.css`（`.workspaceStatic`）、`tsdown.config.ts`（bundle id 改为
   `dshui-client-ui-conversation`）。
@@ -27,13 +28,13 @@
 补丁针对的基提交（**固定，不能漂移**）：
 
 ```
-47f943859bef60e4160492346772ded9b24f765a
+99f6f02fecdb7dff40c3fbc9470f5907c29f74ca
 ```
 
 ```sh
 git clone https://github.com/deepseek-ai/deepseek-harness.git .dsh-src
 cd .dsh-src
-git fetch origin 47f943859bef60e4160492346772ded9b24f765a && git checkout FETCH_HEAD
+git fetch origin 99f6f02fecdb7dff40c3fbc9470f5907c29f74ca && git checkout FETCH_HEAD
 git apply ../patches/dshui-client-bundles.patch     # 基提交不匹配会安全失败
 pnpm install                                        # 需要 pnpm 11.7.0、Node ^22.19 || >=24
 pnpm run build:lib:host

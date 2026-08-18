@@ -82,7 +82,9 @@ deep VS Code integrations:
 
 ## Requirements
 
-- VS Code ≥ 1.85
+- VS Code ≥ 1.105 (bundled dsh ≥ rc7 needs extension-host Node ≥ 22.19; VS Code 1.105+ embeds Node
+  22.19, 1.104 and earlier do not satisfy it — `engines.vscode` blocks them at install time, with a
+  runtime guard as backstop)
 - No separate Node installation: the extension runs the dsh CLI with the Node bundled inside the
   extension host (`ELECTRON_RUN_AS_NODE`).
 - A local Node ≥ 22.19 and pnpm 11.7.0 are only needed when **rebuilding the client bundles from
@@ -412,10 +414,10 @@ workflow below.
 
 The extension binds two dsh versions together, and both must be aligned on upgrade:
 
-1. **CLI runtime:** `dependencies["@deepseek-ai/dsh"]` in `package.json` (currently `0.1.0-rc.6`).
-2. **Client bundle source:** the `.dsh-src` checkout (currently a commit near the rc.6 release; since
-   the repo's master may lag behind the npm release, align by checking each package's version in its
-   `package.json` and confirm with real runtime tests).
+1. **CLI runtime:** `dependencies["@deepseek-ai/dsh"]` in `package.json` (currently `0.1.0-rc.7`).
+2. **Client bundle source:** the `.dsh-src` checkout (currently the `dsh-v0.1.0-rc.7` release plus the
+   two dshui commits; since the repo's master may lag behind the npm release, align by checking each
+   package's version in its `package.json` and confirm with real runtime tests).
 
 Upgrade steps:
 
