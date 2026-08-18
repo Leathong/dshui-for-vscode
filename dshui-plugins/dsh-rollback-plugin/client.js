@@ -459,17 +459,18 @@ window.__ModuleLoader__.load({
 			const openReview = (path) => {
 				const current = dataRef.current;
 				if (current === null) return;
+				const change = current.changes.find((item) => item.path === path);
 				const payload = {
 					type: "dshui:reviewModifications",
 					sessionId: props.sessionId,
 					listId: current.listId,
-					path
+					path,
+					...change === void 0 ? {} : { change }
 				};
 				if (typeof window !== "undefined" && window.parent !== window) {
 					window.parent.postMessage(payload, "*");
 					return;
 				}
-				const change = current.changes.find((item) => item.path === path);
 				if (change !== void 0) openFile(change);
 			};
 			const loadRef = (0, react.useRef)(() => {});

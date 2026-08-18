@@ -43,6 +43,8 @@ export declare class AcceptLedger {
     private persist;
     acceptFile(sessionId: string, filePath: string, fingerprint?: RollbackAcceptFingerprint, content?: string): void;
     acceptModification(sessionId: string, modificationId: string): void;
+    /** File accept record; cheap existence/identity check before fingerprinting the file. */
+    fileRecord(sessionId: string, filePath: string): AcceptRecord | undefined;
     fileAccepted(sessionId: string, filePath: string, fingerprint?: RollbackAcceptFingerprint): boolean;
     /** Bounded text content captured at accept time (diff baseline for later changes). */
     acceptedContent(sessionId: string, filePath: string): string | undefined;

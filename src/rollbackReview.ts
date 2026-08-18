@@ -109,7 +109,7 @@ interface ReviewState {
   anchors: Array<{ side: 'orig' | 'mod'; line: number }>
 }
 
-function isObject(value: unknown): value is Record<string, unknown> {
+export function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
 }
 
@@ -394,22 +394,38 @@ export class RollbackReviewManager {
     this.states.clear()
   }
 
-  /** Open the native file-level diff for one unaccepted file. */
-  async showFile(port: number, sessionId: string, path: string): Promise<void> {
-    const remote = await rollbackSessionChanges(port, sessionId)
-    if (!remote.ok) {
-      logger.error(`[dshui] rollback/sessionChanges failed (port ${port}): ${remote.error.message}`)
-      void vscode.window.showErrorMessage(`dshui: ${L('failed to load modification list', '加载修改列表失败')}: ${remote.error.message}`)
-      return
+  /**
+   * Open the native file-level diff for one unaccepted file.
+   *
+   * Fast path: the sidebar dock has already computed this file's diff, so
+   * `change`/`listId` arrive with the review message and the diff opens with
+   * zero RPC (no `rollback/sessionChanges`, no whole-repo `captureTree`).
+   * Fallback: when the dock data is missing or the file was accepted since
+   * the list was loaded, refetch the session list over RPC as before.
+   */
+  async showFile(port: number, sessionId: string, path: string, listId?: string, change?: RollbackFileChange): Promise<void> {
+    let resolved: { change: RollbackFileChange; listId: string } | undefined
+    if (change !== undefined && listId !== undefined && change.accepted !== true) {
+      // logger.info(`[dshui] review via dock data: ${path}`)
+      resolved = { change, listId }
+    } else {
+      const remote = await rollbackSessionChanges(port, sessionId)
+      if (!remote.ok) {
+        logger.error(`[dshui] rollback/sessionChanges failed (port ${port}): ${remote.error.message}`)
+        void vscode.window.showErrorMessage(`dshui: ${L('failed to load modification list', '加载修改列表失败')}: ${remote.error.message}`)
+        return
+      }
+      const value = remote.value
+      const found = value.changes.find(item => item.path === path && item.accepted !== true)
+      if (found === undefined) {
+        void vscode.window.showInformationMessage(L(`No unaccepted modification for ${path}.`, `没有未接受的修改：${path}`))
+        return
+      }
+      resolved = { change: found, listId: value.listId }
     }
-    const value = remote.value
-    const change = value.changes.find(item => item.path === path && item.accepted !== true)
-    if (change === undefined) {
-      void vscode.window.showInformationMessage(L(`No unaccepted modification for ${path}.`, `没有未接受的修改：${path}`))
-      return
-    }
-    const texts = buildFileDiffTexts(change)
-    if (texts.original === '' && texts.modified === '' && (change.hunks ?? []).length === 0) {
+    const { change: resolvedChange, listId: resolvedListId } = resolved
+    const texts = buildFileDiffTexts(resolvedChange)
+    if (texts.original === '' && texts.modified === '' && (resolvedChange.hunks ?? []).length === 0) {
       void vscode.window.showWarningMessage(L('No textual diff is available for this file.', '此文件没有可显示的文本差异。'))
       return
     }
@@ -418,15 +434,15 @@ export class RollbackReviewManager {
       kind: 'file',
       port,
       sessionId,
-      listId: value.listId,
+      listId: resolvedListId,
       path,
       original: texts.original,
       modified: texts.modified,
-      language: await detectLanguage(change.absolutePath),
+      language: await detectLanguage(resolvedChange.absolutePath),
       // Deleted files: the right side is empty, so anchor on the old side.
-      anchors: change.status === 'deleted'
-        ? hunkAnchors(change.hunks ?? [], 'orig')
-        : hunkAnchors(change.hunks ?? [], 'mod'),
+      anchors: resolvedChange.status === 'deleted'
+        ? hunkAnchors(resolvedChange.hunks ?? [], 'orig')
+        : hunkAnchors(resolvedChange.hunks ?? [], 'mod'),
     }
     this.states.set(state.id, state)
     await this.openDiff(state, `${path} · ${L('baseline → current', '基线 → 当前')}`)

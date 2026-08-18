@@ -166,11 +166,13 @@ export function ModificationDock(props) {
         const current = dataRef.current;
         if (current === null)
             return;
+        const change = current.changes.find(item => item.path === path);
         const payload = {
             type: 'dshui:reviewModifications',
             sessionId: props.sessionId,
             listId: current.listId,
             path,
+            ...(change === undefined ? {} : { change }),
         };
         if (typeof window !== 'undefined' && window.parent !== window) {
             window.parent.postMessage(payload, '*');
@@ -178,7 +180,6 @@ export function ModificationDock(props) {
         }
         // Outside the VS Code shell (plain browser): keep the previous open-at
         // behaviour so the list stays usable.
-        const change = current.changes.find(item => item.path === path);
         if (change !== undefined)
             openFile(change);
     };

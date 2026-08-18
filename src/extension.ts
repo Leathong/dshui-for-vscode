@@ -16,7 +16,7 @@ import { installCrashHandlers, logger, setLogFile } from './logger'
 import { killProcessOnPort } from './killPort'
 import { OpenBridge } from './openBridge'
 import { patchFileOpener } from './openPatch'
-import { RollbackReviewManager } from './rollbackReview'
+import { isObject, RollbackReviewManager, type RollbackFileChange } from './rollbackReview'
 import { installPlugins, resolveDshHome, type InstalledPlugin } from './plugins'
 import {
   bridgesPath, registerBridge, registerServerUser, startServerUserHeartbeat,
@@ -29,6 +29,20 @@ import {
 } from './reference'
 
 const VIEW_ID = 'dshui.view'
+
+/**
+ * Minimal structural check for the dock-supplied review `change` payload
+ * (crossed the webview boundary via postMessage, so it is untrusted): it must
+ * be an object whose path matches the requested one and whose `hunks` — when
+ * present — is an array. Anything else makes the extension fall back to the
+ * RPC path.
+ */
+function isReviewChange(value: unknown, path: string): value is RollbackFileChange {
+  if (!isObject(value)) return false
+  if (value.path !== path) return false
+  if (value.hunks !== undefined && !Array.isArray(value.hunks)) return false
+  return true
+}
 
 /** npm registry URL returning the latest published @deepseek-ai/dsh release as JSON `{ version }`. */
 const DSHD_REGISTRY_URL = 'https://registry.npmjs.org/@deepseek-ai%2Fdsh/latest'
@@ -578,7 +592,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         // through the VS Code file API and answers with
         // { type: 'dshui:sessionDeleted', sessionId, ok, error? }.
         webviewView.webview.onDidReceiveMessage((message: unknown) => {
-          const data = message as { type?: unknown; sessionId?: unknown; cwd?: unknown; url?: unknown; path?: unknown; modificationId?: unknown } | null
+          const data = message as { type?: unknown; sessionId?: unknown; cwd?: unknown; url?: unknown; path?: unknown; modificationId?: unknown; listId?: unknown; change?: unknown } | null
           if (data === null || typeof data !== 'object' || typeof data.type !== 'string') return
           // External link clicked in a message: open in the system browser.
           if (data.type === 'openExternal' && typeof data.url === 'string' && data.url !== '') {
@@ -593,6 +607,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             const reviewSessionId = data.sessionId
             const reviewPath = data.path
             const reviewModificationId = typeof data.modificationId === 'string' && data.modificationId !== '' ? data.modificationId : undefined
+            // The dock sends the list id and the already-computed file diff so
+            // the panel opens without another rollback/sessionChanges round
+            // trip. postMessage objects are untrusted: validate minimally
+            // before handing them to the review manager.
+            const reviewListId = typeof data.listId === 'string' && data.listId !== '' ? data.listId : undefined
+            const reviewChange = isReviewChange(data.change, reviewPath) ? data.change : undefined
             const workspacePath = currentWorkspace()
             if (workspacePath === undefined) {
               void vscode.window.showWarningMessage('dsh UI: 请先打开一个文件夹（它将成为 dsh 工作区）。')
@@ -602,7 +622,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
               if (reviewModificationId !== undefined) {
                 return reviewManager.showModification(port, reviewSessionId, reviewPath, reviewModificationId)
               }
-              return reviewManager.showFile(port, reviewSessionId, reviewPath)
+              return reviewManager.showFile(port, reviewSessionId, reviewPath, reviewListId, reviewChange)
             }).catch((error) => {
               logger.error('[dshui] failed to open rollback review:', error)
               void vscode.window.showErrorMessage(`dshui: 打开修改视图失败: ${String(error)}`)

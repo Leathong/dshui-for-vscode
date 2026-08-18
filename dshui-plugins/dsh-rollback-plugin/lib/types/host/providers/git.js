@@ -154,6 +154,22 @@ export class GitProvider {
             throw new Error(`git diff-tree -p failed: ${result.stderr.trim()}`);
         return parseDiffHunks(result.stdout, this.options.maxDiffHunksPerFile, this.options.maxDiffBytesPerFile);
     }
+    /**
+     * Diff hunks for many paths in a single git process. `paths` must be
+     * sorted; sections come back in the same order (git tree traversal is
+     * lexicographic). Returns a map missing entries for any path whose section
+     * is absent or out of order — the caller then falls back to per-file diffs.
+     */
+    async diffHunksBatched(from, to, paths, signal) {
+        if (paths.length === 0)
+            return new Map();
+        for (const rel of paths)
+            this.assertSafeRelPath(rel);
+        const result = await this.run(['diff-tree', '-p', '-U3', '--no-renames', from, to, '--', ...paths], signal);
+        if (result.code !== 0)
+            throw new Error(`git diff-tree -p failed: ${result.stderr.trim()}`);
+        return splitDiffByPath(result.stdout, paths, this.options.maxDiffHunksPerFile, this.options.maxDiffBytesPerFile);
+    }
     async pathsInTree(tree, relPath, signal) {
         if (!isHash(tree))
             throw new Error('ls-tree requires a valid tree hash');
@@ -394,6 +410,104 @@ function parseHunkHeader(line) {
     if (newCount > 0)
         return { oldLine, newLine, endLine: newLine + newCount - 1 };
     return { oldLine, newLine };
+}
+/** Split a multi-file `git diff-tree -p` stream into per-file sections. */
+export function splitDiffSections(stdout) {
+    const lines = stdout.split('\n');
+    const sections = [];
+    let current = [];
+    for (const line of lines) {
+        if (line.startsWith('diff --git ')) {
+            if (current.length > 0) {
+                sections.push(current.join('\n'));
+                current = [];
+            }
+            current.push(line);
+        }
+        else if (current.length > 0) {
+            current.push(line);
+        }
+    }
+    if (current.length > 0)
+        sections.push(current.join('\n'));
+    return sections;
+}
+/** Parse the path out of a `diff --git a/x b/x` section header (quoted or not). */
+function diffGitPath(line) {
+    const rest = line.slice('diff --git '.length);
+    if (!rest.startsWith('"')) {
+        const match = /^a\/(\S+) b\//.exec(rest);
+        return match === null ? undefined : match[1];
+    }
+    const match = /^"a\/((?:[^"\\]|\\.)*)" "b\//.exec(rest);
+    return match === null ? undefined : unquoteGitPath(match[1] ?? '');
+}
+/** Undo git's C-style path quoting (core.quotePath). */
+export function unquoteGitPath(quoted) {
+    let out = '';
+    for (let i = 0; i < quoted.length; i += 1) {
+        const ch = quoted[i];
+        if (ch !== '\\') {
+            out += ch;
+            continue;
+        }
+        const next = quoted[i + 1];
+        if (next === undefined)
+            break;
+        if (next === 'n')
+            out += '\n';
+        else if (next === 't')
+            out += '\t';
+        else if (next === 'r')
+            out += '\r';
+        else if (next === 'a')
+            out += '\a';
+        else if (next === 'b')
+            out += '\b';
+        else if (next === 'f')
+            out += '\f';
+        else if (next === 'v')
+            out += '\v';
+        else if (next === '"')
+            out += '"';
+        else if (next === '\\')
+            out += '\\';
+        else if (next >= '0' && next <= '7') {
+            let octal = next;
+            let j = i + 2;
+            while (octal.length < 3 && j < quoted.length && quoted[j] >= '0' && quoted[j] <= '7') {
+                octal += quoted[j];
+                j += 1;
+            }
+            out += String.fromCharCode(parseInt(octal, 8));
+            i = j - 1;
+        }
+        else {
+            out += next;
+        }
+        i += 1;
+    }
+    return out;
+}
+/**
+ * Map a batched diff stream to per-path parse results. `sortedPaths` must be
+ * sorted like the stream; a section count or order mismatch returns a map
+ * missing the affected entries so the caller can fall back per file.
+ */
+export function splitDiffByPath(stdout, sortedPaths, maxHunks, maxBytes) {
+    const result = new Map();
+    const sections = splitDiffSections(stdout);
+    if (sections.length !== sortedPaths.length)
+        return result;
+    for (let i = 0; i < sections.length; i += 1) {
+        const expected = sortedPaths[i];
+        const header = sections[i].split('\n')[0] ?? '';
+        const parsedPath = diffGitPath(header);
+        if (parsedPath !== undefined && parsedPath !== expected)
+            return result;
+        result.set(expected, parseDiffHunks(sections[i], maxHunks, maxBytes));
+    }
+    return result;
 }
 export function buildFileChange(cwd, entry, hunks, truncated, binary) {
     const status = entry.status === 'A' ? 'created'

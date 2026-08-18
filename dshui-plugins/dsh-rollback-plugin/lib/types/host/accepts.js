@@ -121,6 +121,11 @@ export class AcceptLedger {
             return;
         this.upsert({ sessionId, kind: 'modification', key: modificationId, createdAt: Date.now() });
     }
+    /** File accept record; cheap existence/identity check before fingerprinting the file. */
+    fileRecord(sessionId, filePath) {
+        this.load();
+        return this.records.find(item => item.sessionId === sessionId && item.kind === 'file' && item.key === filePath);
+    }
     fileAccepted(sessionId, filePath, fingerprint) {
         this.load();
         const record = this.records.find(item => item.sessionId === sessionId && item.kind === 'file' && item.key === filePath);

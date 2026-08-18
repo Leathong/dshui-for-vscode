@@ -39,6 +39,17 @@ export declare class GitProvider {
         truncated: boolean;
         binary: boolean;
     }>;
+    /**
+     * Diff hunks for many paths in a single git process. `paths` must be
+     * sorted; sections come back in the same order (git tree traversal is
+     * lexicographic). Returns a map missing entries for any path whose section
+     * is absent or out of order — the caller then falls back to per-file diffs.
+     */
+    diffHunksBatched(from: string, to: string, paths: readonly string[], signal?: AbortSignal): Promise<Map<string, {
+        hunks: RollbackHunk[];
+        truncated: boolean;
+        binary: boolean;
+    }>>;
     pathsInTree(tree: string, relPath?: string, signal?: AbortSignal): Promise<string[]>;
     blobHash(tree: string, relPath: string, signal?: AbortSignal): Promise<string | undefined>;
     fileHash(relPath: string, signal?: AbortSignal): Promise<string | undefined>;
@@ -58,4 +69,18 @@ export declare function parseDiffHunks(stdout: string, maxHunks: number, maxByte
     truncated: boolean;
     binary: boolean;
 };
+/** Split a multi-file `git diff-tree -p` stream into per-file sections. */
+export declare function splitDiffSections(stdout: string): string[];
+/** Undo git's C-style path quoting (core.quotePath). */
+export declare function unquoteGitPath(quoted: string): string;
+/**
+ * Map a batched diff stream to per-path parse results. `sortedPaths` must be
+ * sorted like the stream; a section count or order mismatch returns a map
+ * missing the affected entries so the caller can fall back per file.
+ */
+export declare function splitDiffByPath(stdout: string, sortedPaths: readonly string[], maxHunks: number, maxBytes: number): Map<string, {
+    hunks: RollbackHunk[];
+    truncated: boolean;
+    binary: boolean;
+}>;
 export declare function buildFileChange(cwd: string, entry: GitTreeEntry, hunks: RollbackHunk[], truncated: boolean, binary: boolean): RollbackFileChange;

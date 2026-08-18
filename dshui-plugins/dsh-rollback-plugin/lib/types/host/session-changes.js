@@ -61,6 +61,9 @@ export class SessionChangeManager {
                 const ownWindows = await this.ownWindowPaths(sessionId, cwd, earliest.tree, preparedTree, entries, provider);
                 const ledgerPaths = this.ledger.pathsForSession(sessionId, cwd);
                 const foreignPaths = this.ledger.foreignPathsForSession(sessionId, cwd);
+                // Hunks for modified/deleted/typechanged files are fetched in one git
+                // process instead of one spawn per file.
+                const deferredPaths = new Set();
                 for (const entry of entries) {
                     if (entry.oldMode === '160000' || entry.newMode === '160000') {
                         warnings.push(entry.oldMode !== '160000'
@@ -91,17 +94,33 @@ export class SessionChangeManager {
                         });
                         continue;
                     }
-                    const diff = await provider.diffHunks(earliest.tree, preparedTree, entry.path);
+                    deferredPaths.add(entry.path);
                     changes.push({
                         path: entry.path,
                         absolutePath: provider.absolutePath(entry.path),
-                        status: entry.status === 'D' ? 'deleted' : entry.status === 'T' ? 'typechange' : diff.binary ? 'binary' : 'modified',
+                        status: entry.status === 'D' ? 'deleted' : entry.status === 'T' ? 'typechange' : 'modified',
                         source: 'git',
                         restorable: true,
-                        ...(diff.binary ? { binary: true } : {}),
-                        ...(diff.truncated ? { truncated: true } : {}),
-                        ...(diff.hunks.length > 0 ? { hunks: diff.hunks } : {}),
                     });
+                }
+                if (deferredPaths.size > 0) {
+                    const diffMap = await provider.diffHunksBatched(earliest.tree, preparedTree, [...deferredPaths].sort())
+                        .catch(() => undefined);
+                    for (const change of changes) {
+                        if (!deferredPaths.has(change.path))
+                            continue;
+                        const diff = diffMap?.get(change.path)
+                            ?? await provider.diffHunks(earliest.tree, preparedTree, change.path);
+                        if (diff.binary) {
+                            change.binary = true;
+                            if (change.status === 'modified')
+                                change.status = 'binary';
+                        }
+                        if (diff.truncated)
+                            change.truncated = true;
+                        if (diff.hunks.length > 0)
+                            change.hunks = diff.hunks;
+                    }
                 }
             }
         }
@@ -126,8 +145,13 @@ export class SessionChangeManager {
         }
         const modifications = buildModificationsFromRecords(cwd, session.events, this.ledger.list(sessionId), record => this.ledger.laterModifications(sessionId, record.path, record));
         this.attachToolCalls(changes, modifications);
+        // Reading a whole file only to hash it is the most expensive per-change
+        // step, so fingerprint only files that actually have an accept record.
         for (const change of changes) {
-            change.accepted = this.accepts.fileAccepted(sessionId, change.path, await fingerprintOfAbs(change.absolutePath));
+            const record = this.accepts.fileRecord(sessionId, change.path);
+            change.accepted = record === undefined ? false
+                : record.fingerprint === undefined ? true
+                    : this.accepts.fileAccepted(sessionId, change.path, await fingerprintOfAbs(change.absolutePath));
         }
         for (const modification of modifications) {
             modification.accepted = this.accepts.modificationAccepted(sessionId, modification.modificationId);

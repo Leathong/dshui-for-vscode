@@ -193,6 +193,28 @@ var GitProvider = class {
 		if (result.code !== 0) throw new Error(`git diff-tree -p failed: ${result.stderr.trim()}`);
 		return parseDiffHunks(result.stdout, this.options.maxDiffHunksPerFile, this.options.maxDiffBytesPerFile);
 	}
+	/**
+	* Diff hunks for many paths in a single git process. `paths` must be
+	* sorted; sections come back in the same order (git tree traversal is
+	* lexicographic). Returns a map missing entries for any path whose section
+	* is absent or out of order — the caller then falls back to per-file diffs.
+	*/
+	async diffHunksBatched(from, to, paths, signal) {
+		if (paths.length === 0) return /* @__PURE__ */ new Map();
+		for (const rel of paths) this.assertSafeRelPath(rel);
+		const result = await this.run([
+			"diff-tree",
+			"-p",
+			"-U3",
+			"--no-renames",
+			from,
+			to,
+			"--",
+			...paths
+		], signal);
+		if (result.code !== 0) throw new Error(`git diff-tree -p failed: ${result.stderr.trim()}`);
+		return splitDiffByPath(result.stdout, paths, this.options.maxDiffHunksPerFile, this.options.maxDiffBytesPerFile);
+	}
 	async pathsInTree(tree, relPath, signal) {
 		if (!isHash(tree)) throw new Error("ls-tree requires a valid tree hash");
 		const args = [
@@ -420,6 +442,82 @@ function parseHunkHeader(line) {
 		oldLine,
 		newLine
 	};
+}
+/** Split a multi-file `git diff-tree -p` stream into per-file sections. */
+function splitDiffSections(stdout) {
+	const lines = stdout.split("\n");
+	const sections = [];
+	let current = [];
+	for (const line of lines) if (line.startsWith("diff --git ")) {
+		if (current.length > 0) {
+			sections.push(current.join("\n"));
+			current = [];
+		}
+		current.push(line);
+	} else if (current.length > 0) current.push(line);
+	if (current.length > 0) sections.push(current.join("\n"));
+	return sections;
+}
+/** Parse the path out of a `diff --git a/x b/x` section header (quoted or not). */
+function diffGitPath(line) {
+	const rest = line.slice(11);
+	if (!rest.startsWith("\"")) {
+		const match = /^a\/(\S+) b\//.exec(rest);
+		return match === null ? void 0 : match[1];
+	}
+	const match = /^"a\/((?:[^"\\]|\\.)*)" "b\//.exec(rest);
+	return match === null ? void 0 : unquoteGitPath(match[1] ?? "");
+}
+/** Undo git's C-style path quoting (core.quotePath). */
+function unquoteGitPath(quoted) {
+	let out = "";
+	for (let i = 0; i < quoted.length; i += 1) {
+		const ch = quoted[i];
+		if (ch !== "\\") {
+			out += ch;
+			continue;
+		}
+		const next = quoted[i + 1];
+		if (next === void 0) break;
+		if (next === "n") out += "\n";
+		else if (next === "t") out += "	";
+		else if (next === "r") out += "\r";
+		else if (next === "a") out += "a";
+		else if (next === "b") out += "\b";
+		else if (next === "f") out += "\f";
+		else if (next === "v") out += "\v";
+		else if (next === "\"") out += "\"";
+		else if (next === "\\") out += "\\";
+		else if (next >= "0" && next <= "7") {
+			let octal = next;
+			let j = i + 2;
+			while (octal.length < 3 && j < quoted.length && quoted[j] >= "0" && quoted[j] <= "7") {
+				octal += quoted[j];
+				j += 1;
+			}
+			out += String.fromCharCode(parseInt(octal, 8));
+			i = j - 1;
+		} else out += next;
+		i += 1;
+	}
+	return out;
+}
+/**
+* Map a batched diff stream to per-path parse results. `sortedPaths` must be
+* sorted like the stream; a section count or order mismatch returns a map
+* missing the affected entries so the caller can fall back per file.
+*/
+function splitDiffByPath(stdout, sortedPaths, maxHunks, maxBytes) {
+	const result = /* @__PURE__ */ new Map();
+	const sections = splitDiffSections(stdout);
+	if (sections.length !== sortedPaths.length) return result;
+	for (let i = 0; i < sections.length; i += 1) {
+		const expected = sortedPaths[i];
+		const parsedPath = diffGitPath(sections[i].split("\n")[0] ?? "");
+		if (parsedPath !== void 0 && parsedPath !== expected) return result;
+		result.set(expected, parseDiffHunks(sections[i], maxHunks, maxBytes));
+	}
+	return result;
 }
 function buildFileChange(cwd, entry, hunks, truncated, binary) {
 	const status = entry.status === "A" ? "created" : entry.status === "D" ? "deleted" : entry.status === "T" ? "typechange" : binary ? "binary" : "modified";
@@ -721,6 +819,11 @@ var AcceptLedger = class {
 			key: modificationId,
 			createdAt: Date.now()
 		});
+	}
+	/** File accept record; cheap existence/identity check before fingerprinting the file. */
+	fileRecord(sessionId, filePath) {
+		this.load();
+		return this.records.find((item) => item.sessionId === sessionId && item.kind === "file" && item.key === filePath);
 	}
 	fileAccepted(sessionId, filePath, fingerprint) {
 		this.load();
@@ -2503,6 +2606,7 @@ var SessionChangeManager = class {
 			const ownWindows = await this.ownWindowPaths(sessionId, cwd, earliest.tree, preparedTree, entries, provider);
 			const ledgerPaths = this.ledger.pathsForSession(sessionId, cwd);
 			const foreignPaths = this.ledger.foreignPathsForSession(sessionId, cwd);
+			const deferredPaths = /* @__PURE__ */ new Set();
 			for (const entry of entries) {
 				if (entry.oldMode === "160000" || entry.newMode === "160000") {
 					warnings.push(entry.oldMode !== "160000" ? `nested git repository "${entry.path}" appeared after the baseline snapshot; it is outside the list scope and will not be deleted or restored` : `nested git repository "${entry.path}" is tracked as a gitlink; its internal changes are outside the list scope (only tool-written files inside it can be restored)`);
@@ -2525,17 +2629,27 @@ var SessionChangeManager = class {
 					});
 					continue;
 				}
-				const diff = await provider.diffHunks(earliest.tree, preparedTree, entry.path);
+				deferredPaths.add(entry.path);
 				changes.push({
 					path: entry.path,
 					absolutePath: provider.absolutePath(entry.path),
-					status: entry.status === "D" ? "deleted" : entry.status === "T" ? "typechange" : diff.binary ? "binary" : "modified",
+					status: entry.status === "D" ? "deleted" : entry.status === "T" ? "typechange" : "modified",
 					source: "git",
-					restorable: true,
-					...diff.binary ? { binary: true } : {},
-					...diff.truncated ? { truncated: true } : {},
-					...diff.hunks.length > 0 ? { hunks: diff.hunks } : {}
+					restorable: true
 				});
+			}
+			if (deferredPaths.size > 0) {
+				const diffMap = await provider.diffHunksBatched(earliest.tree, preparedTree, [...deferredPaths].sort()).catch(() => void 0);
+				for (const change of changes) {
+					if (!deferredPaths.has(change.path)) continue;
+					const diff = diffMap?.get(change.path) ?? await provider.diffHunks(earliest.tree, preparedTree, change.path);
+					if (diff.binary) {
+						change.binary = true;
+						if (change.status === "modified") change.status = "binary";
+					}
+					if (diff.truncated) change.truncated = true;
+					if (diff.hunks.length > 0) change.hunks = diff.hunks;
+				}
 			}
 		}
 		else if (earliest !== void 0 && earliest.tree !== void 0) warnings.push("workspace is no longer inside a git work tree; only ledger-covered paths are shown");
@@ -2551,7 +2665,10 @@ var SessionChangeManager = class {
 		if (!gitAvailable) warnings.push("workspace is not inside a git work tree; only tool write/edit modifications captured by the ledger can be restored");
 		const modifications = buildModificationsFromRecords(cwd, session.events, this.ledger.list(sessionId), (record) => this.ledger.laterModifications(sessionId, record.path, record));
 		this.attachToolCalls(changes, modifications);
-		for (const change of changes) change.accepted = this.accepts.fileAccepted(sessionId, change.path, await fingerprintOfAbs(change.absolutePath));
+		for (const change of changes) {
+			const record = this.accepts.fileRecord(sessionId, change.path);
+			change.accepted = record === void 0 ? false : record.fingerprint === void 0 ? true : this.accepts.fileAccepted(sessionId, change.path, await fingerprintOfAbs(change.absolutePath));
+		}
 		for (const modification of modifications) modification.accepted = this.accepts.modificationAccepted(sessionId, modification.modificationId);
 		for (const change of changes) {
 			if (change.accepted === true) continue;
@@ -3666,6 +3783,6 @@ function installLedgerListeners(ctx, service) {
 	});
 }
 //#endregion
-export { ChangeLedger, DEFAULT_ROLLBACK_CONFIG, GitProvider, RollbackService, SnapshotManager, apply, boundaryInfo, buildFileChange, changeLedgerRoot, createdFileHunks, findPreviousTurnEnd, inject, installLedgerListeners, isHash, journalsPath, ledgerRecordsPath, lineDiffHunks, locksDir, manifestsPath, mergeFiles, name, normalizeLf, parseDiffHunks, parseDiffTreeZ, readJsonFile, resolveBoundary, resolveBoundaryForTurn, resolveDshHome, restoreModification, sessionTurnPosition, spawnGit, wholeFileHunk, writeJsonFileAtomic };
+export { ChangeLedger, DEFAULT_ROLLBACK_CONFIG, GitProvider, RollbackService, SnapshotManager, apply, boundaryInfo, buildFileChange, changeLedgerRoot, createdFileHunks, findPreviousTurnEnd, inject, installLedgerListeners, isHash, journalsPath, ledgerRecordsPath, lineDiffHunks, locksDir, manifestsPath, mergeFiles, name, normalizeLf, parseDiffHunks, parseDiffTreeZ, readJsonFile, resolveBoundary, resolveBoundaryForTurn, resolveDshHome, restoreModification, sessionTurnPosition, spawnGit, splitDiffByPath, splitDiffSections, unquoteGitPath, wholeFileHunk, writeJsonFileAtomic };
 
 //# sourceMappingURL=index.js.map
