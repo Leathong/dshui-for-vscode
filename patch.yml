@@ -15,6 +15,17 @@
 - id: ui-conversation
   disabled: true
 
+# Sandbox whitelist plugin: replaces the stock sandboxed bash executor and the
+# stock sandboxed filesystem with whitelist-aware subclasses that honor
+# `extraWritableRoots` on top of the workspace-write writable set (both bash
+# and write/edit stay symmetric). Default config (empty whitelist) behaves
+# exactly like stock; configure the roots in this row's config.
+- id: bash-sandbox
+  disabled: true
+
+- id: fs-sandbox
+  disabled: true
+
 - insert:
     - id: ui-workspace-dshui
       name: dshui-client-ui-workspace
@@ -33,3 +44,19 @@
     # Source: https://github.com/xmanrui/dsh-im (MIT)
     - id: xmanrui-dsh-im
       name: '@xmanrui/dsh-im'
+
+    - id: dsh-whitelist-sandbox
+      name: dsh-whitelist-sandbox
+      config:
+        # 在 workspace-write 之外额外允许写入的路径（绝对路径，不存在时
+        # 不生效并告警；Windows 暂不支持非空配置）。此配置是启动基线，
+        # 运行时可用 $DSH_HOME/settings.yaml 的 sandbox-whitelist 段热更新
+        # 覆盖（同 schema）。安全守卫：任何覆盖 $DSH_HOME 或其下
+        # settings.yaml 的根都会被拒绝（防模型自改策略提权），
+        # settings 段被拒时保留上一次生效的白名单并记录错误日志。
+        extraWritableRoots: []
+
+    # 设置页「沙箱白名单」表单：读写 settings.yaml 的 sandbox-whitelist 段，
+    # 复用既有 settings 传输，不新增宿主事件面；最终生效仍受宿主守卫校验。
+    - id: dsh-client-ui-whitelist
+      name: dsh-client-ui-whitelist

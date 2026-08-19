@@ -1,0 +1,24 @@
+{
+  "name": "dsh-client-ui-whitelist",
+  "description": "dsh settings-page section for the sandbox whitelist (dsh-whitelist-sandbox): edit extraWritableRoots through the settings document, no new host surface",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-runtime",
+        "@deepseek-ai/dsh-client-ui-settings",
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-api-remotes"
+      ]
+    }
+  },
+  "license": "MIT"
+}

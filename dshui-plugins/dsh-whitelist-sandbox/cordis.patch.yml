@@ -1,0 +1,12 @@
+# Standalone mount of the whitelist plugin (used when this bundle is mounted
+# through a profile/bundle-patch layer; the extension's root patch.yml is the
+# operative overlay for the shipped setup and states the same rows).
+- id: bash-sandbox
+  disabled: true
+
+- id: fs-sandbox
+  disabled: true
+
+- insert:
+    - id: dsh-whitelist-sandbox
+      name: dsh-whitelist-sandbox
