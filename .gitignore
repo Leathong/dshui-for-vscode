@@ -1,4 +1,6 @@
 node_modules/
+# 例外：随扩展分发的插件包自带的运行时依赖必须入库（vsix 打包需要）。
+!dshui-plugins/**/node_modules/
 .pnpm-store/
 out/
 .dsh-src/

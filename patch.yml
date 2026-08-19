@@ -27,3 +27,9 @@
 
     - id: dsh-rollback-plugin
       name: dsh-rollback-plugin
+
+    # IM bot bridge (Feishu/WeChat/DingTalk/WeCom/QQ/Slack/Telegram/Discord/
+    # WhatsApp), third-party plugin shipped with the extension.
+    # Source: https://github.com/xmanrui/dsh-im (MIT)
+    - id: xmanrui-dsh-im
+      name: '@xmanrui/dsh-im'

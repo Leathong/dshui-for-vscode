@@ -16,6 +16,7 @@
   - [Network Links in Messages](#network-links-in-messages)
   - [Multiple Windows (Shared Backend)](#multiple-windows-shared-backend)
   - [Rollback (Reviewing Modifications)](#rollback-reviewing-modifications)
+  - [IM Bots](#im-bots)
 - [How It Works](#how-it-works)
 - [Development](#development)
   - [Three Tiers of Iteration](#three-tiers-of-iteration)
@@ -79,6 +80,10 @@ deep VS Code integrations:
 - **Modification rollback:** every file change the agent makes lands in the sidebar "Modifications"
   panel; review each file in a native VS Code diff and accept or undo it (see
   [Rollback (Reviewing Modifications)](#rollback-reviewing-modifications)).
+- **IM bots:** the extension ships the third-party plugin
+  [`@xmanrui/dsh-im`](https://github.com/xmanrui/dsh-im) (by xmanrui, MIT license) — scan a QR code or
+  enter bot credentials to connect Feishu, WeChat, DingTalk, WeCom, QQ, Slack, Telegram, Discord, and
+  WhatsApp bots to dsh (see [IM Bots](#im-bots)).
 
 ## Requirements
 
@@ -288,6 +293,31 @@ modifications", so you can review each one in a **native VS Code diff** and choo
   a native VS Code diff.</em>
 </p>
 
+### IM Bots
+
+The extension ships the third-party plugin [`@xmanrui/dsh-im`](https://github.com/xmanrui/dsh-im)
+(**source: [github.com/xmanrui/dsh-im](https://github.com/xmanrui/dsh-im), by xmanrui, MIT license**;
+v0.8.0, distributed with the extension — see `LICENSE` and `THIRD_PARTY_NOTICES.md` in the plugin
+directory), which connects IM bots to dsh:
+
+- **One settings entry:** open **Settings → Plugins → IM Bots** in the dsh UI to connect and manage
+  Feishu, WeChat, DingTalk, WeCom, QQ, Slack, Telegram, Discord, and WhatsApp bots via QR code, App
+  Manifest, or existing bot credentials. Credentials/tokens are submitted only to the local Harness
+  Host and written to the protected credential store — status endpoints never return them.
+- **IM as a session frontend:** messages received by a bot are processed by Harness and answered with
+  streaming replies. Each bot keeps its own Harness workspace; `/workspace`, `/workspacelist`,
+  `/sessionlist`, and `/session` commands switch workspaces and bind sessions.
+- **Leave mode (Feishu):** send `/leavemode on` in the dsh UI session input to enable it globally
+  (`/leavemode off` disables, `/leavemode` shows the status). The plugin then watches all sessions and
+  pushes **questions, approvals, and final results** to Feishu — questions/approvals arrive as
+  interactive cards you answer by tapping a button or quote-replying, so work keeps moving while you're
+  away from the computer. Pushes are labeled with the workspace name; sessions that belong to no bot's
+  workspace are pushed by the most recently active bot as a fallback, and quote-replying any pushed
+  message switches the current Feishu conversation to that message's session.
+- **Security note:** a bot's visibility scope IS the inbound access scope — only expose bots to trusted
+  tenants, organizations, groups, or members. Per-channel onboarding flows and further security notes
+  are in the [upstream README](https://github.com/xmanrui/dsh-im#readme).
+
 ## How It Works
 
 ```
@@ -303,7 +333,7 @@ VS Code sidebar view (webview)
   each folder restores its own last session on the next launch; with no history, it falls back to a
   blank new session. When the fixed port is taken, startup reports an error and asks you to change the
   port (no random-port fallback).
-- **Plugin loading:** on activation, four dshui plugins are installed into
+- **Plugin loading:** on activation, five bundled plugins are installed into
   `$DSH_HOME/profiles/node_modules` (with the extension's own `node_modules` as a loader fallback) and
   wired in through the `--patch` overlay (see `patch.yml`):
   - `dshui-host-ensure-workspace` — the host plugin: registers the working directory as a Workspace at
@@ -323,6 +353,12 @@ VS Code sidebar view (webview)
   - `dsh-rollback-plugin` — the modification-rollback plugin: records the agent's `write` / `edit`
     modifications and the session baseline snapshot, and provides the "Modifications" dock and native
     diff review (see [Rollback (Reviewing Modifications)](#rollback-reviewing-modifications)).
+  - `@xmanrui/dsh-im` — the third-party IM bot plugin (**source:
+    [github.com/xmanrui/dsh-im](https://github.com/xmanrui/dsh-im), by xmanrui, MIT license**):
+    connects bots from nine IM platforms to dsh (see [IM Bots](#im-bots)). Its host bundle declares
+    `qrcode`, `dingtalk-stream`, and three more packages as external runtime dependencies, so the
+    plugin directory ships a production-only `node_modules/` that `installPlugins()` installs along
+    with it.
 - **Deleting sessions:** dsh itself only offers "archive" (hide the session, keep the files) and has no
   delete RPC. The plugin renames the session-row menu entry from "Archive Session" to "Delete Session":
   on click, the plugin posts a message to the webview shell (`dshui:deleteSession`, with the session id
@@ -499,4 +535,7 @@ Issues and pull requests are welcome:
 ## License
 
 [MIT](LICENSE). The upstream [deepseek-harness](https://github.com/deepseek-ai/deepseek-harness) is
-also MIT-licensed.
+also MIT-licensed. The bundled third-party plugin
+[`@xmanrui/dsh-im`](https://github.com/xmanrui/dsh-im) (by xmanrui) is MIT-licensed as well; its
+license and third-party component notices ship in `dshui-plugins/@xmanrui/dsh-im/` (`LICENSE` and
+`THIRD_PARTY_NOTICES.md`).

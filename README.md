@@ -16,6 +16,7 @@
   - [消息里的网络链接](#消息里的网络链接)
   - [多窗口（共享后端）](#多窗口共享后端)
   - [修改回滚](#修改回滚)
+  - [IM 机器人](#im-机器人)
 - [工作原理](#工作原理)
 - [开发流程](#开发流程)
   - [三级迭代，按需选择](#三级迭代按需选择)
@@ -68,6 +69,9 @@ agentic coding 框架，主张「一切皆插件」）的 Web UI 嵌入 VS Code 
   [多窗口（共享后端）](#多窗口共享后端)）。
 - **修改回滚**：agent 对工作区文件的每次修改都会进入侧边栏「修改列表」，可在 VS Code 原生 Diff
   中逐文件审查、接受或撤销（详见 [修改回滚](#修改回滚)）。
+- **IM 机器人**：内置第三方插件 [`@xmanrui/dsh-im`](https://github.com/xmanrui/dsh-im)
+  （作者 xmanrui，MIT 许可证），扫码或填入凭据即可把飞书、微信、钉钉、企业微信、QQ、Slack、
+  Telegram、Discord、WhatsApp 机器人接入 dsh（详见 [IM 机器人](#im-机器人)）。
 
 ## 环境要求
 
@@ -236,6 +240,28 @@ host 插件轮询注册表，无存活窗口时自行退出。采纳方即使遇
   <em>修改回滚：侧边栏「修改列表」点击文件后，在 VS Code 原生 Diff 中逐 hunk 接受或撤销修改。</em>
 </p>
 
+### IM 机器人
+
+扩展内置第三方插件 [`@xmanrui/dsh-im`](https://github.com/xmanrui/dsh-im)（**来源：
+[github.com/xmanrui/dsh-im](https://github.com/xmanrui/dsh-im)，作者 xmanrui，MIT 许可证**，
+v0.8.0 随扩展分发，许可证与第三方声明见插件目录下的 `LICENSE` 与 `THIRD_PARTY_NOTICES.md`），
+把 IM 机器人接入 dsh：
+
+- **一个设置入口**：打开 dsh UI 的「设置 → 插件 → IM机器人」，通过扫码、App Manifest 或已有
+  机器人凭据接入并统一管理飞书、微信、钉钉、企业微信、QQ、Slack、Telegram、Discord、WhatsApp
+  机器人；凭据/Token 只提交到本机 Harness Host，写入受保护的凭据存储，不回传给状态接口。
+- **IM 即会话入口**：机器人在 IM 中收到的消息交给 Harness 处理并流式回复；每个机器人维护独立的
+  Harness 工作区，支持 `/workspace`、`/workspacelist`、`/sessionlist`、`/session` 命令切换
+  工作区与绑定会话。
+- **离开模式（飞书）**：在 dsh UI 会话输入框发送 `/leavemode on` 开启（全局生效，`/leavemode off`
+  关闭、`/leavemode` 查询）后，插件主动监听所有会话，把**提问、审批与最终结果**推送到飞书——
+  提问/审批以交互卡片推送，可直接点卡片按钮或「引用回复」卡片作答，人不在电脑前也能推进任务。
+  推送消息带工作区名称标记；不归属任何机器人工作区的会话由最近活跃的机器人兜底推送；
+  「引用回复」任意一条推送消息会把当前飞书对话切换到该消息所属的会话。
+- **安全提示**：机器人的可见范围就是入站访问范围——请只把机器人开放给可信的租户、组织、群或
+  成员。各渠道的扫码/凭据接入流程与更多安全说明见
+  [上游 README](https://github.com/xmanrui/dsh-im#readme)。
+
 ## 工作原理
 
 ```
@@ -250,8 +276,8 @@ VS Code 侧边栏视图（webview）
 - **启动恢复上次会话**：固定端口复用同一 origin，客户端将当前会话写入 localStorage
   （`dsh.sessions.current`），下次启动原生恢复——打开的就是上次最后使用的会话；无历史会话时退回
   空白新会话。固定端口被占用时直接报错并提示修改 `dshui.server.port`，不再退回随机端口。
-- **插件装载**：激活时把四个 dshui 插件装入 `$DSH_HOME/profiles/node_modules`（同时装入扩展自身
-  `node_modules` 作为 loader 回退），并经 `--patch` 覆盖层接入（见 `patch.yml`）：
+- **插件装载**：激活时把随扩展分发的五个插件装入 `$DSH_HOME/profiles/node_modules`（同时装入
+  扩展自身 `node_modules` 作为 loader 回退），并经 `--patch` 覆盖层接入（见 `patch.yml`）：
   - `dshui-host-ensure-workspace`——host 插件：启动时把工作目录注册为 Workspace，并向页面注入
     `window.__DSHUI_WORKSPACE__`（scope 路径）、`CSS_OVERRIDES` 免重建样式覆盖层（含字号收敛）、
     VS Code 主题接管补丁（影子 `matchMedia`，详见本节「主题跟随」）、Cmd/Ctrl+C/V/X/A/Z
@@ -266,6 +292,11 @@ VS Code 侧边栏视图（webview）
     文件 API 完成）。
   - `dsh-rollback-plugin`——修改回滚插件：记录 agent 的 `write` / `edit` 修改与会话基线快照，
     提供「修改列表」dock 与原生 Diff 审查（详见 [修改回滚](#修改回滚)）。
+  - `@xmanrui/dsh-im`——第三方 IM 机器人插件（**来源：
+    [github.com/xmanrui/dsh-im](https://github.com/xmanrui/dsh-im)，作者 xmanrui，MIT 许可证**）：
+    把飞书、微信、钉钉等九个平台的 IM 机器人接入 dsh（详见 [IM 机器人](#im-机器人)）。其宿主
+    bundle 将 `qrcode`、`dingtalk-stream` 等 5 个包声明为外部运行时依赖，因此插件目录自带生产
+    依赖 `node_modules/`，由 `installPlugins()` 一并安装。
 - **删除会话**：dsh 本身只有「归档」（隐藏会话、不删文件），没有删除 RPC。插件将会话行菜单的
   「归档会话」改为「删除会话」：点击后插件向 webview 外壳 postMessage（`dshui:deleteSession`，
   携带会话 id 与其工作区目录），外壳转发给扩展宿主；宿主按 dsh 的会话路径规则
@@ -425,4 +456,6 @@ npm run compile && npx @vscode/vsce package
 ## 许可证
 
 [MIT](LICENSE)。上游 [deepseek-harness](https://github.com/deepseek-ai/deepseek-harness) 亦为
-MIT 协议。
+MIT 协议。随扩展分发的第三方插件 [`@xmanrui/dsh-im`](https://github.com/xmanrui/dsh-im)（作者
+xmanrui）同为 MIT 协议，其许可证与第三方组件声明见
+`dshui-plugins/@xmanrui/dsh-im/` 下的 `LICENSE` 与 `THIRD_PARTY_NOTICES.md`。

@@ -20,6 +20,8 @@ const PLUGIN_NAMES = [
   'dshui-client-ui-workspace',
   'dshui-client-ui-conversation',
   'dsh-rollback-plugin',
+  // IM 机器人插件（随扩展分发，含自带运行时依赖 node_modules）。
+  '@xmanrui/dsh-im',
 ] as const
 
 /** Default dsh home mirroring `@deepseek-ai/dsh-home-paths`. */
@@ -64,6 +66,25 @@ export function installPlugins(
       // Bundles may ship their built artifacts in lib/ (e.g. dsh-rollback-plugin).
       const libSource = path.join(source, 'lib')
       if (fs.existsSync(libSource)) fs.cpSync(libSource, path.join(target, 'lib'), { recursive: true })
+      // Plugins with external runtime dependencies ship a pruned production
+      // node_modules (e.g. @xmanrui/dsh-im: qrcode, dingtalk-stream, ...).
+      const depsSource = path.join(source, 'node_modules')
+      if (fs.existsSync(depsSource)) {
+        fs.cpSync(depsSource, path.join(target, 'node_modules'), { recursive: true })
+      }
+      // License/notice files for third-party plugins (legal compliance).
+      for (const file of ['LICENSE', 'THIRD_PARTY_NOTICES.md']) {
+        const from = path.join(source, file)
+        if (fs.existsSync(from)) fs.copyFileSync(from, path.join(target, file))
+      }
+      // The bundle overlay declared by `dsh.bundle.patch` (e.g.
+      // @xmanrui/dsh-im/cordis.patch.yml). dsh-app-boot reads it for every
+      // package listed in a profile's `dsh.profile.bundles`, so a package
+      // that declares it must ship the file, or that profile fails to load.
+      const bundlePatch = path.join(source, 'cordis.patch.yml')
+      if (fs.existsSync(bundlePatch)) {
+        fs.copyFileSync(bundlePatch, path.join(target, 'cordis.patch.yml'))
+      }
     }
     installed.push({ name, dir: path.join(targets[0], name) })
   }
@@ -81,6 +102,11 @@ export function uninstallPlugins(dshHome = resolveDshHome()): void {
     const target = path.join(modulesDir, name)
     try {
       fs.rmSync(target, { recursive: true, force: true })
+      // Scoped packages leave their scope directory behind; drop it if empty.
+      if (name.startsWith('@')) {
+        const scopeDir = path.dirname(target)
+        if (fs.readdirSync(scopeDir).length === 0) fs.rmdirSync(scopeDir)
+      }
     } catch {
       // best-effort cleanup; nothing else to do
     }
