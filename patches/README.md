@@ -3,7 +3,7 @@
 > 中文 · [English](README.en.md)
 
 `dshui-client-bundles.patch` 是对 [deepseek-harness](https://github.com/deepseek-ai/deepseek-harness)
-客户端源码的 dshui 修改（16 个文件，两个包）：
+客户端源码的 dshui 修改（20 个文件，两个包）：
 
 - `ui-workspace`：`tree.ts`（scopedWorkspacePath 与各 derive 的 scope 参数、
   本地删除会话隐藏集）、`WorkspaceBrowser.tsx`（SCOPE 常量、workspaces/ungrouped
@@ -15,13 +15,18 @@
 - `ui-conversation`：`apply.ts`（`host.openPath` 附带点击来源 `dshuiOrigin`，嵌套工作区文件在
   点击窗口打开）、`ConversationRoot.tsx`（SCOPE 常量、静态 chip、hero 隐藏、`data-dshui-scope`）、
   `EmptyHero.tsx`（WorkspaceChip 的 staticChip prop）、`ConversationRoot.module.css`（scoped hero
-  贴底）、`HeroShell.module.css`（`.workspaceStatic`）、`tsdown.config.ts`（bundle id 改为
-  `dshui-client-ui-conversation`）。
+  贴底）、`HeroShell.module.css`（`.workspaceStatic`）、`chat/MessageItem.tsx`（用户/steering
+  气泡的 `[label](destination)` markdown 链接投影：白名单 http/https/mailto 渲染为外链锚点，
+  `new URL` 无法解析的目标渲染为经 `openFile` 按会话 cwd 解析打开的文件按钮，其余绝对 URL
+  保持字面；装饰段内联流动）、`chat/ChatView.tsx`（向 `PendingSteeringBubble` 传入 `openFile`）、
+  `chat/MessageItem.module.css`（`.projectedText` 内联投影与 `.link` 链接样式）、
+  `tsdown.config.ts`（bundle id 改为 `dshui-client-ui-conversation`）。
 
 效果：侧边栏只列出当前工作区会话、输入框始终贴底（无居中 hero）、会话菜单为「删除会话」
 （由扩展宿主用 VS Code 文件 API 删除 `$DSH_HOME/sessions/...` 下的会话日志，不走 dsh 的
-归档 RPC）。运行时用的是 `../dshui-plugins/*/client.js` 的**预编译产物**；本补丁用于从源码
-复现这些产物。补丁同时包含上述改动的测试文件（`tests/` 下三个 spec）。
+归档 RPC），用户消息中的 markdown 链接可点击（外链经系统浏览器打开，相对路径在当前窗口
+打开对应文件）。运行时用的是 `../dshui-plugins/*/client.js` 的**预编译产物**；本补丁用于从源码
+复现这些产物。补丁同时包含上述改动的测试文件（`tests/` 下四个 spec）。
 
 ## 应用（必须锁定基提交）
 

@@ -2881,22 +2881,22 @@ window.__ModuleLoader__.load({
 			document.head.appendChild(tag);
 		}
 		var ContextMeter_module_css_default = {
-			"fill": "WeOvQW_fill",
-			"percent": "WeOvQW_percent",
-			"bar": "WeOvQW_bar",
-			"panel": "WeOvQW_panel",
-			"colorSystem": "WeOvQW_colorSystem",
-			"headline": "WeOvQW_headline",
-			"colorMessages": "WeOvQW_colorMessages",
 			"row": "WeOvQW_row",
-			"rows": "WeOvQW_rows",
-			"trigger": "WeOvQW_trigger",
-			"figures": "WeOvQW_figures",
-			"root": "WeOvQW_root",
+			"colorMessages": "WeOvQW_colorMessages",
+			"headline": "WeOvQW_headline",
+			"segment": "WeOvQW_segment",
+			"panel": "WeOvQW_panel",
 			"colorTools": "WeOvQW_colorTools",
 			"header": "WeOvQW_header",
+			"root": "WeOvQW_root",
+			"percent": "WeOvQW_percent",
+			"trigger": "WeOvQW_trigger",
+			"colorSystem": "WeOvQW_colorSystem",
 			"track": "WeOvQW_track",
-			"segment": "WeOvQW_segment",
+			"fill": "WeOvQW_fill",
+			"figures": "WeOvQW_figures",
+			"bar": "WeOvQW_bar",
+			"rows": "WeOvQW_rows",
 			"swatch": "WeOvQW_swatch"
 		};
 		//#endregion
@@ -3069,11 +3069,11 @@ window.__ModuleLoader__.load({
 			document.head.appendChild(tag);
 		}
 		var PermissionSelect_module_css_default = {
-			"chevronOpen": "YPG4qa_chevronOpen",
+			"triggerLabel": "YPG4qa_triggerLabel",
 			"trigger": "YPG4qa_trigger",
 			"chevron": "YPG4qa_chevron",
-			"triggerIcon": "YPG4qa_triggerIcon",
-			"triggerLabel": "YPG4qa_triggerLabel"
+			"chevronOpen": "YPG4qa_chevronOpen",
+			"triggerIcon": "YPG4qa_triggerIcon"
 		};
 		//#endregion
 		//#region lib/types/client/skeleton/PermissionSelect.js
@@ -3308,37 +3308,37 @@ window.__ModuleLoader__.load({
 			document.head.appendChild(tag);
 		}
 		var InputBar_module_css_default = {
-			"attachments": "JSW9Oa_attachments",
-			"notice": "JSW9Oa_notice",
-			"textRef": "JSW9Oa_textRef",
-			"noticeError": "JSW9Oa_noticeError",
-			"modes": "JSW9Oa_modes",
-			"mirror": "JSW9Oa_mirror",
-			"backdrop": "JSW9Oa_backdrop",
-			"cardWorkspaceTrigger": "JSW9Oa_cardWorkspaceTrigger",
-			"scroll": "JSW9Oa_scroll",
-			"retry": "JSW9Oa_retry",
-			"card": "JSW9Oa_card",
-			"accessory": "JSW9Oa_accessory",
-			"grow": "JSW9Oa_grow",
-			"row": "JSW9Oa_row",
 			"trailing": "JSW9Oa_trailing",
-			"primary": "JSW9Oa_primary",
+			"scroll": "JSW9Oa_scroll",
 			"hero": "JSW9Oa_hero",
-			"hint": "JSW9Oa_hint",
+			"chipInvalid": "JSW9Oa_chipInvalid",
+			"add": "JSW9Oa_add",
+			"attachments": "JSW9Oa_attachments",
+			"hlToken": "JSW9Oa_hlToken",
+			"mirror": "JSW9Oa_mirror",
+			"textRef": "JSW9Oa_textRef",
+			"root": "JSW9Oa_root",
+			"primary": "JSW9Oa_primary",
+			"accessory": "JSW9Oa_accessory",
+			"input": "JSW9Oa_input",
+			"overlayAnchor": "JSW9Oa_overlayAnchor",
+			"noticeError": "JSW9Oa_noticeError",
+			"notice": "JSW9Oa_notice",
+			"card": "JSW9Oa_card",
 			"chip": "JSW9Oa_chip",
 			"tools": "JSW9Oa_tools",
-			"hlToken": "JSW9Oa_hlToken",
-			"chipInvalid": "JSW9Oa_chipInvalid",
-			"chipLabel": "JSW9Oa_chipLabel",
-			"add": "JSW9Oa_add",
-			"pending": "JSW9Oa_pending",
-			"root": "JSW9Oa_root",
-			"select": "JSW9Oa_select",
-			"input-pending": "JSW9Oa_input-pending",
-			"input": "JSW9Oa_input",
 			"hlSegment": "JSW9Oa_hlSegment",
-			"overlayAnchor": "JSW9Oa_overlayAnchor"
+			"input-pending": "JSW9Oa_input-pending",
+			"row": "JSW9Oa_row",
+			"retry": "JSW9Oa_retry",
+			"hint": "JSW9Oa_hint",
+			"chipLabel": "JSW9Oa_chipLabel",
+			"cardWorkspaceTrigger": "JSW9Oa_cardWorkspaceTrigger",
+			"modes": "JSW9Oa_modes",
+			"select": "JSW9Oa_select",
+			"grow": "JSW9Oa_grow",
+			"backdrop": "JSW9Oa_backdrop",
+			"pending": "JSW9Oa_pending"
 		};
 		//#endregion
 		//#region lib/types/client/skeleton/InputBar.js
@@ -3990,10 +3990,10 @@ window.__ModuleLoader__.load({
 		var EnterBehaviorRow_module_css_default = {
 			"selector": "tAOvVW_selector",
 			"chevron": "tAOvVW_chevron",
-			"rowText": "tAOvVW_rowText",
-			"row": "tAOvVW_row",
 			"title": "tAOvVW_title",
-			"desc": "tAOvVW_desc"
+			"desc": "tAOvVW_desc",
+			"rowText": "tAOvVW_rowText",
+			"row": "tAOvVW_row"
 		};
 		//#endregion
 		//#region lib/types/client/settings/EnterBehaviorRow.js
@@ -4056,7 +4056,7 @@ window.__ModuleLoader__.load({
 		}
 		//#endregion
 		//#region \0dsh-css:/Volumes/Development/LLM/dsh-plugin/vscode/dshui_for_vscode/.dsh-src/packages/client/ui-conversation/src/client/chat/MessageItem.module.css.mjs
-		const css$15 = ".D33NDa_userRow{flex-direction:column;align-items:flex-end;gap:6px;display:flex}.D33NDa_userStack{flex-direction:column;align-items:flex-end;gap:8px;min-width:0;max-width:min(525px,82%);display:flex}.D33NDa_bubble{background:var(--dsw-specific-bubble);max-width:100%;color:var(--dsw-alias-label-primary);border-radius:22px;padding:10px 16px;font-size:16px;line-height:24px}.D33NDa_contextRow,.D33NDa_compactionRow{padding:2px 0}.D33NDa_compactionButton{width:100%;min-width:0;height:24px;color:inherit;font:inherit;text-align:left;background:0 0;border:none;border-radius:6px;align-items:center;padding:0;display:flex}.D33NDa_compactionButton:not(:disabled){cursor:pointer}.D33NDa_compactionButton:not(:disabled):hover{background:var(--dsw-alias-interactive-bg-hover)}.D33NDa_compactionLeading{width:16px;height:16px;color:var(--dsw-alias-label-secondary);flex:none;place-items:center;margin-right:6px;display:inline-grid}.D33NDa_compactionContextIcon,.D33NDa_compactionDisclosureIcon{grid-area:1/1;justify-content:center;align-items:center;display:inline-flex}.D33NDa_compactionDisclosureIcon,.D33NDa_compactionButton:not(:disabled):hover .D33NDa_compactionContextIcon,.D33NDa_compactionButton:not(:disabled):focus-visible .D33NDa_compactionContextIcon{opacity:0}.D33NDa_compactionButton:not(:disabled):hover .D33NDa_compactionDisclosureIcon,.D33NDa_compactionButton:not(:disabled):focus-visible .D33NDa_compactionDisclosureIcon{opacity:1}.D33NDa_compactionTitle{color:var(--dsw-alias-label-primary-dimmed);flex:none;font-size:14px;line-height:24px}.D33NDa_compactionSep{background:var(--dsw-alias-label-caption);border-radius:1px;flex:none;width:2px;height:2px;margin:0 8px}.D33NDa_compactionSummary{min-width:0;color:var(--dsw-alias-label-tertiary);text-overflow:ellipsis;white-space:nowrap;flex:auto;font-size:14px;line-height:24px;overflow:hidden}.D33NDa_compactionBody{color:var(--dsw-alias-label-tertiary);padding:4px 0 4px 22px;font-size:14px;line-height:24px}.D33NDa_retryRow{color:var(--dsw-alias-label-tertiary);font-size:13px;line-height:20px}.D33NDa_retrySummary{width:fit-content;color:inherit;cursor:pointer;user-select:none;border-radius:3px;align-items:center;gap:7px;padding:2px 0;list-style:none;display:inline-flex}.D33NDa_retrySummary::-webkit-details-marker{display:none}.D33NDa_retrySummary:after{content:\"\";opacity:.8;border-bottom:1.5px solid;border-right:1.5px solid;width:6px;height:6px;transition:transform .12s;transform:rotate(-45deg)}.D33NDa_retrySummary:hover{color:var(--dsw-alias-label-secondary)}.D33NDa_retrySummary:focus-visible{outline:1.5px solid var(--dsw-alias-button-info-fill);outline-offset:2px}.D33NDa_retryText{color:inherit}.D33NDa_retryRow[data-active] .D33NDa_retryText{background:linear-gradient(90deg, var(--dsw-alias-label-tertiary) 0%, var(--dsw-alias-label-tertiary) 40%, var(--dsw-alias-label-secondary) 50%, var(--dsw-alias-label-tertiary) 60%, var(--dsw-alias-label-tertiary) 100%);color:#0000;background-position:100%;background-size:200% 100%;background-clip:text;animation:1.6s ease-in-out infinite D33NDa_retry-shimmer}.D33NDa_retryRow[open] .D33NDa_retrySummary:after{transform:rotate(45deg)}.D33NDa_retryDetails{overflow-wrap:anywhere;gap:2px;margin-top:3px;padding-left:14px;font-size:12px;line-height:18px;display:grid}.D33NDa_retryDetailLabel{color:var(--dsw-alias-label-secondary)}.D33NDa_turnErrorRow{grid-template-columns:10px minmax(0,1fr) auto;align-items:start;gap:8px;padding:2px 0;font-size:13px;line-height:20px;display:grid}.D33NDa_turnErrorDot{margin-top:5px}.D33NDa_turnErrorCopy{overflow-wrap:anywhere;min-width:0}.D33NDa_turnErrorTitle{color:var(--dsw-alias-state-error-primary);margin-right:6px;font-weight:600}.D33NDa_turnErrorMessage{color:var(--dsw-alias-label-secondary)}.D33NDa_turnErrorCode{color:var(--dsw-alias-label-tertiary);font:var(--dsw-font-markdown-code-block-small)}.D33NDa_maxTokensTitle{color:var(--dsw-alias-state-warn-primary);margin-right:6px;font-weight:600}@keyframes D33NDa_retry-shimmer{0%{background-position:100%}to{background-position:0}}@media (prefers-reduced-motion:reduce){.D33NDa_retryRow[data-active] .D33NDa_retryText{color:inherit;background:0 0;animation:none}}.D33NDa_refChip{color:var(--dsw-alias-label-primary);white-space:nowrap;vertical-align:baseline;background:#6187d838;border-radius:6px;margin:0 2px;padding:0 8px;font-size:.85em;line-height:1.6;display:inline-block}";
+		const css$15 = ".D33NDa_userRow{flex-direction:column;align-items:flex-end;gap:6px;display:flex}.D33NDa_userStack{flex-direction:column;align-items:flex-end;gap:8px;min-width:0;max-width:min(525px,82%);display:flex}.D33NDa_bubble{background:var(--dsw-specific-bubble);max-width:100%;color:var(--dsw-alias-label-primary);border-radius:22px;padding:10px 16px;font-size:16px;line-height:24px}.D33NDa_contextRow,.D33NDa_compactionRow{padding:2px 0}.D33NDa_compactionButton{width:100%;min-width:0;height:24px;color:inherit;font:inherit;text-align:left;background:0 0;border:none;border-radius:6px;align-items:center;padding:0;display:flex}.D33NDa_compactionButton:not(:disabled){cursor:pointer}.D33NDa_compactionButton:not(:disabled):hover{background:var(--dsw-alias-interactive-bg-hover)}.D33NDa_compactionLeading{width:16px;height:16px;color:var(--dsw-alias-label-secondary);flex:none;place-items:center;margin-right:6px;display:inline-grid}.D33NDa_compactionContextIcon,.D33NDa_compactionDisclosureIcon{grid-area:1/1;justify-content:center;align-items:center;display:inline-flex}.D33NDa_compactionDisclosureIcon,.D33NDa_compactionButton:not(:disabled):hover .D33NDa_compactionContextIcon,.D33NDa_compactionButton:not(:disabled):focus-visible .D33NDa_compactionContextIcon{opacity:0}.D33NDa_compactionButton:not(:disabled):hover .D33NDa_compactionDisclosureIcon,.D33NDa_compactionButton:not(:disabled):focus-visible .D33NDa_compactionDisclosureIcon{opacity:1}.D33NDa_compactionTitle{color:var(--dsw-alias-label-primary-dimmed);flex:none;font-size:14px;line-height:24px}.D33NDa_compactionSep{background:var(--dsw-alias-label-caption);border-radius:1px;flex:none;width:2px;height:2px;margin:0 8px}.D33NDa_compactionSummary{min-width:0;color:var(--dsw-alias-label-tertiary);text-overflow:ellipsis;white-space:nowrap;flex:auto;font-size:14px;line-height:24px;overflow:hidden}.D33NDa_compactionBody{color:var(--dsw-alias-label-tertiary);padding:4px 0 4px 22px;font-size:14px;line-height:24px}.D33NDa_retryRow{color:var(--dsw-alias-label-tertiary);font-size:13px;line-height:20px}.D33NDa_retrySummary{width:fit-content;color:inherit;cursor:pointer;user-select:none;border-radius:3px;align-items:center;gap:7px;padding:2px 0;list-style:none;display:inline-flex}.D33NDa_retrySummary::-webkit-details-marker{display:none}.D33NDa_retrySummary:after{content:\"\";opacity:.8;border-bottom:1.5px solid;border-right:1.5px solid;width:6px;height:6px;transition:transform .12s;transform:rotate(-45deg)}.D33NDa_retrySummary:hover{color:var(--dsw-alias-label-secondary)}.D33NDa_retrySummary:focus-visible{outline:1.5px solid var(--dsw-alias-button-info-fill);outline-offset:2px}.D33NDa_retryText{color:inherit}.D33NDa_retryRow[data-active] .D33NDa_retryText{background:linear-gradient(90deg, var(--dsw-alias-label-tertiary) 0%, var(--dsw-alias-label-tertiary) 40%, var(--dsw-alias-label-secondary) 50%, var(--dsw-alias-label-tertiary) 60%, var(--dsw-alias-label-tertiary) 100%);color:#0000;background-position:100%;background-size:200% 100%;background-clip:text;animation:1.6s ease-in-out infinite D33NDa_retry-shimmer}.D33NDa_retryRow[open] .D33NDa_retrySummary:after{transform:rotate(45deg)}.D33NDa_retryDetails{overflow-wrap:anywhere;gap:2px;margin-top:3px;padding-left:14px;font-size:12px;line-height:18px;display:grid}.D33NDa_retryDetailLabel{color:var(--dsw-alias-label-secondary)}.D33NDa_turnErrorRow{grid-template-columns:10px minmax(0,1fr) auto;align-items:start;gap:8px;padding:2px 0;font-size:13px;line-height:20px;display:grid}.D33NDa_turnErrorDot{margin-top:5px}.D33NDa_turnErrorCopy{overflow-wrap:anywhere;min-width:0}.D33NDa_turnErrorTitle{color:var(--dsw-alias-state-error-primary);margin-right:6px;font-weight:600}.D33NDa_turnErrorMessage{color:var(--dsw-alias-label-secondary)}.D33NDa_turnErrorCode{color:var(--dsw-alias-label-tertiary);font:var(--dsw-font-markdown-code-block-small)}.D33NDa_maxTokensTitle{color:var(--dsw-alias-state-warn-primary);margin-right:6px;font-weight:600}@keyframes D33NDa_retry-shimmer{0%{background-position:100%}to{background-position:0}}@media (prefers-reduced-motion:reduce){.D33NDa_retryRow[data-active] .D33NDa_retryText{color:inherit;background:0 0;animation:none}}.D33NDa_refChip{color:var(--dsw-alias-label-primary);white-space:nowrap;vertical-align:baseline;background:#6187d838;border-radius:6px;margin:0 2px;padding:0 8px;font-size:.85em;line-height:1.6;display:inline-block}.D33NDa_projectedText{white-space:pre-wrap;word-break:break-word}.D33NDa_link{font:inherit;color:var(--dsw-alias-state-business-primary);cursor:pointer;background:0 0;border:none;margin:0;padding:0;text-decoration:none}.D33NDa_link:hover,.D33NDa_link:focus-visible{text-decoration:underline}";
 		const tagId$15 = "dshui-client-ui-conversation/MessageItem.module.css";
 		if (typeof document !== "undefined" && document.querySelector("style[data-plugin-css=" + JSON.stringify(tagId$15) + "]") === null) {
 			const tag = document.createElement("style");
@@ -4066,33 +4066,35 @@ window.__ModuleLoader__.load({
 			document.head.appendChild(tag);
 		}
 		var MessageItem_module_css_default = {
-			"retry-shimmer": "D33NDa_retry-shimmer",
-			"turnErrorMessage": "D33NDa_turnErrorMessage",
+			"contextRow": "D33NDa_contextRow",
+			"compactionSep": "D33NDa_compactionSep",
+			"link": "D33NDa_link",
+			"turnErrorRow": "D33NDa_turnErrorRow",
 			"refChip": "D33NDa_refChip",
-			"compactionSummary": "D33NDa_compactionSummary",
-			"turnErrorDot": "D33NDa_turnErrorDot",
-			"userStack": "D33NDa_userStack",
-			"maxTokensTitle": "D33NDa_maxTokensTitle",
-			"compactionContextIcon": "D33NDa_compactionContextIcon",
-			"compactionTitle": "D33NDa_compactionTitle",
-			"compactionBody": "D33NDa_compactionBody",
-			"compactionLeading": "D33NDa_compactionLeading",
-			"compactionDisclosureIcon": "D33NDa_compactionDisclosureIcon",
-			"retryRow": "D33NDa_retryRow",
+			"turnErrorCode": "D33NDa_turnErrorCode",
+			"compactionRow": "D33NDa_compactionRow",
+			"retryText": "D33NDa_retryText",
 			"userRow": "D33NDa_userRow",
+			"compactionTitle": "D33NDa_compactionTitle",
+			"retryRow": "D33NDa_retryRow",
+			"userStack": "D33NDa_userStack",
 			"compactionButton": "D33NDa_compactionButton",
 			"retrySummary": "D33NDa_retrySummary",
-			"bubble": "D33NDa_bubble",
-			"retryDetails": "D33NDa_retryDetails",
-			"retryText": "D33NDa_retryText",
-			"turnErrorRow": "D33NDa_turnErrorRow",
-			"turnErrorTitle": "D33NDa_turnErrorTitle",
-			"turnErrorCode": "D33NDa_turnErrorCode",
-			"compactionSep": "D33NDa_compactionSep",
-			"contextRow": "D33NDa_contextRow",
 			"retryDetailLabel": "D33NDa_retryDetailLabel",
-			"compactionRow": "D33NDa_compactionRow",
-			"turnErrorCopy": "D33NDa_turnErrorCopy"
+			"bubble": "D33NDa_bubble",
+			"turnErrorDot": "D33NDa_turnErrorDot",
+			"compactionDisclosureIcon": "D33NDa_compactionDisclosureIcon",
+			"compactionContextIcon": "D33NDa_compactionContextIcon",
+			"turnErrorTitle": "D33NDa_turnErrorTitle",
+			"compactionLeading": "D33NDa_compactionLeading",
+			"retry-shimmer": "D33NDa_retry-shimmer",
+			"turnErrorMessage": "D33NDa_turnErrorMessage",
+			"compactionBody": "D33NDa_compactionBody",
+			"turnErrorCopy": "D33NDa_turnErrorCopy",
+			"maxTokensTitle": "D33NDa_maxTokensTitle",
+			"projectedText": "D33NDa_projectedText",
+			"compactionSummary": "D33NDa_compactionSummary",
+			"retryDetails": "D33NDa_retryDetails"
 		};
 		//#endregion
 		//#region lib/types/client/chat/CompactionItem.js
@@ -4164,29 +4166,29 @@ window.__ModuleLoader__.load({
 			document.head.appendChild(tag);
 		}
 		var ContextBody_module_css_default = {
-			"recalls": "rKyeDq_recalls",
-			"recallCounts": "rKyeDq_recallCounts",
-			"section": "rKyeDq_section",
-			"sectionText": "rKyeDq_sectionText",
-			"text": "rKyeDq_text",
-			"entry": "rKyeDq_entry",
-			"fields": "rKyeDq_fields",
+			"sections": "rKyeDq_sections",
+			"entryDescription": "rKyeDq_entryDescription",
+			"relaySender": "rKyeDq_relaySender",
+			"filePath": "rKyeDq_filePath",
+			"entryName": "rKyeDq_entryName",
+			"files": "rKyeDq_files",
 			"file": "rKyeDq_file",
 			"fieldValue": "rKyeDq_fieldValue",
-			"recallLabel": "rKyeDq_recallLabel",
-			"entryName": "rKyeDq_entryName",
-			"sections": "rKyeDq_sections",
-			"relaySender": "rKyeDq_relaySender",
+			"section": "rKyeDq_section",
+			"text": "rKyeDq_text",
+			"entry": "rKyeDq_entry",
+			"fileAction": "rKyeDq_fileAction",
 			"recall": "rKyeDq_recall",
 			"field": "rKyeDq_field",
-			"filePath": "rKyeDq_filePath",
-			"catalogNotice": "rKyeDq_catalogNotice",
-			"entryDescription": "rKyeDq_entryDescription",
+			"fields": "rKyeDq_fields",
+			"recallCounts": "rKyeDq_recallCounts",
 			"sectionName": "rKyeDq_sectionName",
+			"recalls": "rKyeDq_recalls",
 			"fieldKey": "rKyeDq_fieldKey",
-			"files": "rKyeDq_files",
-			"fileAction": "rKyeDq_fileAction",
-			"entries": "rKyeDq_entries"
+			"sectionText": "rKyeDq_sectionText",
+			"entries": "rKyeDq_entries",
+			"catalogNotice": "rKyeDq_catalogNotice",
+			"recallLabel": "rKyeDq_recallLabel"
 		};
 		//#endregion
 		//#region lib/types/client/chat/ContextBody.js
@@ -4721,12 +4723,12 @@ window.__ModuleLoader__.load({
 			document.head.appendChild(tag);
 		}
 		var ContextInjectionRow_module_css_default = {
-			"body": "Dq4eGW_body",
-			"sep": "Dq4eGW_sep",
+			"source": "Dq4eGW_source",
+			"summary": "Dq4eGW_summary",
 			"chevron": "Dq4eGW_chevron",
 			"root": "Dq4eGW_root",
-			"summary": "Dq4eGW_summary",
-			"source": "Dq4eGW_source"
+			"sep": "Dq4eGW_sep",
+			"body": "Dq4eGW_body"
 		};
 		//#endregion
 		//#region lib/types/client/chat/ContextInjectionRow.js
@@ -4821,12 +4823,12 @@ window.__ModuleLoader__.load({
 			document.head.appendChild(tag);
 		}
 		var MessageIconActions_module_css_default = {
-			"visuallyHidden": "-T5xQa_visuallyHidden",
 			"timeEnd": "-T5xQa_timeEnd",
+			"visuallyHidden": "-T5xQa_visuallyHidden",
 			"actions": "-T5xQa_actions",
-			"runTimeDot": "-T5xQa_runTimeDot",
+			"timeStart": "-T5xQa_timeStart",
 			"action": "-T5xQa_action",
-			"timeStart": "-T5xQa_timeStart"
+			"runTimeDot": "-T5xQa_runTimeDot"
 		};
 		//#endregion
 		//#region lib/types/client/chat/MessageIconActions.js
@@ -5066,23 +5068,77 @@ window.__ModuleLoader__.load({
 			});
 		}
 		/**
-		* Display projection of reference forms in a user bubble (free geometry — no
-		* textarea alignment constraint here); everything else stays plain text. The
-		* logged model text remains the single truth; this is presentation only.
+		* @param raw - The verbatim `(destination)` of a `[label](destination)` token.
+		* @returns the classified destination, or null to keep the syntax literal
+		* (absolute URLs outside the http/https/mailto allowlist).
+		*/
+		function userLinkDestination(raw) {
+			let protocol;
+			try {
+				protocol = new URL(raw).protocol;
+			} catch {
+				return {
+					kind: "file",
+					path: raw
+				};
+			}
+			if (protocol === "http:" || protocol === "https:") return {
+				kind: "external",
+				href: raw,
+				newTab: true
+			};
+			return protocol === "mailto:" ? {
+				kind: "external",
+				href: raw,
+				newTab: false
+			} : null;
+		}
+		/**
+		* Display projection of reference forms and markdown links in a user bubble
+		* (free geometry — no textarea alignment constraint here); everything else
+		* stays plain text. The logged model text remains the single truth; this is
+		* presentation only.
 		* Plain-text `/name` / `@name` word-boundary tokens decorate (the sent text
 		* IS the reference — the bubble uses the same plainest token
 		* scan as the composer, minus the lexicon: sent tokens were validated at
-		* compose time, so shape alone decorates).
+		* compose time, so shape alone decorates). `[label](destination)` tokens
+		* render as links: allowlisted absolute URLs as anchors, relative file paths
+		* as buttons through the same opener the tool rows use; any other absolute
+		* URL keeps the literal syntax. A decorated run flows inline in one pre-wrap
+		* span — block MessageText boxes would stack every segment on its own line.
 		*/
-		function projectUserText(text) {
-			const re = /(^|\s)([/@][\w-]+)(?=\s|$)/g;
+		function projectUserText(text, openFile) {
+			const re = /\[([^\][\n]+)\]\(([^)\s]+)\)|(^|\s)([/@][\w-]+)(?=\s|$)/g;
 			const parts = [];
 			let cursor = 0;
 			let m;
 			while ((m = re.exec(text)) !== null) {
-				const tokenStart = m.index + (m[1]?.length ?? 0);
-				const label = m[2] ?? "";
-				if (tokenStart > cursor) parts.push((0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.MessageText, { text: text.slice(cursor, tokenStart) }, cursor));
+				if (m[1] !== void 0) {
+					const destination = userLinkDestination(m[2] ?? "");
+					if (destination === null) continue;
+					if (m.index > cursor) parts.push((0, react_jsx_runtime.jsx)("span", { children: text.slice(cursor, m.index) }, cursor));
+					parts.push(destination.kind === "external" ? (0, react_jsx_runtime.jsx)("a", {
+						className: MessageItem_module_css_default.link,
+						href: destination.href,
+						...destination.newTab ? {
+							target: "_blank",
+							rel: "noopener noreferrer"
+						} : {},
+						children: m[1]
+					}, m.index) : (0, react_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: MessageItem_module_css_default.link,
+						onClick: () => {
+							openFile(destination.path);
+						},
+						children: m[1]
+					}, m.index));
+					cursor = m.index + m[0].length;
+					continue;
+				}
+				const tokenStart = m.index + (m[3]?.length ?? 0);
+				const label = m[4] ?? "";
+				if (tokenStart > cursor) parts.push((0, react_jsx_runtime.jsx)("span", { children: text.slice(cursor, tokenStart) }, cursor));
 				parts.push((0, react_jsx_runtime.jsx)("span", {
 					className: MessageItem_module_css_default.refChip,
 					"data-ref-chip": label.startsWith("@") ? "subagent" : "skill",
@@ -5091,11 +5147,14 @@ window.__ModuleLoader__.load({
 				cursor = tokenStart + label.length;
 			}
 			if (parts.length === 0) return (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.MessageText, { text });
-			if (cursor < text.length) parts.push((0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.MessageText, { text: text.slice(cursor) }, cursor));
-			return (0, react_jsx_runtime.jsx)(react_jsx_runtime.Fragment, { children: parts });
+			if (cursor < text.length) parts.push((0, react_jsx_runtime.jsx)("span", { children: text.slice(cursor) }, cursor));
+			return (0, react_jsx_runtime.jsx)("span", {
+				className: MessageItem_module_css_default.projectedText,
+				children: parts
+			});
 		}
 		/** Right-aligned bubble shared by user and steering rows. */
-		function UserStyleBubble({ content, imageLoader, actions, pending = false, t }) {
+		function UserStyleBubble({ content, imageLoader, openFile, actions, pending = false, t }) {
 			const { text, images, rest } = contentParts(content);
 			const truncated = (total) => t("json.truncated", { total });
 			const showBubble = text !== "" || rest.length > 0;
@@ -5112,7 +5171,7 @@ window.__ModuleLoader__.load({
 						labels: messageImageLabels(t)
 					}), showBubble && (0, react_jsx_runtime.jsxs)("div", {
 						className: MessageItem_module_css_default.bubble,
-						children: [projectUserText(text), rest.map((block, i) => (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.JsonBlock, {
+						children: [projectUserText(text, openFile), rest.map((block, i) => (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.JsonBlock, {
 							label: t("message.extraBlock"),
 							payload: block,
 							truncatedLabel: truncated
@@ -5124,13 +5183,15 @@ window.__ModuleLoader__.load({
 		/**
 		* Render one Host-authoritative pending steering item with the same visual
 		* language as its eventual durable transcript node.
-		* @param props - Pending message content and conversation translator.
+		* @param props - Pending message content, the view's file opener, and
+		* conversation translator.
 		* @returns the pending steering bubble.
 		*/
-		function PendingSteeringBubble({ content, loadImage, t }) {
+		function PendingSteeringBubble({ content, loadImage, openFile, t }) {
 			return (0, react_jsx_runtime.jsx)(UserStyleBubble, {
 				content,
 				imageLoader: loadImage ?? (() => Promise.reject(new Error(t("image.serviceUnavailable")))),
+				openFile,
 				pending: true,
 				t,
 				actions: (text) => (0, react_jsx_runtime.jsx)(MessageIconActions, {
@@ -5142,11 +5203,12 @@ window.__ModuleLoader__.load({
 			});
 		}
 		/** User and admitted-steering keyed Chat renderer. */
-		const UserMessageNodeView = (0, react.memo)(function UserMessageNodeView({ node, loadImage, t }) {
+		const UserMessageNodeView = (0, react.memo)(function UserMessageNodeView({ node, loadImage, openFile, t }) {
 			const data = node.data;
 			return (0, react_jsx_runtime.jsx)(UserStyleBubble, {
 				content: data.content,
 				imageLoader: loadImage,
+				openFile,
 				t,
 				actions: (text) => (0, react_jsx_runtime.jsx)(MessageIconActions, {
 					text,
@@ -5219,19 +5281,19 @@ window.__ModuleLoader__.load({
 			document.head.appendChild(tag);
 		}
 		var ChatView_module_css_default = {
-			"scroll": "blI9vq_scroll",
-			"callRow": "blI9vq_callRow",
-			"turnStatus": "blI9vq_turnStatus",
-			"older": "blI9vq_older",
-			"turnStatusClock": "blI9vq_turnStatusClock",
+			"toBottom": "blI9vq_toBottom",
 			"column": "blI9vq_column",
 			"flowItem": "blI9vq_flowItem",
-			"dsh-turn-status-shimmer": "blI9vq_dsh-turn-status-shimmer",
 			"hint": "blI9vq_hint",
-			"toBottomSlot": "blI9vq_toBottomSlot",
-			"toBottom": "blI9vq_toBottom",
+			"scroll": "blI9vq_scroll",
+			"root": "blI9vq_root",
 			"openError": "blI9vq_openError",
-			"root": "blI9vq_root"
+			"toBottomSlot": "blI9vq_toBottomSlot",
+			"older": "blI9vq_older",
+			"dsh-turn-status-shimmer": "blI9vq_dsh-turn-status-shimmer",
+			"turnStatus": "blI9vq_turnStatus",
+			"turnStatusClock": "blI9vq_turnStatusClock",
+			"callRow": "blI9vq_callRow"
 		};
 		//#endregion
 		//#region lib/types/client/chat/ChatNodeSeat.js
@@ -5590,6 +5652,7 @@ window.__ModuleLoader__.load({
 							pendingSteering.map((item) => (0, react_jsx_runtime.jsx)(PendingSteeringBubble, {
 								content: item.content,
 								loadImage,
+								openFile,
 								t
 							}, item.id))
 						]
@@ -5708,15 +5771,15 @@ window.__ModuleLoader__.load({
 			document.head.appendChild(tag);
 		}
 		var ApprovalPanel_module_css_default = {
-			"command": "Pjwy0q_command",
-			"dot": "Pjwy0q_dot",
+			"card": "Pjwy0q_card",
 			"reject": "Pjwy0q_reject",
-			"headline": "Pjwy0q_headline",
 			"strip": "Pjwy0q_strip",
-			"actionRow": "Pjwy0q_actionRow",
 			"root": "Pjwy0q_root",
 			"body": "Pjwy0q_body",
-			"card": "Pjwy0q_card"
+			"actionRow": "Pjwy0q_actionRow",
+			"headline": "Pjwy0q_headline",
+			"dot": "Pjwy0q_dot",
+			"command": "Pjwy0q_command"
 		};
 		//#endregion
 		//#region lib/types/client/skeleton/ApprovalPanel.js
@@ -6156,20 +6219,20 @@ window.__ModuleLoader__.load({
 		}
 		var TodoPanel_module_css_default = {
 			"header": "oDL4vq_header",
-			"chevron": "oDL4vq_chevron",
-			"item": "oDL4vq_item",
-			"content": "oDL4vq_content",
-			"body": "oDL4vq_body",
 			"lead": "oDL4vq_lead",
 			"title": "oDL4vq_title",
-			"root": "oDL4vq_root",
-			"list": "oDL4vq_list",
-			"progress": "oDL4vq_progress",
+			"chevron": "oDL4vq_chevron",
+			"todo-progress-spin": "oDL4vq_todo-progress-spin",
 			"glyph": "oDL4vq_glyph",
-			"glyphPending": "oDL4vq_glyphPending",
+			"list": "oDL4vq_list",
 			"glyphCompleted": "oDL4vq_glyphCompleted",
+			"glyphPending": "oDL4vq_glyphPending",
+			"root": "oDL4vq_root",
+			"progress": "oDL4vq_progress",
+			"content": "oDL4vq_content",
+			"body": "oDL4vq_body",
 			"glyphProgress": "oDL4vq_glyphProgress",
-			"todo-progress-spin": "oDL4vq_todo-progress-spin"
+			"item": "oDL4vq_item"
 		};
 		//#endregion
 		//#region lib/types/client/skeleton/TodoPanel.js
@@ -6362,18 +6425,18 @@ window.__ModuleLoader__.load({
 			document.head.appendChild(tag);
 		}
 		var QueueDock_module_css_default = {
-			"actions": "_6IpLpG_actions",
-			"action": "_6IpLpG_action",
+			"chevron": "_6IpLpG_chevron",
+			"panel": "_6IpLpG_panel",
+			"count": "_6IpLpG_count",
+			"row": "_6IpLpG_row",
 			"header": "_6IpLpG_header",
+			"actions": "_6IpLpG_actions",
 			"dock": "_6IpLpG_dock",
 			"preview": "_6IpLpG_preview",
-			"chevron": "_6IpLpG_chevron",
-			"lead": "_6IpLpG_lead",
-			"row": "_6IpLpG_row",
-			"count": "_6IpLpG_count",
-			"panel": "_6IpLpG_panel",
+			"editor": "_6IpLpG_editor",
 			"list": "_6IpLpG_list",
-			"editor": "_6IpLpG_editor"
+			"action": "_6IpLpG_action",
+			"lead": "_6IpLpG_lead"
 		};
 		//#endregion
 		//#region lib/types/client/queue/QueueDock.js
@@ -6631,24 +6694,24 @@ window.__ModuleLoader__.load({
 			document.head.appendChild(tag);
 		}
 		var HeroShell_module_css_default = {
-			"workspaceRow": "_l2S3W_workspaceRow",
-			"fish": "_l2S3W_fish",
-			"stack": "_l2S3W_stack",
 			"hero-fish-swim": "_l2S3W_hero-fish-swim",
-			"headlineText": "_l2S3W_headlineText",
+			"fishHitbox": "_l2S3W_fishHitbox",
+			"chevron": "_l2S3W_chevron",
+			"modalError": "_l2S3W_modalError",
+			"workspace": "_l2S3W_workspace",
+			"modalAction": "_l2S3W_modalAction",
+			"previewBadge": "_l2S3W_previewBadge",
+			"stack": "_l2S3W_stack",
+			"modalInput": "_l2S3W_modalInput",
+			"fish": "_l2S3W_fish",
+			"workspaceLabel": "_l2S3W_workspaceLabel",
 			"headline": "_l2S3W_headline",
 			"body": "_l2S3W_body",
-			"workspace": "_l2S3W_workspace",
-			"modalError": "_l2S3W_modalError",
-			"modalAction": "_l2S3W_modalAction",
-			"root": "_l2S3W_root",
-			"fishHitbox": "_l2S3W_fishHitbox",
-			"modalInput": "_l2S3W_modalInput",
-			"chevron": "_l2S3W_chevron",
-			"workspaceLabel": "_l2S3W_workspaceLabel",
-			"previewBadge": "_l2S3W_previewBadge",
+			"folder": "_l2S3W_folder",
 			"workspaceStatic": "_l2S3W_workspaceStatic",
-			"folder": "_l2S3W_folder"
+			"headlineText": "_l2S3W_headlineText",
+			"root": "_l2S3W_root",
+			"workspaceRow": "_l2S3W_workspaceRow"
 		};
 		//#endregion
 		//#region lib/types/client/skeleton/EmptyHero.js
@@ -6813,28 +6876,28 @@ window.__ModuleLoader__.load({
 			document.head.appendChild(tag);
 		}
 		var ConversationRoot_module_css_default = {
+			"scrollBody": "ZBQAyG_scrollBody",
+			"crumbSeg": "ZBQAyG_crumbSeg",
+			"header": "ZBQAyG_header",
+			"composerSeat": "ZBQAyG_composerSeat",
+			"root": "ZBQAyG_root",
+			"headerUtilities": "ZBQAyG_headerUtilities",
+			"tabActive": "ZBQAyG_tabActive",
+			"composerStack": "ZBQAyG_composerStack",
+			"heroWorkspaceRow": "ZBQAyG_heroWorkspaceRow",
+			"crumbSep": "ZBQAyG_crumbSep",
+			"tab": "ZBQAyG_tab",
+			"composerHero": "ZBQAyG_composerHero",
+			"heroGlow": "ZBQAyG_heroGlow",
 			"titleCluster": "ZBQAyG_titleCluster",
 			"headerHidden": "ZBQAyG_headerHidden",
-			"tab": "ZBQAyG_tab",
-			"headerActions": "ZBQAyG_headerActions",
-			"composerStack": "ZBQAyG_composerStack",
-			"composerSeat": "ZBQAyG_composerSeat",
-			"crumbSep": "ZBQAyG_crumbSep",
-			"crumbs": "ZBQAyG_crumbs",
-			"scrollBody": "ZBQAyG_scrollBody",
-			"heroWorkspaceRow": "ZBQAyG_heroWorkspaceRow",
-			"header": "ZBQAyG_header",
-			"tabActive": "ZBQAyG_tabActive",
-			"viewArea": "ZBQAyG_viewArea",
-			"crumbSeg": "ZBQAyG_crumbSeg",
-			"headerUtilities": "ZBQAyG_headerUtilities",
-			"heroGlow": "ZBQAyG_heroGlow",
-			"crumb": "ZBQAyG_crumb",
-			"composerHero": "ZBQAyG_composerHero",
-			"tabs": "ZBQAyG_tabs",
-			"root": "ZBQAyG_root",
 			"titleRow": "ZBQAyG_titleRow",
-			"crumbCurrent": "ZBQAyG_crumbCurrent"
+			"crumb": "ZBQAyG_crumb",
+			"crumbs": "ZBQAyG_crumbs",
+			"crumbCurrent": "ZBQAyG_crumbCurrent",
+			"headerActions": "ZBQAyG_headerActions",
+			"tabs": "ZBQAyG_tabs",
+			"viewArea": "ZBQAyG_viewArea"
 		};
 		//#endregion
 		//#region lib/types/client/skeleton/ConversationRoot.js
@@ -7131,15 +7194,15 @@ window.__ModuleLoader__.load({
 			document.head.appendChild(tag);
 		}
 		var DetailsPanel_module_css_default = {
-			"empty": "qTNuta_empty",
-			"section": "qTNuta_section",
 			"body": "qTNuta_body",
 			"root": "qTNuta_root",
-			"close": "qTNuta_close",
+			"title": "qTNuta_title",
+			"code": "qTNuta_code",
+			"section": "qTNuta_section",
 			"header": "qTNuta_header",
 			"sectionLabel": "qTNuta_sectionLabel",
-			"code": "qTNuta_code",
-			"title": "qTNuta_title"
+			"close": "qTNuta_close",
+			"empty": "qTNuta_empty"
 		};
 		//#endregion
 		//#region lib/types/client/skeleton/DetailsPanel.js
@@ -8994,13 +9057,13 @@ window.__ModuleLoader__.load({
 		var ReasoningRow_module_css_default = {
 			"row": "LHvqHq_row",
 			"chevron": "LHvqHq_chevron",
-			"separator": "LHvqHq_separator",
-			"root": "LHvqHq_root",
-			"leading": "LHvqHq_leading",
 			"dsh-reasoning-row-sweep": "LHvqHq_dsh-reasoning-row-sweep",
-			"title": "LHvqHq_title",
+			"thinkBody": "LHvqHq_thinkBody",
+			"root": "LHvqHq_root",
+			"separator": "LHvqHq_separator",
+			"leading": "LHvqHq_leading",
 			"summary": "LHvqHq_summary",
-			"thinkBody": "LHvqHq_thinkBody"
+			"title": "LHvqHq_title"
 		};
 		//#endregion
 		//#region lib/types/client/chat/ReasoningRow.js
@@ -9085,8 +9148,8 @@ window.__ModuleLoader__.load({
 			document.head.appendChild(tag);
 		}
 		var AssistantMarkdown_module_css_default = {
-			"stopped": "eWu_XW_stopped",
 			"actions": "eWu_XW_actions",
+			"stopped": "eWu_XW_stopped",
 			"root": "eWu_XW_root",
 			"body": "eWu_XW_body"
 		};
@@ -9201,15 +9264,15 @@ window.__ModuleLoader__.load({
 			document.head.appendChild(tag);
 		}
 		var GenericCommandCard_module_css_default = {
-			"dsh-command-row-sweep": "kyKgZW_dsh-command-row-sweep",
-			"separator": "kyKgZW_separator",
-			"root": "kyKgZW_root",
 			"body": "kyKgZW_body",
-			"title": "kyKgZW_title",
+			"separator": "kyKgZW_separator",
 			"leading": "kyKgZW_leading",
-			"summary": "kyKgZW_summary",
 			"chevron": "kyKgZW_chevron",
-			"row": "kyKgZW_row"
+			"title": "kyKgZW_title",
+			"root": "kyKgZW_root",
+			"dsh-command-row-sweep": "kyKgZW_dsh-command-row-sweep",
+			"row": "kyKgZW_row",
+			"summary": "kyKgZW_summary"
 		};
 		//#endregion
 		//#region lib/types/client/chat/GenericCommandCard.js
@@ -9344,8 +9407,8 @@ window.__ModuleLoader__.load({
 			document.head.appendChild(tag);
 		}
 		var TurnTailNodeView_module_css_default = {
-			"actions": "neH75a_actions",
-			"root": "neH75a_root"
+			"root": "neH75a_root",
+			"actions": "neH75a_actions"
 		};
 		//#endregion
 		//#region lib/types/client/chat/TurnTailNodeView.js

@@ -48,7 +48,7 @@ a deeply integrated VS Code experience on top.
 
 ## Features
 
-Compared with the stock browser UI, this extension differs in four main ways:
+Compared with the stock browser UI, this extension differs in five main ways:
 
 1. **No workspace selection.** The opened folder is the workspace: the extension starts the
    `dsh web` server with it as the working directory and registers it as a persistent Workspace, so a
@@ -61,6 +61,9 @@ Compared with the stock browser UI, this extension differs in four main ways:
 4. **The session menu deletes instead of archiving.** Deleting is performed by the extension host via
    the VS Code file API, which removes the session log files under `~/.dsh/sessions/...` directly
    (bypassing dsh's archive RPC; dsh itself is unchanged).
+5. **Markdown links in user messages are clickable.** `[label](url)` links over http/https/mailto open
+   in the system browser; relative paths (e.g. `[Makefile](Makefile)`) resolve against the session cwd
+   and open the file in the current window.
 
 Everything else from the dsh web UI is preserved: session chat, tool cards, goals, subagents, settings,
 model selection, background tasks, feedback, and more. On top of that, the extension provides several
@@ -452,7 +455,7 @@ The extension binds two dsh versions together, and both must be aligned on upgra
 
 1. **CLI runtime:** `dependencies["@deepseek-ai/dsh"]` in `package.json` (currently `0.1.0-rc.7`).
 2. **Client bundle source:** the `.dsh-src` checkout (currently the `dsh-v0.1.0-rc.7` release plus the
-   two dshui commits; since the repo's master may lag behind the npm release, align by checking each
+   three dshui commits; since the repo's master may lag behind the npm release, align by checking each
    package's version in its `package.json` and confirm with real runtime tests).
 
 Upgrade steps:

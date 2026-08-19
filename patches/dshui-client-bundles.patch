@@ -38,6 +38,226 @@ index f57caea9e5..5798683fa5 100644
              // Host/OS open failures stay silent in the chat row; the native
              // app surfaces its own error dialog when the path is unusable.
            })
+diff --git a/packages/client/ui-conversation/src/client/chat/ChatView.tsx b/packages/client/ui-conversation/src/client/chat/ChatView.tsx
+index 58e63b312f..a75a1c3275 100644
+--- a/packages/client/ui-conversation/src/client/chat/ChatView.tsx
++++ b/packages/client/ui-conversation/src/client/chat/ChatView.tsx
+@@ -402,7 +402,7 @@ export function ChatView({
+               wait, tool execution, streaming) so it never flickers per step. */}
+           {running && <TurnStatus startTime={runningTurnStart} t={t} />}
+           {pendingSteering.map(item => (
+-            <PendingSteeringBubble key={item.id} content={item.content} loadImage={loadImage} t={t} />
++            <PendingSteeringBubble key={item.id} content={item.content} loadImage={loadImage} openFile={openFile} t={t} />
+           ))}
+         </div>
+         {!atBottom && (
+diff --git a/packages/client/ui-conversation/src/client/chat/MessageItem.module.css b/packages/client/ui-conversation/src/client/chat/MessageItem.module.css
+index 36824d228d..83ca9fa92d 100644
+--- a/packages/client/ui-conversation/src/client/chat/MessageItem.module.css
++++ b/packages/client/ui-conversation/src/client/chat/MessageItem.module.css
+@@ -282,3 +282,30 @@
+   white-space: nowrap;
+   vertical-align: baseline;
+ }
++
++/* Decorated projection (text runs + chips + links) flows inline in one
++   pre-wrap span — block MessageText boxes would stack each segment. */
++.projectedText {
++  white-space: pre-wrap;
++  word-break: break-word;
++}
++
++/* Markdown link in a user bubble: the same link language as assistant
++   markdown — business-primary blue at rest, underline on hover/focus.
++   External destinations are anchors, file paths are buttons, so the button
++   chrome resets to plain inline text. */
++.link {
++  margin: 0;
++  padding: 0;
++  border: none;
++  background: none;
++  font: inherit;
++  color: var(--dsw-alias-state-business-primary);
++  text-decoration: none;
++  cursor: pointer;
++}
++
++.link:hover,
++.link:focus-visible {
++  text-decoration: underline;
++}
+diff --git a/packages/client/ui-conversation/src/client/chat/MessageItem.tsx b/packages/client/ui-conversation/src/client/chat/MessageItem.tsx
+index 00b5110d68..8df9765c1b 100644
+--- a/packages/client/ui-conversation/src/client/chat/MessageItem.tsx
++++ b/packages/client/ui-conversation/src/client/chat/MessageItem.tsx
+@@ -146,23 +146,85 @@ function TurnMaxTokensItem({ t }: {
+ }
+ 
+ /**
+- * Display projection of reference forms in a user bubble (free geometry — no
+- * textarea alignment constraint here); everything else stays plain text. The
+- * logged model text remains the single truth; this is presentation only.
++ * Classification of a `[label](destination)` token's destination in a user
++ * bubble: an allowlisted absolute URL opens externally; anything `new URL`
++ * cannot parse reads as a file path the chat view's opener resolves against
++ * the session cwd.
++ */
++type UserLinkDestination =
++  | { kind: 'external'; href: string; newTab: boolean }
++  | { kind: 'file'; path: string }
++
++/**
++ * @param raw - The verbatim `(destination)` of a `[label](destination)` token.
++ * @returns the classified destination, or null to keep the syntax literal
++ * (absolute URLs outside the http/https/mailto allowlist).
++ */
++function userLinkDestination(raw: string): UserLinkDestination | null {
++  let protocol: string
++  try {
++    protocol = new URL(raw).protocol
++  } catch {
++    // Unparseable as an absolute URL — a (relative) file path.
++    return { kind: 'file', path: raw }
++  }
++  if (protocol === 'http:' || protocol === 'https:') return { kind: 'external', href: raw, newTab: true }
++  return protocol === 'mailto:' ? { kind: 'external', href: raw, newTab: false } : null
++}
++
++/**
++ * Display projection of reference forms and markdown links in a user bubble
++ * (free geometry — no textarea alignment constraint here); everything else
++ * stays plain text. The logged model text remains the single truth; this is
++ * presentation only.
+  * Plain-text `/name` / `@name` word-boundary tokens decorate (the sent text
+  * IS the reference — the bubble uses the same plainest token
+  * scan as the composer, minus the lexicon: sent tokens were validated at
+- * compose time, so shape alone decorates).
++ * compose time, so shape alone decorates). `[label](destination)` tokens
++ * render as links: allowlisted absolute URLs as anchors, relative file paths
++ * as buttons through the same opener the tool rows use; any other absolute
++ * URL keeps the literal syntax. A decorated run flows inline in one pre-wrap
++ * span — block MessageText boxes would stack every segment on its own line.
+  */
+-function projectUserText(text: string): ReactNode {
+-  const re = /(^|\s)([/@][\w-]+)(?=\s|$)/g
++function projectUserText(text: string, openFile: (path: string) => void): ReactNode {
++  const re = /\[([^\][\n]+)\]\(([^)\s]+)\)|(^|\s)([/@][\w-]+)(?=\s|$)/g
+   const parts: ReactNode[] = []
+   let cursor = 0
+   let m: RegExpExecArray | null
+   while ((m = re.exec(text)) !== null) {
+-    const tokenStart = m.index + (m[1]?.length ?? 0)
+-    const label = m[2] ?? ''
+-    if (tokenStart > cursor) parts.push(<MessageText key={cursor} text={text.slice(cursor, tokenStart)} />)
++    if (m[1] !== undefined) {
++      const destination = userLinkDestination(m[2] ?? '')
++      if (destination === null) continue
++      if (m.index > cursor) parts.push(<span key={cursor}>{text.slice(cursor, m.index)}</span>)
++      parts.push(
++        destination.kind === 'external'
++          ? (
++            <a
++              key={m.index}
++              className={css.link}
++              href={destination.href}
++              {...(destination.newTab ? { target: '_blank', rel: 'noopener noreferrer' } : {})}
++            >
++              {m[1]}
++            </a>
++          )
++          : (
++            <button
++              key={m.index}
++              type="button"
++              className={css.link}
++              onClick={() => { openFile(destination.path) }}
++            >
++              {m[1]}
++            </button>
++          ),
++      )
++      cursor = m.index + m[0].length
++      continue
++    }
++    const tokenStart = m.index + (m[3]?.length ?? 0)
++    const label = m[4] ?? ''
++    if (tokenStart > cursor) parts.push(<span key={cursor}>{text.slice(cursor, tokenStart)}</span>)
+     parts.push(
+       <span key={tokenStart} className={css.refChip} data-ref-chip={label.startsWith('@') ? 'subagent' : 'skill'}>
+         {label}
+@@ -171,16 +233,18 @@ function projectUserText(text: string): ReactNode {
+     cursor = tokenStart + label.length
+   }
+   if (parts.length === 0) return <MessageText text={text} />
+-  if (cursor < text.length) parts.push(<MessageText key={cursor} text={text.slice(cursor)} />)
+-  return <>{parts}</>
++  if (cursor < text.length) parts.push(<span key={cursor}>{text.slice(cursor)}</span>)
++  return <span className={css.projectedText}>{parts}</span>
+ }
+ 
+ /** Right-aligned bubble shared by user and steering rows. */
+ function UserStyleBubble({
+-  content, imageLoader, actions, pending = false, t,
++  content, imageLoader, openFile, actions, pending = false, t,
+ }: {
+   content: readonly unknown[]
+   imageLoader: ImageLoader
++  /** Open a markdown-link file path (resolved against the session cwd by the view). */
++  openFile: (path: string) => void
+   /** Optional IconActions (or similar) below the bubble; receives the joined text. */
+   actions?: (text: string) => ReactNode
+   /** Whether this is the Host-authoritative pre-admission steering projection. */
+@@ -195,7 +259,7 @@ function UserStyleBubble({
+       <div className={css.userStack}>
+         <ImageGallery images={images} load={imageLoader} align="end" labels={messageImageLabels(t)} />
+         {showBubble && <div className={css.bubble}>
+-          {projectUserText(text)}
++          {projectUserText(text, openFile)}
+           {rest.map((block, i) => <JsonBlock key={i} label={t('message.extraBlock')} payload={block} truncatedLabel={truncated} />)}
+         </div>}
+       </div>
+@@ -207,12 +271,15 @@ function UserStyleBubble({
+ /**
+  * Render one Host-authoritative pending steering item with the same visual
+  * language as its eventual durable transcript node.
+- * @param props - Pending message content and conversation translator.
++ * @param props - Pending message content, the view's file opener, and
++ * conversation translator.
+  * @returns the pending steering bubble.
+  */
+-export function PendingSteeringBubble({ content, loadImage, t }: {
++export function PendingSteeringBubble({ content, loadImage, openFile, t }: {
+   content: readonly unknown[]
+   loadImage?: ImageLoader
++  /** Open a markdown-link file path (resolved against the session cwd by the view). */
++  openFile: (path: string) => void
+   t: ChatViewSlotProps['t']
+ }): ReactNode {
+   const imageLoader = loadImage ?? (() => Promise.reject(new Error(t('image.serviceUnavailable'))))
+@@ -220,6 +287,7 @@ export function PendingSteeringBubble({ content, loadImage, t }: {
+     <UserStyleBubble
+       content={content}
+       imageLoader={imageLoader}
++      openFile={openFile}
+       pending
+       t={t}
+       actions={text => (
+@@ -236,13 +304,14 @@ export function PendingSteeringBubble({ content, loadImage, t }: {
+ 
+ /** User and admitted-steering keyed Chat renderer. */
+ export const UserMessageNodeView = memo(function UserMessageNodeView({
+-  node, loadImage, t,
++  node, loadImage, openFile, t,
+ }: ChatNodeViewProps<'user' | 'steering'>) {
+   const data = node.data
+   return (
+     <UserStyleBubble
+       content={data.content}
+       imageLoader={loadImage}
++      openFile={openFile}
+       t={t}
+       actions={text => (
+         <MessageIconActions
 diff --git a/packages/client/ui-conversation/src/client/skeleton/ConversationRoot.module.css b/packages/client/ui-conversation/src/client/skeleton/ConversationRoot.module.css
 index 6146d42810..ebdac94c44 100644
 --- a/packages/client/ui-conversation/src/client/skeleton/ConversationRoot.module.css
@@ -254,6 +474,101 @@ index 91dfb4a8a3..c6142ec8e7 100644
  .workspace:not(:disabled):hover,
  .workspace[aria-expanded='true'] {
    background: var(--dsw-alias-interactive-bg-hover);
+diff --git a/packages/client/ui-conversation/tests/chat-branch-tails.client.spec.tsx b/packages/client/ui-conversation/tests/chat-branch-tails.client.spec.tsx
+index 67a213a98e..fd9f83d4d1 100644
+--- a/packages/client/ui-conversation/tests/chat-branch-tails.client.spec.tsx
++++ b/packages/client/ui-conversation/tests/chat-branch-tails.client.spec.tsx
+@@ -47,10 +47,11 @@ const RETRY_ID = 'retry-fixture' as Extract<ConversationNode, { kind: 'model-ret
+ interface MessageItemProps {
+   readonly node: ConversationNode
+   readonly t: ChatNodeViewProps['t']
++  readonly openFile?: (path: string) => void
+ }
+ 
+ /** Legacy-node fixture adapter for the independently registered renderers. */
+-function MessageItem({ node, t: translate }: MessageItemProps) {
++function MessageItem({ node, t: translate, openFile }: MessageItemProps) {
+   const kind = node.kind === 'assistant' ? 'assistant-step' : node.kind
+   const viewNode: ChatConversationViewNode = {
+     key: `fixture:${node.kind}:${node.seq}`,
+@@ -62,7 +63,7 @@ function MessageItem({ node, t: translate }: MessageItemProps) {
+     visibility: 'visible',
+     data: node.kind === 'model-retry' ? { attempts: [node], current: node } : node,
+   }
+-  const props = { node: viewNode, t: translate } as ChatNodeViewProps
++  const props = { node: viewNode, t: translate, openFile: openFile ?? (() => {}) } as ChatNodeViewProps
+   switch (node.kind) {
+     case 'user':
+     case 'steering':
+@@ -106,6 +107,68 @@ describe('MessageItem arms', () => {
+     expect(writeText).toHaveBeenCalledWith('hello bubble')
+   })
+ 
++  it('user bubbles render allowlisted markdown links as anchors and keep other absolute URLs literal', () => {
++    const { container } = render(
++      <MessageItem t={t} node={{
++        kind: 'user', seq: 1, time: 1_000,
++        content: [{
++          type: 'text',
++          text: '看 [文档](https://example.com/a) 或 [邮件](mailto:a@b.com)，'
++            + '而 [脚本](javascript:alert(1)) 与 [传输](ftp://x/f) 保持原样',
++        }] as never,
++        source: null,
++      }}
++      />,
++    )
++    const doc = screen.getByRole('link', { name: '文档' })
++    expect(doc.getAttribute('href')).toBe('https://example.com/a')
++    expect(doc.getAttribute('target')).toBe('_blank')
++    expect(doc.getAttribute('rel')).toBe('noopener noreferrer')
++    const mail = screen.getByRole('link', { name: '邮件' })
++    expect(mail.getAttribute('href')).toBe('mailto:a@b.com')
++    expect(mail.getAttribute('target')).toBeNull()
++    // Rejected absolute URLs render neither anchor nor file button.
++    expect(screen.queryByRole('link', { name: '脚本' })).toBeNull()
++    expect(screen.queryByRole('button', { name: '脚本' })).toBeNull()
++    expect(screen.queryByRole('link', { name: '传输' })).toBeNull()
++    expect(screen.queryByRole('button', { name: '传输' })).toBeNull()
++    expect(container.textContent).toContain('[脚本](javascript:alert(1))')
++    expect(container.textContent).toContain('[传输](ftp://x/f)')
++  })
++
++  it('user bubbles open relative markdown-link destinations as files through the view opener', () => {
++    const openFile = vi.fn()
++    render(
++      <MessageItem t={t} openFile={openFile} node={{
++        kind: 'user', seq: 1, time: 1_000,
++        content: [{ type: 'text', text: '参考 [Makefile](Makefile) 与 [入口](./src/index.ts) 即可' }] as never,
++        source: null,
++      }}
++      />,
++    )
++    expect(screen.queryByRole('link', { name: 'Makefile' })).toBeNull()
++    fireEvent.click(screen.getByRole('button', { name: 'Makefile' }))
++    expect(openFile).toHaveBeenCalledWith('Makefile')
++    fireEvent.click(screen.getByRole('button', { name: '入口' }))
++    expect(openFile).toHaveBeenCalledWith('./src/index.ts')
++    expect(openFile).toHaveBeenCalledTimes(2)
++  })
++
++  it('user bubbles flow links and reference chips inline with the surrounding text', () => {
++    const { container } = render(
++      <MessageItem t={t} node={{
++        kind: 'user', seq: 1, time: 1_000,
++        content: [{ type: 'text', text: '用 /plan 对照 [spec](https://example.com) 收尾' }] as never,
++        source: null,
++      }}
++      />,
++    )
++    expect(container.querySelector('[data-ref-chip="skill"]')?.textContent).toBe('/plan')
++    expect(screen.getByRole('link', { name: 'spec' }).getAttribute('href')).toBe('https://example.com')
++    // One inline projection run — no per-segment block boxes.
++    expect(container.textContent).toContain('用 /plan 对照 spec 收尾')
++  })
++
+   it('user copy falls back to execCommand when clipboard.writeText is unavailable', () => {
+     Object.defineProperty(navigator, 'clipboard', {
+       configurable: true,
 diff --git a/packages/client/ui-conversation/tsdown.config.ts b/packages/client/ui-conversation/tsdown.config.ts
 index 3a2c2da24d..27b1570b44 100644
 --- a/packages/client/ui-conversation/tsdown.config.ts

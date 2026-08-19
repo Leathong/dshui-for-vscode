@@ -75,6 +75,22 @@ const CHECKS = [
     markers: ['dshuiOrigin: cwd', 'ctx.get(\'connection\') as ConnectionHandle'],
   },
   {
+    file: 'packages/client/ui-conversation/src/client/chat/MessageItem.tsx',
+    markers: ['function userLinkDestination', "kind: 'file'", 'projectUserText(text, openFile)'],
+  },
+  {
+    file: 'packages/client/ui-conversation/src/client/chat/ChatView.tsx',
+    markers: ['loadImage={loadImage} openFile={openFile}'],
+  },
+  {
+    file: 'packages/client/ui-conversation/src/client/chat/MessageItem.module.css',
+    markers: ['.projectedText {', '.link {'],
+  },
+  {
+    file: 'packages/client/ui-conversation/tests/chat-branch-tails.client.spec.tsx',
+    markers: ['user bubbles open relative markdown-link destinations as files'],
+  },
+  {
     file: 'packages/client/ui-conversation/tsdown.config.ts',
     markers: ["clientBundle('dshui-client-ui-conversation'"],
   },

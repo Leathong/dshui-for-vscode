@@ -3,7 +3,7 @@
 > English · [中文](README.md)
 
 `dshui-client-bundles.patch` contains the dshui modifications to the client source of
-[deepseek-harness](https://github.com/deepseek-ai/deepseek-harness) (16 files across two packages):
+[deepseek-harness](https://github.com/deepseek-ai/deepseek-harness) (20 files across two packages):
 
 - `ui-workspace`: `tree.ts` (`scopedWorkspacePath`, the scope params on the derives, and the
   locally-deleted-session hide set), `WorkspaceBrowser.tsx` (the `SCOPE` constant,
@@ -17,15 +17,21 @@
   nested-workspace file opens in the window where it was clicked), `ConversationRoot.tsx` (the
   `SCOPE` constant, the static chip, hero hiding, `data-dshui-scope`), `EmptyHero.tsx` (the
   `staticChip` prop of `WorkspaceChip`), `ConversationRoot.module.css` (scoped hero pinned to the
-  bottom), `HeroShell.module.css` (`.workspaceStatic`), and `tsdown.config.ts` (bundle id →
+  bottom), `HeroShell.module.css` (`.workspaceStatic`), `chat/MessageItem.tsx` (the `[label](destination)`
+  markdown-link projection in user/steering bubbles: allowlisted http/https/mailto URLs render as
+  external anchors, destinations `new URL` cannot parse render as file-open buttons through `openFile`
+  resolved against the session cwd, any other absolute URL stays literal; decorated runs flow inline),
+  `chat/ChatView.tsx` (passes `openFile` to `PendingSteeringBubble`), `chat/MessageItem.module.css`
+  (the `.projectedText` inline projection and `.link` link styles), and `tsdown.config.ts` (bundle id →
   `dshui-client-ui-conversation`).
 
 Effect: the sidebar lists only the current workspace's sessions, the input box stays pinned to the
-bottom (no centered hero), and the session menu reads "Delete Session" (the extension host deletes
+bottom (no centered hero), the session menu reads "Delete Session" (the extension host deletes
 the session log files under `$DSH_HOME/sessions/...` via the VS Code file API, bypassing dsh's
-archive RPC). At runtime the **prebuilt artifacts** at `../dshui-plugins/*/client.js` are used; this
-patch exists to reproduce those artifacts from source. The patch also includes tests for the changes
-above (three specs under `tests/`).
+archive RPC), and markdown links in user messages are clickable (external URLs open in the system
+browser, relative paths open the file in the current window). At runtime the **prebuilt artifacts**
+at `../dshui-plugins/*/client.js` are used; this patch exists to reproduce those artifacts from
+source. The patch also includes tests for the changes above (four specs under `tests/`).
 
 ## Applying (the base commit is pinned)
 

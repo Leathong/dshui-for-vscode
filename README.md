@@ -45,7 +45,7 @@ agentic coding 框架，主张「一切皆插件」）的 Web UI 嵌入 VS Code 
 
 ## 特性
 
-与原版浏览器 UI 相比，本扩展主要有四处差异：
+与原版浏览器 UI 相比，本扩展主要有五处差异：
 
 1. **无需选择工作区**。打开的文件夹即工作区：扩展以其为工作目录启动 `dsh web` 服务器并注册为
    持久化 Workspace，视图打开即有一个可用会话。
@@ -54,6 +54,8 @@ agentic coding 框架，主张「一切皆插件」）的 Web UI 嵌入 VS Code 
 3. **输入框常驻底部**。移除居中的「新会话」hero，composer 在任意状态下都固定在底部。
 4. **会话菜单为「删除」而非「归档」**。删除操作由扩展宿主经 VS Code 文件 API 直接移除
    `~/.dsh/sessions/...` 下的会话日志（不经 dsh 的归档 RPC，dsh 自身行为不变）。
+5. **用户消息中的 markdown 链接可点击**。`[label](url)` 形式的 http/https/mailto 链接在系统浏览器
+   打开；相对路径（如 `[Makefile](Makefile)`）按会话 cwd 解析并在当前窗口打开对应文件。
 
 此外，dsh Web UI 的其余能力完整保留：会话聊天、工具卡片、goal、subagent、设置、模型选择、后台
 任务、反馈等。扩展还提供若干 VS Code 深度集成：
@@ -378,7 +380,7 @@ code --extensionDevelopmentPath="$PWD" <文件夹>
 扩展把两处 dsh 版本绑定在一起，升级时需要一起对齐：
 
 1. **CLI 运行时**：`package.json` 的 `dependencies["@deepseek-ai/dsh"]`（当前 `0.1.0-rc.7`）。
-2. **客户端 bundle 的源码**：`.dsh-src` 检出（当前对应 rc.7 发布（`dsh-v0.1.0-rc.7`）加两个 dshui
+2. **客户端 bundle 的源码**：`.dsh-src` 检出（当前对应 rc.7 发布（`dsh-v0.1.0-rc.7`）加三个 dshui
    提交；由于仓库 master 可能落后于 npm 发布，对齐方式是查看各包 `package.json` 的版本号，
    并以实际运行测试为准）。
 
