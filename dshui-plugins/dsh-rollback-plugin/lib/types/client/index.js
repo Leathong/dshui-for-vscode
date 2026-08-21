@@ -90,6 +90,7 @@ export async function apply(ctx) {
     // Capture the mounted namespace service; it only exists after $mount settled.
     const rollback = ctx.get('remote.rollback');
     const rollbackFace = (sessionId) => ({
+        sessionId,
         prepare: target => target.messageId !== undefined
             ? rollback.prepare(sessionId, target.messageId)
             : rollback.prepareTurn(sessionId, target.turn ?? 0),

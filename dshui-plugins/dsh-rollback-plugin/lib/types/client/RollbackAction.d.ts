@@ -1,5 +1,6 @@
 import type { ReactElement } from 'react';
 import type { TurnTailOwnerProps } from '@deepseek-ai/dsh-client-ui-conversation/client';
+import type { SessionId } from '@deepseek-ai/dsh-client-runtime/client';
 import type { OpenAtResult, RollbackExecuteRequest, RollbackExecuteResult, RollbackPrepareResult } from '../shared/types.ts';
 import type { RollbackLocaleKey } from './locales.ts';
 /** Rollback anchor: a finalized assistant message or a turn number. */
@@ -17,6 +18,7 @@ type RemoteLike<T> = {
     };
 };
 export interface RollbackActionInjected {
+    sessionId: SessionId;
     prepare: (target: RollbackTarget) => Promise<RemoteLike<RollbackPrepareResult>>;
     execute: (target: RollbackTarget, request: Omit<RollbackExecuteRequest, 'sessionId' | 'messageId' | 'turn'>) => Promise<RemoteLike<RollbackExecuteResult>>;
     openAt: (path: string, line?: number) => Promise<RemoteLike<OpenAtResult>>;
@@ -24,6 +26,7 @@ export interface RollbackActionInjected {
 }
 export interface RollbackActionProps {
     target: RollbackTarget;
+    sessionId: RollbackActionInjected['sessionId'];
     prepare: RollbackActionInjected['prepare'];
     execute: RollbackActionInjected['execute'];
     openAt: RollbackActionInjected['openAt'];
@@ -34,6 +37,7 @@ export declare function RollbackAction(props: RollbackActionProps): ReactElement
 /** Assistant-message entry: the owner supplies the closing messageId. */
 export declare function MessageRollbackAction(props: {
     messageId: string;
+    sessionId: RollbackActionInjected['sessionId'];
     prepare: RollbackActionInjected['prepare'];
     execute: RollbackActionInjected['execute'];
     openAt: RollbackActionInjected['openAt'];
@@ -51,6 +55,7 @@ export declare function TurnRollbackAction(props: {
     matched: {
         turn: number;
     };
+    sessionId: RollbackActionInjected['sessionId'];
     prepare: RollbackActionInjected['prepare'];
     execute: RollbackActionInjected['execute'];
     openAt: RollbackActionInjected['openAt'];

@@ -780,7 +780,7 @@ window.__ModuleLoader__.load({
 			return value.ok;
 		}
 		function RollbackAction(props) {
-			const { target, prepare, execute, openAt, forkAt, t } = props;
+			const { target, sessionId, prepare, execute, openAt, forkAt, t } = props;
 			const [open, setOpen] = (0, react.useState)(false);
 			const [loading, setLoading] = (0, react.useState)(false);
 			const [data, setData] = (0, react.useState)(null);
@@ -877,6 +877,25 @@ window.__ModuleLoader__.load({
 				else next.add(id);
 				setModificationIds(next);
 			};
+			const openFile = (change) => {
+				const firstHunk = change.hunks?.[0] ?? change.toolCalls?.[0]?.hunks?.[0];
+				openAt(change.path, firstHunk?.firstChangedNewLine ?? firstHunk?.newLine).then(() => void 0);
+			};
+			const openReview = (change) => {
+				if (data === null) return;
+				const payload = {
+					type: "dshui:reviewModifications",
+					sessionId,
+					listId: data.prepareId,
+					path: change.path,
+					change
+				};
+				if (typeof window !== "undefined" && window.parent !== window) {
+					window.parent.postMessage(payload, "*");
+					return;
+				}
+				openFile(change);
+			};
 			const fileRows = (0, react.useMemo)(() => {
 				const changes = data?.changes ?? [];
 				const mods = data?.modifications ?? [];
@@ -886,8 +905,11 @@ window.__ModuleLoader__.load({
 					onToggle: () => {
 						togglePath(change.path);
 					},
-					onOpen: (line) => {
-						openAt(change.path, line).then(() => void 0);
+					onOpenReview: () => {
+						openReview(change);
+					},
+					onOpenFile: () => {
+						openFile(change);
 					},
 					t,
 					modifications: mods.filter((item) => item.path === change.path),
@@ -1072,7 +1094,7 @@ window.__ModuleLoader__.load({
 			});
 		}
 		function FileRow(props) {
-			const { change, selected, onToggle, onOpen, t, modifications, selectedModifications, onToggleModification, modificationScope } = props;
+			const { change, selected, onToggle, onOpenReview, onOpenFile, t, modifications, selectedModifications, onToggleModification, modificationScope } = props;
 			return (0, react_jsx_runtime.jsxs)("div", {
 				style: {
 					margin: "6px 0",
@@ -1080,95 +1102,99 @@ window.__ModuleLoader__.load({
 					border: "1px solid rgba(128,128,128,.25)",
 					borderRadius: 8
 				},
-				children: [
-					(0, react_jsx_runtime.jsxs)("div", {
-						style: {
-							display: "flex",
-							alignItems: "center",
-							gap: 8
-						},
-						children: [
-							change.restorable ? (0, react_jsx_runtime.jsx)("input", {
-								type: "checkbox",
-								checked: selected,
-								onChange: onToggle
-							}) : null,
-							(0, react_jsx_runtime.jsx)("button", {
+				children: [(0, react_jsx_runtime.jsxs)("div", {
+					style: {
+						display: "flex",
+						alignItems: "center",
+						gap: 8
+					},
+					children: [
+						change.restorable ? (0, react_jsx_runtime.jsx)("input", {
+							type: "checkbox",
+							checked: selected,
+							onChange: onToggle
+						}) : null,
+						(0, react_jsx_runtime.jsx)("button", {
+							type: "button",
+							style: {
+								textDecoration: "underline",
+								background: "none",
+								border: 0,
+								padding: 0,
+								cursor: "pointer"
+							},
+							onClick: onOpenReview,
+							title: t("openInEditor"),
+							children: change.path
+						}),
+						(0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Tooltip, {
+							label: t("openAt"),
+							side: "bottom",
+							children: (0, react_jsx_runtime.jsx)("button", {
 								type: "button",
 								style: {
-									textDecoration: "underline",
 									background: "none",
 									border: 0,
 									padding: 0,
-									cursor: "pointer"
+									cursor: "pointer",
+									display: "inline-flex",
+									alignItems: "center"
 								},
-								onClick: () => {
-									onOpen(change.hunks?.[0]?.firstChangedNewLine ?? change.hunks?.[0]?.newLine);
-								},
-								children: change.path
+								onClick: onOpenFile,
+								"aria-label": t("openAt"),
+								children: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconRightUpOutline16, { size: 8 })
+							})
+						}),
+						(0, react_jsx_runtime.jsx)("span", {
+							style: { opacity: .75 },
+							children: t(`status.${change.status}`)
+						}),
+						change.createdAfterSnapshot === true ? (0, react_jsx_runtime.jsx)("span", { children: t("status.created") }) : null
+					]
+				}), modificationScope && modifications.length > 0 ? (0, react_jsx_runtime.jsx)("div", {
+					style: { marginLeft: 20 },
+					children: modifications.map((item) => (0, react_jsx_runtime.jsxs)("div", {
+						style: {
+							display: "flex",
+							gap: 8,
+							alignItems: "center"
+						},
+						children: [
+							(0, react_jsx_runtime.jsx)("input", {
+								type: "checkbox",
+								checked: selectedModifications.has(item.modificationId),
+								onChange: () => {
+									onToggleModification(item.modificationId);
+								}
 							}),
+							(0, react_jsx_runtime.jsxs)("span", { children: [
+								item.toolName,
+								" #",
+								item.modificationId
+							] }),
 							(0, react_jsx_runtime.jsx)("span", {
 								style: { opacity: .75 },
-								children: t(`status.${change.status}`)
+								children: item.restorable === "merge" ? t("merge") : item.restorable === "file-only" ? t("fileOnly") : t("unsupported")
 							}),
-							change.createdAfterSnapshot === true ? (0, react_jsx_runtime.jsx)("span", { children: t("status.created") }) : null
+							item.laterModificationIds !== void 0 && item.laterModificationIds.length > 0 ? (0, react_jsx_runtime.jsx)("span", {
+								style: { color: "#b8860b" },
+								children: t("conflictRisk")
+							}) : null,
+							item.reason !== void 0 ? (0, react_jsx_runtime.jsx)("span", {
+								style: { opacity: .7 },
+								children: item.reason
+							}) : null
 						]
-					}),
-					modificationScope && modifications.length > 0 ? (0, react_jsx_runtime.jsx)("div", {
-						style: { marginLeft: 20 },
-						children: modifications.map((item) => (0, react_jsx_runtime.jsxs)("div", {
-							style: {
-								display: "flex",
-								gap: 8,
-								alignItems: "center"
-							},
-							children: [
-								(0, react_jsx_runtime.jsx)("input", {
-									type: "checkbox",
-									checked: selectedModifications.has(item.modificationId),
-									onChange: () => {
-										onToggleModification(item.modificationId);
-									}
-								}),
-								(0, react_jsx_runtime.jsxs)("span", { children: [
-									item.toolName,
-									" #",
-									item.modificationId
-								] }),
-								(0, react_jsx_runtime.jsx)("span", {
-									style: { opacity: .75 },
-									children: item.restorable === "merge" ? t("merge") : item.restorable === "file-only" ? t("fileOnly") : t("unsupported")
-								}),
-								item.laterModificationIds !== void 0 && item.laterModificationIds.length > 0 ? (0, react_jsx_runtime.jsx)("span", {
-									style: { color: "#b8860b" },
-									children: t("conflictRisk")
-								}) : null,
-								item.reason !== void 0 ? (0, react_jsx_runtime.jsx)("span", {
-									style: { opacity: .7 },
-									children: item.reason
-								}) : null
-							]
-						}, item.modificationId))
-					}) : null,
-					change.hunks !== void 0 && change.hunks.length > 0 ? (0, react_jsx_runtime.jsx)("pre", {
-						style: {
-							margin: "6px 0 0",
-							fontSize: 11,
-							maxHeight: 160,
-							overflow: "auto",
-							background: "rgba(0,0,0,.04)",
-							padding: 6
-						},
-						children: change.hunks.map((hunk, index) => `${hunk.oldText ?? ""}\n${hunk.newText}`).join(`\n---\n`)
-					}) : null
-				]
+					}, item.modificationId))
+				}) : null]
 			});
 		}
 		/** Assistant-message entry: the owner supplies the closing messageId. */
 		function MessageRollbackAction(props) {
-			const { messageId, prepare, execute, openAt, forkAt, t } = props;
+			const { messageId, sessionId, prepare, execute, openAt, forkAt, t } = props;
 			return (0, react_jsx_runtime.jsx)(RollbackAction, {
 				target: { messageId },
+				sessionId,
 				prepare,
 				execute,
 				openAt,
@@ -1183,9 +1209,10 @@ window.__ModuleLoader__.load({
 		* wrapper just anchors the core action to the turn.
 		*/
 		function TurnRollbackAction(props) {
-			const { matched, prepare, execute, openAt, forkAt, t } = props;
+			const { matched, sessionId, prepare, execute, openAt, forkAt, t } = props;
 			return (0, react_jsx_runtime.jsx)(RollbackAction, {
 				target: { turn: matched.turn },
+				sessionId,
 				prepare,
 				execute,
 				openAt,
@@ -1222,6 +1249,7 @@ window.__ModuleLoader__.load({
 			}), "rollback dictionaries");
 			const rollback = ctx.get("remote.rollback");
 			const rollbackFace = (sessionId) => ({
+				sessionId,
 				prepare: (target) => target.messageId !== void 0 ? rollback.prepare(sessionId, target.messageId) : rollback.prepareTurn(sessionId, target.turn ?? 0),
 				execute: (target, request) => rollback.execute({
 					sessionId,
