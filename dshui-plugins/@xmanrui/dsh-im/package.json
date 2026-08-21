@@ -51,6 +51,7 @@
     }
   },
   "scripts": {
+    "prepare": "npm run build",
     "build": "node plugin-src/client/build.mjs && node plugin-src/host/build.mjs",
     "test": "node --test test/*.test.mjs test/channels/*/*.test.mjs",
     "check": "npm test && npm run build && node scripts/verify-package.mjs"
