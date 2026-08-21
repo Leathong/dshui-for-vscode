@@ -174,6 +174,9 @@ export class DshServer {
       '--profile', 'web',
       '--patch', this.options.patchPath,
       '--port', String(requestedPort),
+      // dsh rc.1+ opens the default browser after the web tree settles; the
+      // embedded server must never hand off to the OS browser.
+      '--no-open',
     ]
     const child = spawn(process.execPath, args, {
       cwd: this.options.cwd,
