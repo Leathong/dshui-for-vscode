@@ -1,5 +1,30 @@
+diff --git a/packages/client/tsdown.client.ts b/packages/client/tsdown.client.ts
+index 44aab8cf1b..9738736023 100644
+--- a/packages/client/tsdown.client.ts
++++ b/packages/client/tsdown.client.ts
+@@ -366,6 +366,20 @@ function workspaceManifest(id: string): WorkspaceManifest {
+     manifestCache.set(id, manifest)
+     return manifest
+   }
++  // dshui overlay: dshui bundle ids name the profile rows (dshui-client-*),
++  // not the workspace package. The row name derives from the package
++  // directory, so locate the manifest by that directory.
++  if (id.startsWith('dshui-client-')) {
++    const dir = `packages/client/${id.slice('dshui-client-'.length)}`
++    const manifestPath = `${dir}/package.json`
++    if (existsSync(resolvePath(REPOSITORY_ROOT, manifestPath))) {
++      const manifest = JSON.parse(
++        readFileSync(resolvePath(REPOSITORY_ROOT, manifestPath), 'utf8'),
++      ) as WorkspaceManifest
++      manifestCache.set(id, manifest)
++      return manifest
++    }
++  }
+   throw new Error(`tsdown: no packages/*/*/package.json declares the name ${id}`)
+ }
+ 
 diff --git a/packages/client/ui-conversation/src/client/apply.ts b/packages/client/ui-conversation/src/client/apply.ts
-index f57caea9e5..5798683fa5 100644
+index 7920104d68..b793875a67 100644
 --- a/packages/client/ui-conversation/src/client/apply.ts
 +++ b/packages/client/ui-conversation/src/client/apply.ts
 @@ -4,6 +4,10 @@ import { resolveSlotLabel, type BoundActions } from '@deepseek-ai/dsh-client-ui-
@@ -13,11 +38,11 @@ index f57caea9e5..5798683fa5 100644
  // Type-only: the ctx.settingsScope Context merge. Cross-plugin collaboration
  // goes through the service, never a value import (client bundle purity gate).
  import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
-@@ -394,7 +398,23 @@ export function apply(ctx: Context): void {
+@@ -399,7 +403,25 @@ export function apply(ctx: Context): void {
          fileMentions: owner => ctx.get('chatFileMentions')?.forClosing(owner),
          openFile: (path) => {
            const cwd = sessions.list.getSnapshot().byId[sessionId]?.cwd
--          void workspaces.openPath(resolveWorkspacePath(cwd, path)).catch(() => {
+-          return workspaces.openPath(resolveWorkspacePath(cwd, path))
 +          const resolved = resolveWorkspacePath(cwd, path)
 +          // dshui: attach the click origin (the session's project directory —
 +          // this window's workspace) so a file that also belongs to a nested
@@ -28,36 +53,37 @@ index f57caea9e5..5798683fa5 100644
 +            // The dshui server patch keeps this extra field in the payload;
 +            // the shared client schema predates it, hence the widened type.
 +            const payload: { path: string; dshuiOrigin?: string } = { path: resolved, dshuiOrigin: cwd }
-+            void (ctx.get('connection') as ConnectionHandle).api.host.openPath(payload).catch(() => {
++            return (ctx.get('connection') as ConnectionHandle).api.host.openPath(payload).then(() => undefined).catch(() => {
 +              // Host/OS open failures stay silent in the chat row; the native
 +              // app surfaces its own error dialog when the path is unusable.
 +            })
-+            return
 +          }
-+          void workspaces.openPath(resolved).catch(() => {
-             // Host/OS open failures stay silent in the chat row; the native
-             // app surfaces its own error dialog when the path is unusable.
-           })
++          return workspaces.openPath(resolved).catch(() => {
++            // Host/OS open failures stay silent in the chat row; the native
++            // app surfaces its own error dialog when the path is unusable.
++          })
+         },
+         loadOlder: () => { void scoped.loadOlder() },
+         loadImage: attachment => conversation.resolveImage(sessionId, attachment),
 diff --git a/packages/client/ui-conversation/src/client/chat/ChatView.tsx b/packages/client/ui-conversation/src/client/chat/ChatView.tsx
-index 58e63b312f..a75a1c3275 100644
+index 80f9bc2d73..7e41bd8886 100644
 --- a/packages/client/ui-conversation/src/client/chat/ChatView.tsx
 +++ b/packages/client/ui-conversation/src/client/chat/ChatView.tsx
-@@ -402,7 +402,7 @@ export function ChatView({
-               wait, tool execution, streaming) so it never flickers per step. */}
-           {running && <TurnStatus startTime={runningTurnStart} t={t} />}
-           {pendingSteering.map(item => (
--            <PendingSteeringBubble key={item.id} content={item.content} loadImage={loadImage} t={t} />
-+            <PendingSteeringBubble key={item.id} content={item.content} loadImage={loadImage} openFile={openFile} t={t} />
+@@ -456,6 +456,7 @@ export function ChatView({
+               key={item.id}
+               content={item.content}
+               renderMessageImages={renderMessageImages}
++              openFile={openFile}
+               t={t}
+             />
            ))}
-         </div>
-         {!atBottom && (
 diff --git a/packages/client/ui-conversation/src/client/chat/MessageItem.module.css b/packages/client/ui-conversation/src/client/chat/MessageItem.module.css
-index 36824d228d..83ca9fa92d 100644
+index 54e5f6f98d..ba23fc40a7 100644
 --- a/packages/client/ui-conversation/src/client/chat/MessageItem.module.css
 +++ b/packages/client/ui-conversation/src/client/chat/MessageItem.module.css
-@@ -282,3 +282,30 @@
-   white-space: nowrap;
-   vertical-align: baseline;
+@@ -289,3 +289,30 @@
+ .refIcon {
+   flex: none;
  }
 +
 +/* Decorated projection (text runs + chips + links) flows inline in one
@@ -87,10 +113,10 @@ index 36824d228d..83ca9fa92d 100644
 +  text-decoration: underline;
 +}
 diff --git a/packages/client/ui-conversation/src/client/chat/MessageItem.tsx b/packages/client/ui-conversation/src/client/chat/MessageItem.tsx
-index 00b5110d68..8df9765c1b 100644
+index 8a882a70c5..d4ba5f1905 100644
 --- a/packages/client/ui-conversation/src/client/chat/MessageItem.tsx
 +++ b/packages/client/ui-conversation/src/client/chat/MessageItem.tsx
-@@ -146,23 +146,85 @@ function TurnMaxTokensItem({ t }: {
+@@ -145,16 +145,56 @@ function TurnMaxTokensItem({ t }: {
  }
  
  /**
@@ -138,55 +164,127 @@ index 00b5110d68..8df9765c1b 100644
 + * URL keeps the literal syntax. A decorated run flows inline in one pre-wrap
 + * span — block MessageText boxes would stack every segment on its own line.
   */
--function projectUserText(text: string): ReactNode {
--  const re = /(^|\s)([/@][\w-]+)(?=\s|$)/g
-+function projectUserText(text: string, openFile: (path: string) => void): ReactNode {
-+  const re = /\[([^\][\n]+)\]\(([^)\s]+)\)|(^|\s)([/@][\w-]+)(?=\s|$)/g
-   const parts: ReactNode[] = []
-   let cursor = 0
+-function projectUserText(text: string, sessionLabels: readonly string[]): ReactNode {
+-  const ranges: { start: number; end: number; label: string; kind: 'session' | 'plain' }[] = []
++function projectUserText(text: string, sessionLabels: readonly string[], openFile: (path: string) => void): ReactNode {
++  const ranges: {
++    start: number
++    end: number
++    label: string
++    kind: 'session' | 'plain' | 'link'
++    destination?: UserLinkDestination
++  }[] = []
++  // Session-mention labels pinned by the adjacent recall node: the same scan
++  // as the composer, longest label first so pins win overlap.
+   for (const rawLabel of [...new Set(sessionLabels)].sort((a, b) => b.length - a.length)) {
+     const label = `@${rawLabel}`
+     let start = text.indexOf(label)
+@@ -163,6 +203,25 @@ function projectUserText(text: string, sessionLabels: readonly string[]): ReactN
+       start = text.indexOf(label, start + label.length)
+     }
+   }
++  // Markdown links: allowlisted absolute URLs as anchors, relative file paths
++  // as buttons through the same opener the tool rows use; any other absolute
++  // URL keeps the literal syntax.
++  const linkRe = /\[([^\][\n]+)\]\(([^)\s]+)\)/g
++  let linkMatch: RegExpExecArray | null
++  while ((linkMatch = linkRe.exec(text)) !== null) {
++    const destination = userLinkDestination(linkMatch[2] ?? '')
++    if (destination === null) continue
++    ranges.push({
++      start: linkMatch.index,
++      end: linkMatch.index + linkMatch[0].length,
++      label: linkMatch[1] ?? '',
++      kind: 'link',
++      destination,
++    })
++  }
++  // Plain-text /name / @name tokens (shape alone decorates; sent tokens were
++  // validated at compose time). Tokens inside a link's brackets or
++  // destination never match: the (^|\s) anchor needs a leading boundary.
+   const re = /(^|\s)(\/[\w-]+|@"[^"\n]+"|@[^\s]+)/gu
    let m: RegExpExecArray | null
    while ((m = re.exec(text)) !== null) {
--    const tokenStart = m.index + (m[1]?.length ?? 0)
--    const label = m[2] ?? ''
+@@ -181,43 +240,72 @@ function projectUserText(text: string, sessionLabels: readonly string[]): ReactN
+   for (const range of ranges) {
+     if (range.start < cursor) continue
+     const { start: tokenStart, end, label, kind } = range
 -    if (tokenStart > cursor) parts.push(<MessageText key={cursor} text={text.slice(cursor, tokenStart)} />)
-+    if (m[1] !== undefined) {
-+      const destination = userLinkDestination(m[2] ?? '')
-+      if (destination === null) continue
-+      if (m.index > cursor) parts.push(<span key={cursor}>{text.slice(cursor, m.index)}</span>)
+-    const referenceKind = kind === 'session'
+-      ? 'session'
+-      : label.startsWith('@')
+-        ? label.endsWith('/') ? 'folder' : 'file'
+-        : undefined
+-    const displayLabel = referenceKind === undefined
+-      ? label
+-      : referenceKind === 'session'
+-        ? label.slice(1)
+-        : label.slice(1).replace(/^"|"$/gu, '').split(/[\\/]/u).filter(Boolean).at(-1) ?? label.slice(1)
+-    parts.push(
+-      <span
+-        key={tokenStart}
+-        className={css.refChip}
+-        data-ref-chip={referenceKind ?? 'skill'}
+-        title={label}
+-      >
+-        {referenceKind !== undefined && (
+-          <ReferenceIcon kind={referenceKind} size={16} className={css.refIcon} />
+-        )}
+-        {displayLabel}
+-      </span>,
+-    )
++    if (tokenStart > cursor) parts.push(<span key={cursor}>{text.slice(cursor, tokenStart)}</span>)
++    if (kind === 'link' && range.destination !== undefined) {
++      const destination = range.destination
 +      parts.push(
 +        destination.kind === 'external'
 +          ? (
 +            <a
-+              key={m.index}
++              key={tokenStart}
 +              className={css.link}
 +              href={destination.href}
 +              {...(destination.newTab ? { target: '_blank', rel: 'noopener noreferrer' } : {})}
 +            >
-+              {m[1]}
++              {label}
 +            </a>
 +          )
 +          : (
 +            <button
-+              key={m.index}
++              key={tokenStart}
 +              type="button"
 +              className={css.link}
 +              onClick={() => { openFile(destination.path) }}
 +            >
-+              {m[1]}
++              {label}
 +            </button>
 +          ),
 +      )
-+      cursor = m.index + m[0].length
-+      continue
++    } else {
++      const referenceKind = kind === 'session'
++        ? 'session'
++        : label.startsWith('@')
++          ? label.endsWith('/') ? 'folder' : 'file'
++          : undefined
++      const displayLabel = referenceKind === undefined
++        ? label
++        : referenceKind === 'session'
++          ? label.slice(1)
++          : label.slice(1).replace(/^"|"$/gu, '').split(/[\\\/]/u).filter(Boolean).at(-1) ?? label.slice(1)
++      parts.push(
++        <span
++          key={tokenStart}
++          className={css.refChip}
++          data-ref-chip={referenceKind ?? 'skill'}
++          title={label}
++        >
++          {referenceKind !== undefined && (
++            <ReferenceIcon kind={referenceKind} size={16} className={css.refIcon} />
++          )}
++          {displayLabel}
++        </span>,
++      )
 +    }
-+    const tokenStart = m.index + (m[3]?.length ?? 0)
-+    const label = m[4] ?? ''
-+    if (tokenStart > cursor) parts.push(<span key={cursor}>{text.slice(cursor, tokenStart)}</span>)
-     parts.push(
-       <span key={tokenStart} className={css.refChip} data-ref-chip={label.startsWith('@') ? 'subagent' : 'skill'}>
-         {label}
-@@ -171,16 +233,18 @@ function projectUserText(text: string): ReactNode {
-     cursor = tokenStart + label.length
+     cursor = end
    }
    if (parts.length === 0) return <MessageText text={text} />
 -  if (cursor < text.length) parts.push(<MessageText key={cursor} text={text.slice(cursor)} />)
@@ -197,26 +295,26 @@ index 00b5110d68..8df9765c1b 100644
  
  /** Right-aligned bubble shared by user and steering rows. */
  function UserStyleBubble({
--  content, imageLoader, actions, pending = false, t,
-+  content, imageLoader, openFile, actions, pending = false, t,
+-  content, renderMessageImages, actions, pending = false, referenceLabels = [], t,
++  content, renderMessageImages, openFile, actions, pending = false, referenceLabels = [], t,
  }: {
    content: readonly unknown[]
-   imageLoader: ImageLoader
+   renderMessageImages: ChatNodeOwnerProps['renderMessageImages']
 +  /** Open a markdown-link file path (resolved against the session cwd by the view). */
 +  openFile: (path: string) => void
    /** Optional IconActions (or similar) below the bubble; receives the joined text. */
    actions?: (text: string) => ReactNode
    /** Whether this is the Host-authoritative pre-admission steering projection. */
-@@ -195,7 +259,7 @@ function UserStyleBubble({
+@@ -234,7 +322,7 @@ function UserStyleBubble({
        <div className={css.userStack}>
-         <ImageGallery images={images} load={imageLoader} align="end" labels={messageImageLabels(t)} />
+         {renderMessageImages({ images, align: 'end' })}
          {showBubble && <div className={css.bubble}>
--          {projectUserText(text)}
-+          {projectUserText(text, openFile)}
+-          {projectUserText(text, referenceLabels)}
++          {projectUserText(text, referenceLabels, openFile)}
            {rest.map((block, i) => <JsonBlock key={i} label={t('message.extraBlock')} payload={block} truncatedLabel={truncated} />)}
          </div>}
-       </div>
-@@ -207,12 +271,15 @@ function UserStyleBubble({
+         {referenceLabels.length > 0 && (
+@@ -251,18 +339,22 @@ function UserStyleBubble({
  /**
   * Render one Host-authoritative pending steering item with the same visual
   * language as its eventual durable transcript node.
@@ -225,44 +323,43 @@ index 00b5110d68..8df9765c1b 100644
 + * conversation translator.
   * @returns the pending steering bubble.
   */
--export function PendingSteeringBubble({ content, loadImage, t }: {
-+export function PendingSteeringBubble({ content, loadImage, openFile, t }: {
+-export function PendingSteeringBubble({ content, renderMessageImages, t }: {
++export function PendingSteeringBubble({ content, renderMessageImages, openFile, t }: {
    content: readonly unknown[]
-   loadImage?: ImageLoader
+   renderMessageImages: ChatNodeOwnerProps['renderMessageImages']
 +  /** Open a markdown-link file path (resolved against the session cwd by the view). */
 +  openFile: (path: string) => void
    t: ChatViewSlotProps['t']
  }): ReactNode {
-   const imageLoader = loadImage ?? (() => Promise.reject(new Error(t('image.serviceUnavailable'))))
-@@ -220,6 +287,7 @@ export function PendingSteeringBubble({ content, loadImage, t }: {
+   return (
      <UserStyleBubble
        content={content}
-       imageLoader={imageLoader}
+       renderMessageImages={renderMessageImages}
 +      openFile={openFile}
        pending
        t={t}
        actions={text => (
-@@ -236,13 +304,14 @@ export function PendingSteeringBubble({ content, loadImage, t }: {
+@@ -279,13 +371,14 @@ export function PendingSteeringBubble({ content, renderMessageImages, t }: {
  
  /** User and admitted-steering keyed Chat renderer. */
  export const UserMessageNodeView = memo(function UserMessageNodeView({
--  node, loadImage, t,
-+  node, loadImage, openFile, t,
+-  node, renderMessageImages, t,
++  node, renderMessageImages, openFile, t,
  }: ChatNodeViewProps<'user' | 'steering'>) {
    const data = node.data
    return (
      <UserStyleBubble
        content={data.content}
-       imageLoader={loadImage}
+       renderMessageImages={renderMessageImages}
 +      openFile={openFile}
+       {...data.referenceLabels === undefined ? {} : { referenceLabels: data.referenceLabels }}
        t={t}
        actions={text => (
-         <MessageIconActions
 diff --git a/packages/client/ui-conversation/src/client/skeleton/ConversationRoot.module.css b/packages/client/ui-conversation/src/client/skeleton/ConversationRoot.module.css
-index 6146d42810..ebdac94c44 100644
+index 265a0bd802..92b9b280ba 100644
 --- a/packages/client/ui-conversation/src/client/skeleton/ConversationRoot.module.css
 +++ b/packages/client/ui-conversation/src/client/skeleton/ConversationRoot.module.css
-@@ -358,6 +358,13 @@
+@@ -363,6 +363,13 @@
    overflow-y: auto;
  }
  
@@ -277,7 +374,7 @@ index 6146d42810..ebdac94c44 100644
     mounted but invisible so no wrong layout flashes before the phase lands. */
  .root[data-phase='settling'] .composerSeat {
 diff --git a/packages/client/ui-conversation/src/client/skeleton/ConversationRoot.tsx b/packages/client/ui-conversation/src/client/skeleton/ConversationRoot.tsx
-index ef1221cd99..5150221057 100644
+index 07655d7dba..9e772d9c9d 100644
 --- a/packages/client/ui-conversation/src/client/skeleton/ConversationRoot.tsx
 +++ b/packages/client/ui-conversation/src/client/skeleton/ConversationRoot.tsx
 @@ -9,6 +9,21 @@ import type { ConversationSlotProps, InputZone } from '../contract/slots.ts'
@@ -382,9 +479,9 @@ index ef1221cd99..5150221057 100644
    const composerBar = (
      <div className={clsx(css.composerStack, hero && css.composerHero)}>
 -      {hero && <HeroGlow className={css.heroGlow} />}
--      {hero && <HeroShell t={t} />}
+-      {hero && <HeroShell t={t} renderSlot={renderSlot} />}
 +      {hero && SCOPE === '' && <HeroGlow className={css.heroGlow} />}
-+      {hero && SCOPE === '' && <HeroShell t={t} />}
++      {hero && SCOPE === '' && <HeroShell t={t} renderSlot={renderSlot} />}
        {hero && heroWorkspaceRow}
        {zone !== undefined && renderSlot('conversation.input.dock', zone)}
        {inputBar}
@@ -398,7 +495,7 @@ index ef1221cd99..5150221057 100644
        <div className={css.scrollBody} data-conversation-scroll="">
          {renderSlot('conversation.session', {})}
 diff --git a/packages/client/ui-conversation/src/client/skeleton/EmptyHero.tsx b/packages/client/ui-conversation/src/client/skeleton/EmptyHero.tsx
-index 4865ceecfa..1a78ce6e0d 100644
+index 9db09e3141..b7b1b46eed 100644
 --- a/packages/client/ui-conversation/src/client/skeleton/EmptyHero.tsx
 +++ b/packages/client/ui-conversation/src/client/skeleton/EmptyHero.tsx
 @@ -32,19 +32,32 @@ export function workspaceLabel(cwd: string): string {
@@ -474,33 +571,102 @@ index 91dfb4a8a3..c6142ec8e7 100644
  .workspace:not(:disabled):hover,
  .workspace[aria-expanded='true'] {
    background: var(--dsw-alias-interactive-bg-hover);
+diff --git a/packages/client/ui-conversation/tests/apply-inject.client.spec.tsx b/packages/client/ui-conversation/tests/apply-inject.client.spec.tsx
+index 1f61399fda..c360561c0d 100644
+--- a/packages/client/ui-conversation/tests/apply-inject.client.spec.tsx
++++ b/packages/client/ui-conversation/tests/apply-inject.client.spec.tsx
+@@ -47,7 +47,15 @@ function sessionFakeFor() {
+ 
+ async function bench() {
+   const runtime = await SlotTestRuntime.create()
+-  runtime.provide('connection', { api: { settings: {} }, isLoopback: false })
++  runtime.provide('connection', {
++    api: {
++      settings: {},
++      // The dshui openFile attaches the click origin and opens through the
++      // host; the fixture's host.openPath records the payload per test.
++      host: { openPath: vi.fn(() => Promise.resolve({ ok: true, value: { opened: true } })) },
++    },
++    isLoopback: false,
++  })
+   // The plugin injects both; these specs exercise no settings path.
+   runtime.provide('remote', { $on: () => () => {} })
+   runtime.provide('settingsScope', { bind: () => stubSettingsScope().scope } as never)
+@@ -233,21 +241,42 @@ describe('conversation slot inject API', () => {
+     await b.runtime.dispose()
+   })
+ 
+-  it('openFile (chat view face) resolves against session cwd and calls workspaces.openPath', async () => {
++  it('openFile (chat view face) resolves against session cwd and opens through the host with the click origin', async () => {
+     const b = await bench()
++    const connection = b.runtime.ctx.get('connection') as {
++      api: { host: { openPath: ReturnType<typeof vi.fn> } }
++    }
+     const { injected } = b.chatViewApi(ROOT)
+     await injected.openFile('src/a.ts')
+     await vi.waitFor(() => {
+-      expect(b.runtime.workspaces.calls).toContainEqual({ method: 'openPath', args: ['/proj/src/a.ts'] })
++      expect(connection.api.host.openPath).toHaveBeenCalledWith({ path: '/proj/src/a.ts', dshuiOrigin: '/proj' })
+     })
+     await b.runtime.dispose()
+   })
+ 
+-  it('openFile rejects when the Host cannot open the path', async () => {
++  it('openFile falls back to workspaces.openPath when the session has no cwd', async () => {
+     const b = await bench()
+-    b.runtime.workspaces.stub('openPath', () => Promise.reject(new Error('xdg-open is not available')))
++    await b.runtime.sessions.add({
++      id: 'no-cwd',
++      summary: { title: 'N', displayTitle: 'N' },
++      session: sessionFakeFor(),
++    })
++    const { injected } = b.chatViewApi('no-cwd' as SessionId)
++    await injected.openFile('src/a.ts')
++    await vi.waitFor(() => {
++      expect(b.runtime.workspaces.calls).toContainEqual({ method: 'openPath', args: ['src/a.ts'] })
++    })
++    await b.runtime.dispose()
++  })
++
++  it('openFile stays silent when the Host cannot open the path', async () => {
++    const b = await bench()
++    const connection = b.runtime.ctx.get('connection') as {
++      api: { host: { openPath: ReturnType<typeof vi.fn> } }
++    }
++    connection.api.host.openPath.mockRejectedValue(new Error('xdg-open is not available'))
+     const { injected } = b.chatViewApi(ROOT)
+-    await expect(injected.openFile('src/a.ts')).rejects.toThrow('xdg-open is not available')
++    await expect(injected.openFile('src/a.ts')).resolves.toBeUndefined()
+     await b.runtime.dispose()
+   })
+ 
 diff --git a/packages/client/ui-conversation/tests/chat-branch-tails.client.spec.tsx b/packages/client/ui-conversation/tests/chat-branch-tails.client.spec.tsx
-index 67a213a98e..fd9f83d4d1 100644
+index ce8c10016d..0b2f1de082 100644
 --- a/packages/client/ui-conversation/tests/chat-branch-tails.client.spec.tsx
 +++ b/packages/client/ui-conversation/tests/chat-branch-tails.client.spec.tsx
-@@ -47,10 +47,11 @@ const RETRY_ID = 'retry-fixture' as Extract<ConversationNode, { kind: 'model-ret
- interface MessageItemProps {
+@@ -49,10 +49,11 @@ interface MessageItemProps {
    readonly node: ConversationNode
    readonly t: ChatNodeViewProps['t']
+   readonly referenceLabels?: readonly string[]
 +  readonly openFile?: (path: string) => void
  }
  
  /** Legacy-node fixture adapter for the independently registered renderers. */
--function MessageItem({ node, t: translate }: MessageItemProps) {
-+function MessageItem({ node, t: translate, openFile }: MessageItemProps) {
+-function MessageItem({ node, t: translate, referenceLabels }: MessageItemProps) {
++function MessageItem({ node, t: translate, referenceLabels, openFile }: MessageItemProps) {
    const kind = node.kind === 'assistant' ? 'assistant-step' : node.kind
    const viewNode: ChatConversationViewNode = {
      key: `fixture:${node.kind}:${node.seq}`,
-@@ -62,7 +63,7 @@ function MessageItem({ node, t: translate }: MessageItemProps) {
-     visibility: 'visible',
-     data: node.kind === 'model-retry' ? { attempts: [node], current: node } : node,
+@@ -68,7 +69,7 @@ function MessageItem({ node, t: translate, referenceLabels }: MessageItemProps)
+         ? { ...node, referenceLabels }
+         : node,
    }
--  const props = { node: viewNode, t: translate } as ChatNodeViewProps
-+  const props = { node: viewNode, t: translate, openFile: openFile ?? (() => {}) } as ChatNodeViewProps
+-  const props = { node: viewNode, t: translate, renderMessageImages } as ChatNodeViewProps
++  const props = { node: viewNode, t: translate, renderMessageImages, openFile: openFile ?? (() => {}) } as ChatNodeViewProps
    switch (node.kind) {
      case 'user':
      case 'steering':
-@@ -106,6 +107,68 @@ describe('MessageItem arms', () => {
+@@ -167,6 +168,68 @@ describe('MessageItem arms', () => {
      expect(writeText).toHaveBeenCalledWith('hello bubble')
    })
  
@@ -579,7 +745,7 @@ index 3a2c2da24d..27b1570b44 100644
 -export default clientBundle('@deepseek-ai/dsh-client-ui-conversation', ['lib/types/index.js', 'lib/types/invariant.js'])
 +export default clientBundle('dshui-client-ui-conversation', ['lib/types/index.js', 'lib/types/invariant.js'])
 diff --git a/packages/client/ui-workspace/src/client/WorkspaceBrowser.tsx b/packages/client/ui-workspace/src/client/WorkspaceBrowser.tsx
-index d0f6835472..4d52371bea 100644
+index 08f22ed400..d0875e04db 100644
 --- a/packages/client/ui-workspace/src/client/WorkspaceBrowser.tsx
 +++ b/packages/client/ui-workspace/src/client/WorkspaceBrowser.tsx
 @@ -20,7 +20,7 @@ import type {
@@ -601,7 +767,7 @@ index d0f6835472..4d52371bea 100644
  /** Keep controlled input and RPC payload inside the session.search wire contract. */
  function sanitizeSearchQuery(value: string): string {
    const withoutNul = value.replaceAll('\0', '')
-@@ -233,22 +236,24 @@ type SessionTreeProps = Pick<
+@@ -235,22 +238,24 @@ type SessionTreeProps = Pick<
    setSessionOrder: (accountKey: string, order: string[]) => void
    /** Registry-global archive set (hidden rows). */
    archivedSessionIds: readonly SessionNode['id'][]
@@ -629,8 +795,8 @@ index d0f6835472..4d52371bea 100644
 +  onRenameRequest, onDeleteRequest, onSessionRename, onSessionDelete,
    insertWorkspaceBefore, insertSessionBefore, orderBy,
    groupExpansion, setGroupExpanded,
-   sessionOrderByAccount, sessionUpdatedAtByAccount, syncSessionOrderAccount, setSessionOrder, t,
-@@ -278,7 +283,10 @@ function SessionTree({
+   sessionOrderByAccount, sessionUpdatedAtByAccount, syncSessionOrderAccount, setSessionOrder, home, t,
+@@ -280,7 +285,10 @@ function SessionTree({
    )
    const ungroupedSessionIds = useMemo(() => {
      const accounted = new Set(workspaces.flatMap(workspace => workspace.sessionIds))
@@ -642,7 +808,7 @@ index d0f6835472..4d52371bea 100644
    }, [list, workspaces])
    useEffect(() => {
      if (list.phase !== 'ready') return
-@@ -324,8 +332,8 @@ function SessionTree({
+@@ -326,8 +334,8 @@ function SessionTree({
        ...(sessionOrderByAccount[UNGROUPED_KEY] === undefined
          ? {}
          : { ungroupedOrder: sessionOrderByAccount[UNGROUPED_KEY] }),
@@ -653,7 +819,7 @@ index d0f6835472..4d52371bea 100644
    )
    const now = Date.now()
    const commitSessionDrag = (activeDrag: DragState, over: NonNullable<DragState['over']>): void => {
-@@ -515,7 +523,7 @@ function SessionTree({
+@@ -518,7 +526,7 @@ function SessionTree({
                      onOpen={open}
                      onRename={onSessionRename}
                      onFork={forkSession}
@@ -662,7 +828,7 @@ index d0f6835472..4d52371bea 100644
                      drag={dragProps}
                      t={t}
                    />
-@@ -544,7 +552,7 @@ function SessionTree({
+@@ -547,7 +555,7 @@ function SessionTree({
  
  /** The flat "In one list" body: every session is one draggable top-level row. */
  function FlatList({
@@ -671,7 +837,7 @@ index d0f6835472..4d52371bea 100644
    orderBy, sessionOrderByAccount, sessionUpdatedAtByAccount, syncSessionOrderAccount, setSessionOrder, t,
  }: Pick<
    SessionTreeProps,
-@@ -552,8 +560,9 @@ function FlatList({
+@@ -555,8 +563,9 @@ function FlatList({
    | 'open'
    | 'forkSession'
    | 'onSessionRename'
@@ -682,7 +848,7 @@ index d0f6835472..4d52371bea 100644
    | 'orderBy'
    | 'sessionOrderByAccount'
    | 'sessionUpdatedAtByAccount'
-@@ -563,8 +572,8 @@ function FlatList({
+@@ -566,8 +575,8 @@ function FlatList({
  >) {
    const list = useSessions(s => s)
    const baseRows = useMemo(
@@ -693,7 +859,7 @@ index d0f6835472..4d52371bea 100644
    )
    const sessionIds = useMemo(() => baseRows.map(row => row.id), [baseRows])
    const previousOrderBy = useRef(orderBy)
-@@ -631,7 +640,7 @@ function FlatList({
+@@ -634,7 +643,7 @@ function FlatList({
                onOpen={open}
                onRename={onSessionRename}
                onFork={forkSession}
@@ -702,7 +868,7 @@ index d0f6835472..4d52371bea 100644
                flat
                drag={{
                  start: () => {
-@@ -675,6 +684,7 @@ function SearchResults({
+@@ -678,6 +687,7 @@ function SearchResults({
    open,
    workspaces,
    archivedSessionIds,
@@ -710,7 +876,7 @@ index d0f6835472..4d52371bea 100644
    query,
    remote,
    resultLimit,
-@@ -682,6 +692,7 @@ function SearchResults({
+@@ -685,6 +695,7 @@ function SearchResults({
  }: Pick<SessionTreeProps, 'useSessions' | 'open' | 't'> & {
    workspaces: readonly WorkspaceView[]
    archivedSessionIds: readonly SessionNode['id'][]
@@ -718,7 +884,7 @@ index d0f6835472..4d52371bea 100644
    query: string
    remote: RemoteSearchState
    resultLimit: number
-@@ -691,8 +702,8 @@ function SearchResults({
+@@ -694,8 +705,8 @@ function SearchResults({
      ? remote
      : { query, status: 'loading' as const, items: [], hasMore: false }
    const results = useMemo(
@@ -729,7 +895,7 @@ index d0f6835472..4d52371bea 100644
    )
    const pending = currentRemote.status === 'loading'
    const failed = currentRemote.status === 'error'
-@@ -752,7 +763,7 @@ export function WorkspaceBrowser({
+@@ -755,7 +766,7 @@ export function WorkspaceBrowser({
    renameWorkspace,
    deleteWorkspace,
    insertWorkspaceBefore,
@@ -738,10 +904,10 @@ index d0f6835472..4d52371bea 100644
    insertSessionBefore,
    createWorkspace,
    searchSessions,
-@@ -761,7 +772,12 @@ export function WorkspaceBrowser({
-   renderSlot,
+@@ -766,7 +777,12 @@ export function WorkspaceBrowser({
    t,
  }: WorkspaceBrowserProps) {
+   const home = useHostDescription(description => description?.home)
 -  const workspaces = useWorkspaces(state => state.items)
 +  const allWorkspaces = useWorkspaces(state => state.items)
 +  // dshui scope: only the current Workspace's Sessions are listed; the
@@ -752,8 +918,8 @@ index d0f6835472..4d52371bea 100644
    const workspacePhase = useWorkspaces(state => state.phase)
    const archivedSessionIds = useWorkspaces(state => state.archivedSessionIds)
    // Live occupancy of this surface's directory-flow hole (the same source the
-@@ -774,12 +790,15 @@ export function WorkspaceBrowser({
-   const sessionUpdatedAtByAccount = useStore(s => s.sessionUpdatedAtByAccount)
+@@ -804,12 +820,15 @@ export function WorkspaceBrowser({
+   }, [actions.setSessionOrder, currentBlankAccount, currentBlankSessionId, sessionOrderByAccount])
    useEffect(() => {
      if (workspacePhase !== 'ready') return
 +    // Retain against the FULL workspace set: the dshui scope is a viewing
@@ -770,7 +936,7 @@ index d0f6835472..4d52371bea 100644
    // The query outlives the tree and the input (both wide-only) so collapsing
    // does not silently drop an in-progress filter.
    const [query, setQuery] = useState('')
-@@ -927,13 +946,16 @@ export function WorkspaceBrowser({
+@@ -962,13 +981,16 @@ export function WorkspaceBrowser({
      setSessionRenameError(null)
    }
  
@@ -794,7 +960,7 @@ index d0f6835472..4d52371bea 100644
      })
    }
  
-@@ -974,116 +996,122 @@ export function WorkspaceBrowser({
+@@ -1009,116 +1031,122 @@ export function WorkspaceBrowser({
  
    return (
      <div className={clsx(css.root, !wide && css.rail)}>
@@ -1018,7 +1184,7 @@ index d0f6835472..4d52371bea 100644
  
        {/* The collapsed rail keeps search as its own 36px control. */}
        {!wide && <div className={css.search}>
-@@ -1113,6 +1141,7 @@ export function WorkspaceBrowser({
+@@ -1148,6 +1176,7 @@ export function WorkspaceBrowser({
                open={open}
                workspaces={workspaces}
                archivedSessionIds={archivedSessionIds}
@@ -1026,7 +1192,7 @@ index d0f6835472..4d52371bea 100644
                query={normalizedQuery}
                remote={remoteSearch}
                resultLimit={searchResultLimit}
-@@ -1123,8 +1152,9 @@ export function WorkspaceBrowser({
+@@ -1158,8 +1187,9 @@ export function WorkspaceBrowser({
              ? (
                <FlatList
                  useSessions={useSessions} open={open} forkSession={forkSession}
@@ -1037,7 +1203,7 @@ index d0f6835472..4d52371bea 100644
                  orderBy={orderBy}
                  sessionOrderByAccount={sessionOrderByAccount}
                  sessionUpdatedAtByAccount={sessionUpdatedAtByAccount}
-@@ -1137,7 +1167,7 @@ export function WorkspaceBrowser({
+@@ -1172,7 +1202,7 @@ export function WorkspaceBrowser({
                <SessionTree
                  useSessions={useSessions}
                  onSessionRename={onSessionRename}
@@ -1046,7 +1212,7 @@ index d0f6835472..4d52371bea 100644
                  forkSession={forkSession}
                  workspaces={workspaces}
                  groupExpansion={groupExpansion}
-@@ -1147,6 +1177,7 @@ export function WorkspaceBrowser({
+@@ -1182,6 +1212,7 @@ export function WorkspaceBrowser({
                  syncSessionOrderAccount={actions.syncSessionOrderAccount}
                  setSessionOrder={actions.setSessionOrder}
                  archivedSessionIds={archivedSessionIds}
@@ -1055,10 +1221,10 @@ index d0f6835472..4d52371bea 100644
                  open={open}
                  insertWorkspaceBefore={insertWorkspaceBefore}
 diff --git a/packages/client/ui-workspace/src/client/contract/slots.ts b/packages/client/ui-workspace/src/client/contract/slots.ts
-index 8027a3623a..976c5f1ea9 100644
+index bdd85052a0..76529f21b6 100644
 --- a/packages/client/ui-workspace/src/client/contract/slots.ts
 +++ b/packages/client/ui-workspace/src/client/contract/slots.ts
-@@ -122,11 +122,13 @@ export type WorkspaceBrowserInjected = DirectoryPickingInjected & {
+@@ -124,11 +124,13 @@ export type WorkspaceBrowserInjected = {
     */
    insertWorkspaceBefore: (workspaceId: WorkspaceId, beforeWorkspaceId?: WorkspaceId) => Promise<void>
    /**
@@ -1077,18 +1243,18 @@ index 8027a3623a..976c5f1ea9 100644
     * Reorder a session inside its Workspace account (DOM-insertBefore
     * semantics: omitted anchor appends to the end). The view refreshes from
 diff --git a/packages/client/ui-workspace/src/client/index.ts b/packages/client/ui-workspace/src/client/index.ts
-index 6b14243ecf..54cf25d43e 100644
+index 93269c22c1..d46ee75648 100644
 --- a/packages/client/ui-workspace/src/client/index.ts
 +++ b/packages/client/ui-workspace/src/client/index.ts
-@@ -10,6 +10,7 @@
-  */
+@@ -11,6 +11,7 @@
+ import type { ConnectionHandle } from '@deepseek-ai/dsh-client-connection/client'
  import type { HostObservable } from '@deepseek-ai/dsh-client-ui-slots'
  import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
 +import type { SessionId, WorkspaceId } from '@deepseek-ai/dsh-client-runtime/client'
  // Type-only: pulls the locale plugin's Context merge (ctx.locale).
  import type {} from '@deepseek-ai/dsh-client-locale/client'
  import type { WorkspaceBrowserInjected, WorkspacePickerInjected } from './contract/slots.ts'
-@@ -17,6 +18,7 @@ import { createWorkspaceViewStore } from './stores.ts'
+@@ -18,6 +19,7 @@ import { createWorkspaceViewStore } from './stores.ts'
  import { WorkspaceBrowser } from './WorkspaceBrowser.tsx'
  import { WorkspacePicker } from './WorkspacePicker.tsx'
  import { en, zh, type WorkspaceKey } from './locales.ts'
@@ -1096,7 +1262,7 @@ index 6b14243ecf..54cf25d43e 100644
  
  export type {
    DirectoryFlowOwnerProps, DirectoryFlowSlotName, DirectoryPickingHooks, DirectoryPickingInjected,
-@@ -34,6 +36,25 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
+@@ -35,6 +37,25 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
  /** Dictionary namespace owned by this plugin. */
  const NS = 'workspace'
  
@@ -1122,8 +1288,8 @@ index 6b14243ecf..54cf25d43e 100644
  /**
   * Required services (cordis fiber inject). The target slots are declared by
   * the ui-sidebar / ui-conversation applies, whose activation order relative
-@@ -53,6 +74,105 @@ export const inject = ['slots', 'sessions', 'workspaces', 'locale']
- export function apply(ctx: ClientContext): void {
+@@ -56,6 +77,105 @@ export function apply(ctx: ClientContext): void {
+   const hostDescription = connection.hostDescription
    ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'ui-workspace: dictionaries')
  
 +  // ── Scoped new-session routing ────────────────────────────────────────────
@@ -1228,7 +1394,7 @@ index 6b14243ecf..54cf25d43e 100644
    const searchSessions: WorkspaceBrowserInjected['searchSessions'] = async (query, signal) => {
      const result = await ctx.sessions.search(query, signal)
      if (!result.ok) throw new Error(result.error.message)
-@@ -94,7 +214,17 @@ export function apply(ctx: ClientContext): void {
+@@ -97,7 +217,17 @@ export function apply(ctx: ClientContext): void {
      insertWorkspaceBefore: async (workspaceId, beforeWorkspaceId) => {
        await ctx.workspaces.insertBefore(workspaceId, beforeWorkspaceId)
      },
@@ -1270,7 +1436,7 @@ index c08fd931de..2806212bed 100644
    'sessions.count.other': '{n} sessions',
    'actions.workspace.aria': 'Workspace actions for {name}',
 diff --git a/packages/client/ui-workspace/src/client/rows/Rows.tsx b/packages/client/ui-workspace/src/client/rows/Rows.tsx
-index 481e0f0e47..a92ce1a313 100644
+index d2d121fe4d..7240318034 100644
 --- a/packages/client/ui-workspace/src/client/rows/Rows.tsx
 +++ b/packages/client/ui-workspace/src/client/rows/Rows.tsx
 @@ -2,13 +2,13 @@
@@ -1289,7 +1455,7 @@ index 481e0f0e47..a92ce1a313 100644
    IconEllipsisOutline16, IconFolderClose16, IconFolderOpen16, IconPlusOutline16,
    IconTrashOutline16, IconTriangleRightFill14, Menu, StateDot,
  } from '@deepseek-ai/dsh-client-ui-primitives'
-@@ -344,13 +344,13 @@ export function SearchResultItem({ result, currentId, onOpen, t }: {
+@@ -353,13 +353,13 @@ export function SearchResultItem({ result, currentId, onOpen, t }: {
   * @param props.onOpen - open a session by id.
   * @param props.onRename - open the session rename dialog (id + current title).
   * @param props.onFork - fork a session at its last completed turn.
@@ -1305,7 +1471,7 @@ index 481e0f0e47..a92ce1a313 100644
    node: SessionNode
    currentId: string | undefined
    now: number
-@@ -359,8 +359,8 @@ export function SessionNodeItem({ node, currentId, now, onOpen, onRename, onFork
+@@ -368,8 +368,8 @@ export function SessionNodeItem({ node, currentId, now, onOpen, onRename, onFork
    onRename: (id: SessionNode['id'], currentTitle: string) => void
    /** Fork a session at its last completed turn (row menu action). */
    onFork: (id: SessionNode['id']) => void
@@ -1316,7 +1482,7 @@ index 481e0f0e47..a92ce1a313 100644
    /** Present only on draggable rows (workspace-group sessions outside search). */
    drag?: RowDragProps | undefined
    /** The row is rendered without a parent Workspace header. */
-@@ -374,14 +374,13 @@ export function SessionNodeItem({ node, currentId, now, onOpen, onRename, onFork
+@@ -383,14 +383,13 @@ export function SessionNodeItem({ node, currentId, now, onOpen, onRename, onFork
    const primaryStatus = statuses[0]
    const showStatus = primaryStatus.state !== 'done' || row.completed
    const [menuOpen, setMenuOpen] = useState(false)
@@ -1335,7 +1501,7 @@ index 481e0f0e47..a92ce1a313 100644
    ]
    // Figma session cell: pad 8, status slot 16, then a 4px title gap.
    const ownRow = (
-@@ -430,7 +429,7 @@ export function SessionNodeItem({ node, currentId, now, onOpen, onRename, onFork
+@@ -439,7 +438,7 @@ export function SessionNodeItem({ node, currentId, now, onOpen, onRename, onFork
        <span className={css.title}>{title}</span>
        {/* A blank New Session row is a provisional placeholder: nothing has
            happened in it yet, so a "now" timestamp and the row verbs
@@ -1344,7 +1510,7 @@ index 481e0f0e47..a92ce1a313 100644
            exist — both trailing cells stay off until the first prompt. */}
        {!row.blank && <span className={css.time}>{timeLabel(row.updatedAt, now, t)}</span>}
        {!row.blank && (
-@@ -443,7 +442,7 @@ export function SessionNodeItem({ node, currentId, now, onOpen, onRename, onFork
+@@ -452,7 +451,7 @@ export function SessionNodeItem({ node, currentId, now, onOpen, onRename, onFork
                setMenuOpen(false)
                if (id === 'rename') onRename(node.id, row.title)
                if (id === 'fork') onFork(node.id)
@@ -1528,7 +1694,7 @@ index 23649a24f7..4ace13d5a3 100644
  
    return {
 diff --git a/packages/client/ui-workspace/tests/rows.client.spec.tsx b/packages/client/ui-workspace/tests/rows.client.spec.tsx
-index c7a153ff5f..cbbc955a5b 100644
+index f86e275c5e..ba2ae787a0 100644
 --- a/packages/client/ui-workspace/tests/rows.client.spec.tsx
 +++ b/packages/client/ui-workspace/tests/rows.client.spec.tsx
 @@ -63,12 +63,12 @@ describe('workspace browser rows', () => {
@@ -1591,7 +1757,7 @@ index c7a153ff5f..cbbc955a5b 100644
      const row = screen.getByRole('treeitem')
      expect(row.querySelector('[data-state="warning"]')).not.toBeNull()
      expect(row.querySelector('[data-state="ongoing"]')).toBeNull()
-@@ -321,7 +321,7 @@ describe('workspace browser rows', () => {
+@@ -377,7 +377,7 @@ describe('workspace browser rows', () => {
          runningSubagentCount: 0, completed: false, updatedAt: 0,
        }
        render(<SessionNodeItem node={node} currentId={node.id} now={0} onOpen={vi.fn()}
@@ -1600,7 +1766,7 @@ index c7a153ff5f..cbbc955a5b 100644
        // The placeholder has no content yet: no row verbs, no "now" stamp.
        expect(screen.queryByRole('button', { name: /会话.*的操作/ })).toBeNull()
        expect(screen.queryByText('刚刚')).toBeNull()
-@@ -338,21 +338,21 @@ describe('workspace browser rows', () => {
+@@ -394,21 +394,21 @@ describe('workspace browser rows', () => {
      }
    })
  
@@ -1627,7 +1793,7 @@ index c7a153ff5f..cbbc955a5b 100644
      // Rename dispatches with the current display title (dialog prefill).
      fireEvent.click(screen.getByRole('menuitem', { name: '重命名' }))
      expect(screen.queryByRole('menu')).toBeNull()
-@@ -361,10 +361,10 @@ describe('workspace browser rows', () => {
+@@ -417,10 +417,10 @@ describe('workspace browser rows', () => {
      fireEvent.click(screen.getByRole('button', { name: '会话“One”的操作' }))
      fireEvent.click(screen.getByRole('menuitem', { name: '分叉会话' }))
      expect(onFork).toHaveBeenCalledWith(node.id)
@@ -1641,7 +1807,7 @@ index c7a153ff5f..cbbc955a5b 100644
      expect(onRename).toHaveBeenCalledOnce()
      expect(onOpen).not.toHaveBeenCalled()
      // Escape closes without selecting (Menu onClose path).
-@@ -382,7 +382,7 @@ describe('workspace browser rows', () => {
+@@ -438,7 +438,7 @@ describe('workspace browser rows', () => {
          runningSubagentCount: 0, completed: false, updatedAt: 0,
        }
        render(<SessionNodeItem node={node} currentId={undefined} now={60_000} onOpen={vi.fn()}
@@ -1650,7 +1816,7 @@ index c7a153ff5f..cbbc955a5b 100644
        const wrapper = screen.getByRole('treeitem').parentElement as HTMLElement
        fireEvent.pointerEnter(wrapper)
        act(() => { vi.advanceTimersByTime(500) })
-@@ -413,14 +413,14 @@ describe('workspace browser rows', () => {
+@@ -469,14 +469,14 @@ describe('workspace browser rows', () => {
          pendingInteraction, running: true, runningSubagentCount: 0, completed: false, updatedAt: 0,
        }
        const view = render(<SessionNodeItem node={node} currentId={undefined} now={0} onOpen={vi.fn()}
@@ -1667,7 +1833,7 @@ index c7a153ff5f..cbbc955a5b 100644
        expect(screen.getByRole('treeitem').querySelector('[data-state="warning"]')).toBeTruthy()
  
        fireEvent.pointerEnter(screen.getByRole('treeitem').parentElement as HTMLElement)
-@@ -440,7 +440,7 @@ describe('workspace browser rows', () => {
+@@ -496,7 +496,7 @@ describe('workspace browser rows', () => {
          runningSubagentCount: 0, completed: false, updatedAt: 0,
        }
        render(<SessionNodeItem node={node} currentId={undefined} now={0} onOpen={vi.fn()}
@@ -1676,7 +1842,7 @@ index c7a153ff5f..cbbc955a5b 100644
        fireEvent.pointerEnter(screen.getByRole('treeitem').parentElement as HTMLElement)
        act(() => { vi.advanceTimersByTime(500) })
        expect(screen.getByText('空闲')).toBeTruthy()
-@@ -458,7 +458,7 @@ describe('workspace browser rows', () => {
+@@ -514,7 +514,7 @@ describe('workspace browser rows', () => {
          runningSubagentCount: 0, completed: true, updatedAt: 0,
        }
        render(<SessionNodeItem node={node} currentId={undefined} now={0} onOpen={vi.fn()}
@@ -1685,7 +1851,7 @@ index c7a153ff5f..cbbc955a5b 100644
        fireEvent.pointerEnter(screen.getByRole('treeitem').parentElement as HTMLElement)
        act(() => { vi.advanceTimersByTime(500) })
        // Row's visually-hidden reminder label plus the hover card's status line.
-@@ -476,7 +476,7 @@ describe('workspace browser rows', () => {
+@@ -532,7 +532,7 @@ describe('workspace browser rows', () => {
      const inactive = dragProps()
      const { rerender } = render(
        <SessionNodeItem node={node} currentId={undefined} now={0} onOpen={vi.fn()}
@@ -1694,7 +1860,7 @@ index c7a153ff5f..cbbc955a5b 100644
      )
      const row = screen.getByRole('treeitem')
      stubRect(row)
-@@ -494,7 +494,7 @@ describe('workspace browser rows', () => {
+@@ -550,7 +550,7 @@ describe('workspace browser rows', () => {
      const active = dragProps({ active: true, marker: 'before' })
      rerender(
        <SessionNodeItem node={node} currentId={undefined} now={0} onOpen={vi.fn()}
@@ -1703,7 +1869,7 @@ index c7a153ff5f..cbbc955a5b 100644
      )
      stubRect(screen.getByRole('treeitem'))
      // Top half hovers/drops 'before'; bottom half 'after' (row mid = 117).
-@@ -508,7 +508,7 @@ describe('workspace browser rows', () => {
+@@ -564,7 +564,7 @@ describe('workspace browser rows', () => {
      const after = dragProps({ active: true, marker: 'after' })
      rerender(
        <SessionNodeItem node={node} currentId={undefined} now={0} onOpen={vi.fn()}
@@ -1786,7 +1952,7 @@ index f2e069de43..aa368cb94d 100644
  
  describe('deriveSearchResults', () => {
 diff --git a/packages/client/ui-workspace/tests/workspace-browser.client.spec.tsx b/packages/client/ui-workspace/tests/workspace-browser.client.spec.tsx
-index fbe42fc279..bf2c0fe899 100644
+index 820d2bd66b..8140fdaba4 100644
 --- a/packages/client/ui-workspace/tests/workspace-browser.client.spec.tsx
 +++ b/packages/client/ui-workspace/tests/workspace-browser.client.spec.tsx
 @@ -75,7 +75,7 @@ function mount(overrides: Partial<WorkspaceBrowserProps> = {}) {
@@ -1798,7 +1964,7 @@ index fbe42fc279..bf2c0fe899 100644
      insertWorkspaceBefore: vi.fn(async () => {}),
      insertSessionBefore: vi.fn(async () => {}),
      createWorkspace: vi.fn(async () => workspace('created', [])),
-@@ -314,43 +314,46 @@ describe('WorkspaceBrowser', () => {
+@@ -336,43 +336,46 @@ describe('WorkspaceBrowser', () => {
      expect(screen.getAllByRole('treeitem').slice(1)[0]?.textContent).toContain('two')
    })
  

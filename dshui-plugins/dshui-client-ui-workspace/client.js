@@ -370,40 +370,40 @@ window.__ModuleLoader__.load({
 			document.head.appendChild(tag);
 		}
 		var Rows_module_css_default = {
-			"hoverStatus": "JKg95G_hoverStatus",
-			"dropAfter": "JKg95G_dropAfter",
+			"arrow": "JKg95G_arrow",
 			"arrowOpen": "JKg95G_arrowOpen",
 			"chevron": "JKg95G_chevron",
-			"hoverTitle": "JKg95G_hoverTitle",
-			"searchResultTitle": "JKg95G_searchResultTitle",
-			"searchResultSnippet": "JKg95G_searchResultSnippet",
-			"dropBefore": "JKg95G_dropBefore",
-			"hoverContent": "JKg95G_hoverContent",
-			"slot": "JKg95G_slot",
-			"rowActions": "JKg95G_rowActions",
-			"menuOpen": "JKg95G_menuOpen",
-			"projectText": "JKg95G_projectText",
 			"dot": "JKg95G_dot",
-			"searchResultRow": "JKg95G_searchResultRow",
-			"folder": "JKg95G_folder",
-			"projectRow": "JKg95G_projectRow",
-			"renameInput": "JKg95G_renameInput",
-			"iconButton": "JKg95G_iconButton",
-			"searchResultWorkspace": "JKg95G_searchResultWorkspace",
-			"sessionRow": "JKg95G_sessionRow",
-			"meta": "JKg95G_meta",
-			"searchResultHeading": "JKg95G_searchResultHeading",
-			"row-in": "JKg95G_row-in",
-			"time": "JKg95G_time",
-			"selected": "JKg95G_selected",
-			"title": "JKg95G_title",
+			"dropAfter": "JKg95G_dropAfter",
+			"dropBefore": "JKg95G_dropBefore",
 			"flatSessionRowWithoutStatus": "JKg95G_flatSessionRowWithoutStatus",
-			"hoverTime": "JKg95G_hoverTime",
+			"folder": "JKg95G_folder",
 			"folderActive": "JKg95G_folderActive",
-			"visuallyHidden": "JKg95G_visuallyHidden",
-			"arrow": "JKg95G_arrow",
+			"hoverContent": "JKg95G_hoverContent",
+			"hoverPath": "JKg95G_hoverPath",
+			"hoverStatus": "JKg95G_hoverStatus",
+			"hoverTime": "JKg95G_hoverTime",
+			"hoverTitle": "JKg95G_hoverTitle",
+			"iconButton": "JKg95G_iconButton",
+			"menuOpen": "JKg95G_menuOpen",
+			"meta": "JKg95G_meta",
+			"projectRow": "JKg95G_projectRow",
+			"projectText": "JKg95G_projectText",
+			"renameInput": "JKg95G_renameInput",
+			"row-in": "JKg95G_row-in",
+			"rowActions": "JKg95G_rowActions",
+			"searchResultHeading": "JKg95G_searchResultHeading",
 			"searchResultMeta": "JKg95G_searchResultMeta",
-			"hoverPath": "JKg95G_hoverPath"
+			"searchResultRow": "JKg95G_searchResultRow",
+			"searchResultSnippet": "JKg95G_searchResultSnippet",
+			"searchResultTitle": "JKg95G_searchResultTitle",
+			"searchResultWorkspace": "JKg95G_searchResultWorkspace",
+			"selected": "JKg95G_selected",
+			"sessionRow": "JKg95G_sessionRow",
+			"slot": "JKg95G_slot",
+			"time": "JKg95G_time",
+			"title": "JKg95G_title",
+			"visuallyHidden": "JKg95G_visuallyHidden"
 		};
 		//#endregion
 		//#region lib/types/client/rows/Rows.js
@@ -442,7 +442,7 @@ window.__ModuleLoader__.load({
 				d: d.getDate()
 			})} ${pad2(d.getHours())}:${pad2(d.getMinutes())}` });
 		}
-		/** Hover-card body: workspace title, full directory path, absolute creation time. */
+		/** Hover-card body: workspace title, display directory path, absolute creation time. */
 		function WorkspaceHoverContent({ label, cwd, createdAt, t }) {
 			return (0, react_jsx_runtime.jsxs)("div", {
 				className: Rows_module_css_default.hoverContent,
@@ -476,10 +476,11 @@ window.__ModuleLoader__.load({
 		* @param props.onToggle - expand/collapse the group.
 		* @param props.onCreate - start a frontend Session inside this Workspace.
 		* @param props.drag - optional workspace-row drag wiring.
+		* @param props.home - host account home for POSIX hover-path abbreviation.
 		* @param props.t - the browser root's locale seat.
 		* @returns the row element.
 		*/
-		function ProjectRowItem({ group, onToggle, onCreate, actions, drag, t }) {
+		function ProjectRowItem({ group, onToggle, onCreate, actions, drag, home, t }) {
 			const row = group;
 			const label = row.workspaceId === void 0 ? t("group.ungrouped") : row.label;
 			const active = group.expanded && group.containsCurrent;
@@ -567,7 +568,7 @@ window.__ModuleLoader__.load({
 				anchor: ownRow,
 				content: (0, react_jsx_runtime.jsx)(WorkspaceHoverContent, {
 					label: row.label,
-					cwd: row.cwd,
+					cwd: row.cwd === void 0 ? void 0 : (0, _deepseek_ai_dsh_client_runtime_client.abbreviateHomePath)(row.cwd, home),
 					createdAt: row.createdAt,
 					t
 				}),
@@ -1005,42 +1006,42 @@ window.__ModuleLoader__.load({
 			document.head.appendChild(tag);
 		}
 		var WorkspaceBrowser_module_css_default = {
-			"fade": "Cb1vNq_fade",
-			"groupSection": "Cb1vNq_groupSection",
-			"sessionOverflowButton": "Cb1vNq_sessionOverflowButton",
-			"wide-in": "Cb1vNq_wide-in",
-			"sectionLabel": "Cb1vNq_sectionLabel",
-			"searchTree": "Cb1vNq_searchTree",
-			"empty": "Cb1vNq_empty",
-			"searchButton": "Cb1vNq_searchButton",
-			"workspaceDropBefore": "Cb1vNq_workspaceDropBefore",
-			"rail": "Cb1vNq_rail",
-			"search": "Cb1vNq_search",
-			"renameInput": "Cb1vNq_renameInput",
-			"sectionLabelHidden": "Cb1vNq_sectionLabelHidden",
-			"root": "Cb1vNq_root",
-			"searchSlot": "Cb1vNq_searchSlot",
-			"searchStatus": "Cb1vNq_searchStatus",
-			"list": "Cb1vNq_list",
-			"searchWarning": "Cb1vNq_searchWarning",
-			"sectionHeader": "Cb1vNq_sectionHeader",
-			"searchSlotExpanded": "Cb1vNq_searchSlotExpanded",
-			"headerActions": "Cb1vNq_headerActions",
-			"searchExpanded": "Cb1vNq_searchExpanded",
-			"searchInput": "Cb1vNq_searchInput",
-			"deleteAction": "Cb1vNq_deleteAction",
 			"clearButton": "Cb1vNq_clearButton",
-			"listArea": "Cb1vNq_listArea",
+			"deleteAction": "Cb1vNq_deleteAction",
+			"deleteStatus": "Cb1vNq_deleteStatus",
+			"empty": "Cb1vNq_empty",
+			"fade": "Cb1vNq_fade",
+			"flatList": "Cb1vNq_flatList",
+			"groupSection": "Cb1vNq_groupSection",
+			"headerActions": "Cb1vNq_headerActions",
+			"headerActionsHidden": "Cb1vNq_headerActionsHidden",
 			"iconButton": "Cb1vNq_iconButton",
-			"treeBody": "Cb1vNq_treeBody",
-			"workspaceDropAfter": "Cb1vNq_workspaceDropAfter",
+			"list": "Cb1vNq_list",
+			"listArea": "Cb1vNq_listArea",
 			"listTopDropActive": "Cb1vNq_listTopDropActive",
 			"listTopDropIndicator": "Cb1vNq_listTopDropIndicator",
+			"rail": "Cb1vNq_rail",
 			"renameError": "Cb1vNq_renameError",
-			"deleteStatus": "Cb1vNq_deleteStatus",
-			"headerActionsHidden": "Cb1vNq_headerActionsHidden",
-			"flatList": "Cb1vNq_flatList",
-			"wide": "Cb1vNq_wide"
+			"renameInput": "Cb1vNq_renameInput",
+			"root": "Cb1vNq_root",
+			"search": "Cb1vNq_search",
+			"searchButton": "Cb1vNq_searchButton",
+			"searchExpanded": "Cb1vNq_searchExpanded",
+			"searchInput": "Cb1vNq_searchInput",
+			"searchSlot": "Cb1vNq_searchSlot",
+			"searchSlotExpanded": "Cb1vNq_searchSlotExpanded",
+			"searchStatus": "Cb1vNq_searchStatus",
+			"searchTree": "Cb1vNq_searchTree",
+			"searchWarning": "Cb1vNq_searchWarning",
+			"sectionHeader": "Cb1vNq_sectionHeader",
+			"sectionLabel": "Cb1vNq_sectionLabel",
+			"sectionLabelHidden": "Cb1vNq_sectionLabelHidden",
+			"sessionOverflowButton": "Cb1vNq_sessionOverflowButton",
+			"treeBody": "Cb1vNq_treeBody",
+			"wide": "Cb1vNq_wide",
+			"wide-in": "Cb1vNq_wide-in",
+			"workspaceDropAfter": "Cb1vNq_workspaceDropAfter",
+			"workspaceDropBefore": "Cb1vNq_workspaceDropBefore"
 		};
 		//#endregion
 		//#region lib/types/client/WorkspaceBrowser.js
@@ -1228,7 +1229,7 @@ window.__ModuleLoader__.load({
 			return e.clientY < rect.top + rect.height / 2 ? "before" : "after";
 		}
 		/** The scrolling session tree; unmounting drops the sessions subscription and expand-all state. */
-		function SessionTree({ useSessions, startSession, open, forkSession, workspaces, archivedSessionIds, deletedSessionIds, onRenameRequest, onDeleteRequest, onSessionRename, onSessionDelete, insertWorkspaceBefore, insertSessionBefore, orderBy, groupExpansion, setGroupExpanded, sessionOrderByAccount, sessionUpdatedAtByAccount, syncSessionOrderAccount, setSessionOrder, t }) {
+		function SessionTree({ useSessions, startSession, open, forkSession, workspaces, archivedSessionIds, deletedSessionIds, onRenameRequest, onDeleteRequest, onSessionRename, onSessionDelete, insertWorkspaceBefore, insertSessionBefore, orderBy, groupExpansion, setGroupExpanded, sessionOrderByAccount, sessionUpdatedAtByAccount, syncSessionOrderAccount, setSessionOrder, home, t }) {
 			const list = useSessions((s) => s);
 			const current = list.current;
 			const [expandedSessionGroups, setExpandedSessionGroups] = (0, react.useState)([]);
@@ -1412,6 +1413,7 @@ window.__ModuleLoader__.load({
 								children: [
 									(0, react_jsx_runtime.jsx)(ProjectRowItem, {
 										group,
+										home,
 										t,
 										onToggle: () => {
 											if (group.expanded) setExpandedSessionGroups((keys) => keys.filter((key) => key !== group.key));
@@ -1685,7 +1687,8 @@ window.__ModuleLoader__.load({
 		* @param props - composed slot props (shell owner share + store + injected actions).
 		* @returns the region element tree.
 		*/
-		function WorkspaceBrowser({ wide, expandSidebar, useSessions, useWorkspaces, useStore, actions, startSession, open, renameSession, forkSession, renameWorkspace, deleteWorkspace, insertWorkspaceBefore, deleteSession, insertSessionBefore, createWorkspace, searchSessions, searchResultLimit, useDirectoryFlow, renderSlot, t }) {
+		function WorkspaceBrowser({ wide, expandSidebar, useSessions, useWorkspaces, useStore, actions, startSession, open, renameSession, forkSession, renameWorkspace, deleteWorkspace, insertWorkspaceBefore, deleteSession, insertSessionBefore, createWorkspace, searchSessions, searchResultLimit, useDirectoryFlow, useHostDescription, renderSlot, t }) {
+			const home = useHostDescription((description) => description?.home);
 			const allWorkspaces = useWorkspaces((state) => state.items);
 			const workspaces = SCOPE === "" ? allWorkspaces : allWorkspaces.filter((workspace) => workspace.path === SCOPE);
 			const workspacePhase = useWorkspaces((state) => state.phase);
@@ -1696,6 +1699,32 @@ window.__ModuleLoader__.load({
 			const groupExpansion = useStore((s) => s.groupExpansion);
 			const sessionOrderByAccount = useStore((s) => s.sessionOrderByAccount);
 			const sessionUpdatedAtByAccount = useStore((s) => s.sessionUpdatedAtByAccount);
+			const currentBlankSessionId = useSessions((state) => {
+				const current = state.current;
+				return current !== void 0 && state.byId[current]?.blank === true ? current : void 0;
+			});
+			const currentBlankAccount = currentBlankSessionId === void 0 ? void 0 : workspaces.find((workspace) => workspace.sessionIds.includes(currentBlankSessionId))?.workspaceId ?? "";
+			const promotedBlank = (0, react.useRef)(void 0);
+			(0, react.useEffect)(() => {
+				if (currentBlankSessionId === void 0 || currentBlankAccount === void 0) {
+					promotedBlank.current = void 0;
+					return;
+				}
+				if (promotedBlank.current?.sessionId === currentBlankSessionId && promotedBlank.current.accountKey === currentBlankAccount) return;
+				promotedBlank.current = {
+					sessionId: currentBlankSessionId,
+					accountKey: currentBlankAccount
+				};
+				for (const accountKey of new Set([currentBlankAccount, FLAT_SESSION_ORDER_KEY])) {
+					const previous = sessionOrderByAccount[accountKey] ?? [];
+					actions.setSessionOrder(accountKey, [currentBlankSessionId, ...previous.filter((id) => id !== currentBlankSessionId)]);
+				}
+			}, [
+				actions.setSessionOrder,
+				currentBlankAccount,
+				currentBlankSessionId,
+				sessionOrderByAccount
+			]);
 			(0, react.useEffect)(() => {
 				if (workspacePhase !== "ready") return;
 				actions.retainAccountKeys([
@@ -1743,7 +1772,7 @@ window.__ModuleLoader__.load({
 				searchOnExpand
 			]);
 			(0, react.useEffect)(() => {
-				if (!wide || !searchExpanded) return;
+				if (!wide || !searchExpanded || searchOnExpand) return;
 				const onClick = (event) => {
 					if (!(event.target instanceof Node) || searchRoot.current?.contains(event.target) === true) return;
 					searchInput.current?.blur();
@@ -1757,7 +1786,8 @@ window.__ModuleLoader__.load({
 			}, [
 				normalizedQuery,
 				wide,
-				searchExpanded
+				searchExpanded,
+				searchOnExpand
 			]);
 			(0, react.useEffect)(() => {
 				if (normalizedQuery === "") {
@@ -2070,6 +2100,7 @@ window.__ModuleLoader__.load({
 							insertWorkspaceBefore,
 							insertSessionBefore,
 							orderBy,
+							home,
 							t,
 							onRenameRequest: (workspaceId, currentTitle) => {
 								setRenameTarget({
@@ -2385,7 +2416,8 @@ window.__ModuleLoader__.load({
 			"slots",
 			"sessions",
 			"workspaces",
-			"locale"
+			"locale",
+			"connection"
 		];
 		/**
 		* Register the browser and picker once their slot declarations are on the
@@ -2394,6 +2426,7 @@ window.__ModuleLoader__.load({
 		* @param ctx - client root context.
 		*/
 		function apply(ctx) {
+			const hostDescription = ctx.get("connection").hostDescription;
 			ctx.effect(() => ctx.locale.register(NS, {
 				zh,
 				en
@@ -2527,7 +2560,10 @@ window.__ModuleLoader__.load({
 					await ctx.workspaces.insertSessionBefore(workspaceId, sessionId, beforeSessionId);
 				},
 				createWorkspace: (input) => ctx.workspaces.create(input),
-				hooks: { directoryFlow: browserFlowSource }
+				hooks: {
+					directoryFlow: browserFlowSource,
+					hostDescription
+				}
 			});
 			const pickerInjected = () => ({
 				createWorkspace: (input) => ctx.workspaces.create(input),

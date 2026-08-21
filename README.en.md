@@ -453,9 +453,9 @@ workflow below.
 
 The extension binds two dsh versions together, and both must be aligned on upgrade:
 
-1. **CLI runtime:** `dependencies["@deepseek-ai/dsh"]` in `package.json` (currently `0.1.0-rc.7`).
-2. **Client bundle source:** the `.dsh-src` checkout (currently the `dsh-v0.1.0-rc.7` release plus the
-   three dshui commits; since the repo's master may lag behind the npm release, align by checking each
+1. **CLI runtime:** `dependencies["@deepseek-ai/dsh"]` in `package.json` (currently `0.1.1-rc.1`).
+2. **Client bundle source:** the `.dsh-src` checkout (currently the `dsh-v0.1.1-rc.1` release plus the
+   four dshui commits; since the repo's master may lag behind the npm release, align by checking each
    package's version in its `package.json` and confirm with real runtime tests).
 
 Upgrade steps:
@@ -490,6 +490,8 @@ node scripts/verify-patches.mjs      # each file flagged as missing needs its pa
 #    - ui-conversation/.../ConversationRoot.module.css  scoped hero pinned to the bottom
 #    - ui-conversation/.../HeroShell.module.css        .workspaceStatic
 #    - ui-conversation/tsdown.config.ts                bundle id → dshui-client-ui-conversation
+#    - ui-conversation/tests/apply-inject.client.spec.tsx  openFile opens via host + click origin (falls back without cwd; silent host failure)
+#    - packages/client/tsdown.client.ts                workspaceManifest resolves dshui-client-* ids by package directory (rc.1 validates by package name)
 
 # 4. Rebuild and copy in
 pnpm run build:lib:host && pnpm run build:lib:client   # inside .dsh-src

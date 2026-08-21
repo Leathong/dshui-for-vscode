@@ -76,11 +76,11 @@ const CHECKS = [
   },
   {
     file: 'packages/client/ui-conversation/src/client/chat/MessageItem.tsx',
-    markers: ['function userLinkDestination', "kind: 'file'", 'projectUserText(text, openFile)'],
+    markers: ['function userLinkDestination', "kind: 'file'", 'projectUserText(text: string, sessionLabels: readonly string[], openFile', "kind: 'link'"],
   },
   {
     file: 'packages/client/ui-conversation/src/client/chat/ChatView.tsx',
-    markers: ['loadImage={loadImage} openFile={openFile}'],
+    markers: ['renderMessageImages={renderMessageImages}\n              openFile={openFile}'],
   },
   {
     file: 'packages/client/ui-conversation/src/client/chat/MessageItem.module.css',

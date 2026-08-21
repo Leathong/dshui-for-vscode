@@ -3,7 +3,8 @@
 > English · [中文](README.md)
 
 `dshui-client-bundles.patch` contains the dshui modifications to the client source of
-[deepseek-harness](https://github.com/deepseek-ai/deepseek-harness) (20 files across two packages):
+[deepseek-harness](https://github.com/deepseek-ai/deepseek-harness) (22 files across two packages
+plus the shared build preset):
 
 - `ui-workspace`: `tree.ts` (`scopedWorkspacePath`, the scope params on the derives, and the
   locally-deleted-session hide set), `WorkspaceBrowser.tsx` (the `SCOPE` constant,
@@ -22,8 +23,13 @@
   external anchors, destinations `new URL` cannot parse render as file-open buttons through `openFile`
   resolved against the session cwd, any other absolute URL stays literal; decorated runs flow inline),
   `chat/ChatView.tsx` (passes `openFile` to `PendingSteeringBubble`), `chat/MessageItem.module.css`
-  (the `.projectedText` inline projection and `.link` link styles), and `tsdown.config.ts` (bundle id →
-  `dshui-client-ui-conversation`).
+  (the `.projectedText` inline projection and `.link` link styles), `tsdown.config.ts` (bundle id →
+  `dshui-client-ui-conversation`), and `tests/apply-inject.client.spec.tsx` (openFile opens through
+  the host with the click origin when the session has a cwd, falls back to `workspaces.openPath`
+  without one, and stays silent when the host cannot open the path);
+- build preset: `packages/client/tsdown.client.ts` (`workspaceManifest` resolves `dshui-client-*`
+  bundle ids by package directory — since rc.1 tsdown validates the bundle id against package names,
+  while the dshui ids are the profile row names).
 
 Effect: the sidebar lists only the current workspace's sessions, the input box stays pinned to the
 bottom (no centered hero), the session menu reads "Delete Session" (the extension host deletes
@@ -31,20 +37,20 @@ the session log files under `$DSH_HOME/sessions/...` via the VS Code file API, b
 archive RPC), and markdown links in user messages are clickable (external URLs open in the system
 browser, relative paths open the file in the current window). At runtime the **prebuilt artifacts**
 at `../dshui-plugins/*/client.js` are used; this patch exists to reproduce those artifacts from
-source. The patch also includes tests for the changes above (four specs under `tests/`).
+source. The patch also includes tests for the changes above (five specs under `tests/`).
 
 ## Applying (the base commit is pinned)
 
 The patch targets this base commit (**pinned; it must not drift**):
 
 ```
-99f6f02fecdb7dff40c3fbc9470f5907c29f74ca
+528c682e0635dd5843b1f5d15dacb1c0159c56f6b1
 ```
 
 ```sh
 git clone https://github.com/deepseek-ai/deepseek-harness.git .dsh-src
 cd .dsh-src
-git fetch origin 99f6f02fecdb7dff40c3fbc9470f5907c29f74ca && git checkout FETCH_HEAD
+git fetch origin 528c682e0635dd5843b1f5d15dacb1c0159c56f6b1 && git checkout FETCH_HEAD
 git apply ../patches/dshui-client-bundles.patch     # fails safely if the base commit mismatches
 pnpm install                                        # requires pnpm 11.7.0, Node ^22.19 || >=24
 pnpm run build:lib:host
