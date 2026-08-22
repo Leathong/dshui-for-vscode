@@ -32,27 +32,38 @@ const SNIPPET_CHAR_CAP = 20_000
 
 /**
  * The display spelling of a path for the composer: workspace-relative with
- * `/` separators when the file sits inside the workspace, absolute otherwise.
- * Both inputs are canonicalized first (the workspace root already is; the
- * file is resolved defensively so a symlinked file inside the workspace does
- * not render as an external `..` path).
+ * `/` separators when the referenced path sits inside the workspace, absolute
+ * otherwise. The caller's spelling is used first so a symlink inside the
+ * workspace is referenced by its symlink address, not its real target; only
+ * when that spelling lies outside the workspace do we resolve realpath once,
+ * so a file reached through a symlinked workspace root still renders relative.
  * @param filePath - absolute filesystem path of the referenced file.
  * @param workspacePath - absolute workspace root (the dsh cwd).
  * @returns the display path.
  */
 export function relativeDisplayPath(filePath: string, workspacePath: string): string {
-  let real = filePath
+  const rel = path.relative(workspacePath, filePath)
+  if (isWithinWorkspace(rel)) return rel.split(path.sep).join('/')
+  // The path as spelled lies outside the workspace, but the target may still
+  // sit inside when reached through a symlinked workspace root or external
+  // alias. Resolve realpath once and re-check; otherwise keep the caller's
+  // spelling so a symlink address survives.
   try {
-    real = fs.realpathSync(filePath)
+    const real = fs.realpathSync(filePath)
+    const realRel = path.relative(workspacePath, real)
+    if (isWithinWorkspace(realRel)) return realRel.split(path.sep).join('/')
   } catch {
     // Unreadable/vanished file: keep the caller's spelling.
   }
-  const rel = path.relative(workspacePath, real)
-  const inside = rel !== ''
+  return filePath.split(path.sep).join('/')
+}
+
+/** Whether a workspace-relative path stays inside the workspace (never `..`-escaping or absolute). */
+function isWithinWorkspace(rel: string): boolean {
+  return rel !== ''
     && rel !== '..'
     && !rel.startsWith(`..${path.sep}`)
     && !path.isAbsolute(rel)
-  return (inside ? rel : real).split(path.sep).join('/')
 }
 
 /**
