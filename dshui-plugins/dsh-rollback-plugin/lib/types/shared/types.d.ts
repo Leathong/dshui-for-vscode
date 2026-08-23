@@ -118,6 +118,13 @@ export interface RollbackExecuteValue {
     skipped: string[];
     modificationResults?: RollbackModificationResult[];
     forkAnchor?: number;
+    /**
+     * Whole-turn rollback with no prior turn/end (e.g. turn 1): there is no
+     * fork point to branch at, so the client instead opens a fresh blank session
+     * on the restored workspace. `cwd` is the workspace that session attaches to.
+     */
+    restart?: boolean;
+    cwd?: string;
 }
 export type RollbackExecuteResult = RollbackResult<RollbackExecuteValue>;
 export interface OpenAtRequest {

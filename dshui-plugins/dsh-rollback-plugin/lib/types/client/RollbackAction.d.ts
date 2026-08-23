@@ -23,6 +23,7 @@ export interface RollbackActionInjected {
     execute: (target: RollbackTarget, request: Omit<RollbackExecuteRequest, 'sessionId' | 'messageId' | 'turn'>) => Promise<RemoteLike<RollbackExecuteResult>>;
     openAt: (path: string, line?: number) => Promise<RemoteLike<OpenAtResult>>;
     forkAt: (seq: number) => Promise<string>;
+    restart: (cwd: string) => Promise<string>;
 }
 export interface RollbackActionProps {
     target: RollbackTarget;
@@ -31,6 +32,7 @@ export interface RollbackActionProps {
     execute: RollbackActionInjected['execute'];
     openAt: RollbackActionInjected['openAt'];
     forkAt: RollbackActionInjected['forkAt'];
+    restart: RollbackActionInjected['restart'];
     t: (key: RollbackLocaleKey) => string;
 }
 export declare function RollbackAction(props: RollbackActionProps): ReactElement;
@@ -42,6 +44,7 @@ export declare function MessageRollbackAction(props: {
     execute: RollbackActionInjected['execute'];
     openAt: RollbackActionInjected['openAt'];
     forkAt: RollbackActionInjected['forkAt'];
+    restart: RollbackActionInjected['restart'];
     t: (key: RollbackLocaleKey) => string;
 }): ReactElement;
 /**
@@ -60,6 +63,7 @@ export declare function TurnRollbackAction(props: {
     execute: RollbackActionInjected['execute'];
     openAt: RollbackActionInjected['openAt'];
     forkAt: RollbackActionInjected['forkAt'];
+    restart: RollbackActionInjected['restart'];
     t: (key: RollbackLocaleKey) => string;
 }): ReactElement;
 export {};

@@ -6,7 +6,7 @@ function isRemoteOk(value) {
     return value.ok;
 }
 export function RollbackAction(props) {
-    const { target, sessionId, prepare, execute, openAt, forkAt, t } = props;
+    const { target, sessionId, prepare, execute, openAt, forkAt, restart, t } = props;
     const [open, setOpen] = useState(false);
     const [loading, setLoading] = useState(false);
     const [data, setData] = useState(null);
@@ -78,12 +78,22 @@ export function RollbackAction(props) {
         }
         const value = business.value;
         setResult(value);
-        if (scope === 'turn' && value.forkAnchor !== undefined) {
-            try {
-                await forkAt(value.forkAnchor);
+        if (scope === 'turn') {
+            if (value.forkAnchor !== undefined) {
+                try {
+                    await forkAt(value.forkAnchor);
+                }
+                catch (forkError) {
+                    setResultError(`${String(forkError)} (files were restored; guardId ${value.guardId})`);
+                }
             }
-            catch (forkError) {
-                setResultError(`${String(forkError)} (files were restored; guardId ${value.guardId})`);
+            else if (value.restart === true && value.cwd !== undefined) {
+                try {
+                    await restart(value.cwd);
+                }
+                catch (restartError) {
+                    setResultError(`${String(restartError)} (files were restored; guardId ${value.guardId})`);
+                }
             }
         }
     };
@@ -137,8 +147,8 @@ function FileRow(props) {
 }
 /** Assistant-message entry: the owner supplies the closing messageId. */
 export function MessageRollbackAction(props) {
-    const { messageId, sessionId, prepare, execute, openAt, forkAt, t } = props;
-    return _jsx(RollbackAction, { target: { messageId }, sessionId: sessionId, prepare: prepare, execute: execute, openAt: openAt, forkAt: forkAt, t: t });
+    const { messageId, sessionId, prepare, execute, openAt, forkAt, restart, t } = props;
+    return _jsx(RollbackAction, { target: { messageId }, sessionId: sessionId, prepare: prepare, execute: execute, openAt: openAt, forkAt: forkAt, restart: restart, t: t });
 }
 /**
  * Turn-tail entry for turns without a text closing assistant (stopped /
@@ -147,6 +157,6 @@ export function MessageRollbackAction(props) {
  * wrapper just anchors the core action to the turn.
  */
 export function TurnRollbackAction(props) {
-    const { matched, sessionId, prepare, execute, openAt, forkAt, t } = props;
-    return _jsx(RollbackAction, { target: { turn: matched.turn }, sessionId: sessionId, prepare: prepare, execute: execute, openAt: openAt, forkAt: forkAt, t: t });
+    const { matched, sessionId, prepare, execute, openAt, forkAt, restart, t } = props;
+    return _jsx(RollbackAction, { target: { turn: matched.turn }, sessionId: sessionId, prepare: prepare, execute: execute, openAt: openAt, forkAt: forkAt, restart: restart, t: t });
 }

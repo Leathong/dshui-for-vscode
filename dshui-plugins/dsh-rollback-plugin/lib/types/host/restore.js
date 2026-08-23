@@ -267,7 +267,11 @@ export class RollbackRestore {
                     kept,
                     deleted,
                     skipped,
-                    ...(request.scope === 'turn' ? { forkAnchor: prepared.boundary.forkAtSeq } : {}),
+                    ...(request.scope === 'turn'
+                        ? prepared.boundary.forkAtSeq !== undefined
+                            ? { forkAnchor: prepared.boundary.forkAtSeq }
+                            : { restart: true, cwd: prepared.cwd }
+                        : {}),
                 });
             }
             catch (error) {
@@ -475,7 +479,11 @@ export class RollbackRestore {
                 deleted: results.filter(item => item.status === 'restored' && item.detail?.includes('deleted')).map(item => item.path),
                 skipped: [],
                 modificationResults: results,
-                ...(request.scope === 'turn' ? { forkAnchor: prepared.boundary.forkAtSeq } : {}),
+                ...(request.scope === 'turn'
+                    ? prepared.boundary.forkAtSeq !== undefined
+                        ? { forkAnchor: prepared.boundary.forkAtSeq }
+                        : { restart: true, cwd: prepared.cwd }
+                    : {}),
             });
         }
         catch (error) {

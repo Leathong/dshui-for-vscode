@@ -35,7 +35,7 @@ window.__ModuleLoader__.load({
 			"deleteCreated": "删除新建文件",
 			"confirm": "确认回滚",
 			"cancel": "取消",
-			"turn1NoFork": "turn 1 无上一轮结束点，整体回滚不会分支会话。",
+			"turn1NoFork": "turn 1 无上一轮结束点，整体回滚将新建一个空白会话。",
 			"merge": "可合并撤销",
 			"fileOnly": "仅支持整文件恢复",
 			"unsupported": "不支持单修改恢复",
@@ -91,7 +91,7 @@ window.__ModuleLoader__.load({
 			"deleteCreated": "Delete created files",
 			"confirm": "Confirm rollback",
 			"cancel": "Cancel",
-			"turn1NoFork": "Turn 1 has no previous turn end; whole-turn rollback will not fork the session.",
+			"turn1NoFork": "Turn 1 has no previous turn end; whole-turn rollback will open a new blank session.",
 			"merge": "Mergeable undo",
 			"fileOnly": "Whole-file restore only",
 			"unsupported": "Single-modification restore unsupported",
@@ -780,7 +780,7 @@ window.__ModuleLoader__.load({
 			return value.ok;
 		}
 		function RollbackAction(props) {
-			const { target, sessionId, prepare, execute, openAt, forkAt, t } = props;
+			const { target, sessionId, prepare, execute, openAt, forkAt, restart, t } = props;
 			const [open, setOpen] = (0, react.useState)(false);
 			const [loading, setLoading] = (0, react.useState)(false);
 			const [data, setData] = (0, react.useState)(null);
@@ -859,10 +859,17 @@ window.__ModuleLoader__.load({
 				}
 				const value = business.value;
 				setResult(value);
-				if (scope === "turn" && value.forkAnchor !== void 0) try {
-					await forkAt(value.forkAnchor);
-				} catch (forkError) {
-					setResultError(`${String(forkError)} (files were restored; guardId ${value.guardId})`);
+				if (scope === "turn") {
+					if (value.forkAnchor !== void 0) try {
+						await forkAt(value.forkAnchor);
+					} catch (forkError) {
+						setResultError(`${String(forkError)} (files were restored; guardId ${value.guardId})`);
+					}
+					else if (value.restart === true && value.cwd !== void 0) try {
+						await restart(value.cwd);
+					} catch (restartError) {
+						setResultError(`${String(restartError)} (files were restored; guardId ${value.guardId})`);
+					}
 				}
 			};
 			const togglePath = (path) => {
@@ -1191,7 +1198,7 @@ window.__ModuleLoader__.load({
 		}
 		/** Assistant-message entry: the owner supplies the closing messageId. */
 		function MessageRollbackAction(props) {
-			const { messageId, sessionId, prepare, execute, openAt, forkAt, t } = props;
+			const { messageId, sessionId, prepare, execute, openAt, forkAt, restart, t } = props;
 			return (0, react_jsx_runtime.jsx)(RollbackAction, {
 				target: { messageId },
 				sessionId,
@@ -1199,6 +1206,7 @@ window.__ModuleLoader__.load({
 				execute,
 				openAt,
 				forkAt,
+				restart,
 				t
 			});
 		}
@@ -1209,7 +1217,7 @@ window.__ModuleLoader__.load({
 		* wrapper just anchors the core action to the turn.
 		*/
 		function TurnRollbackAction(props) {
-			const { matched, sessionId, prepare, execute, openAt, forkAt, t } = props;
+			const { matched, sessionId, prepare, execute, openAt, forkAt, restart, t } = props;
 			return (0, react_jsx_runtime.jsx)(RollbackAction, {
 				target: { turn: matched.turn },
 				sessionId,
@@ -1217,6 +1225,7 @@ window.__ModuleLoader__.load({
 				execute,
 				openAt,
 				forkAt,
+				restart,
 				t
 			});
 		}
@@ -1263,6 +1272,11 @@ window.__ModuleLoader__.load({
 						atSeq: seq,
 						increaseTitle: true
 					});
+					sessions.open(childId);
+					return childId;
+				},
+				restart: async (cwd) => {
+					const childId = await sessions.create({ cwd });
 					sessions.open(childId);
 					return childId;
 				}

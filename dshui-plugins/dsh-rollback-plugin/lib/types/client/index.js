@@ -105,6 +105,11 @@ export async function apply(ctx) {
             sessions.open(childId);
             return childId;
         },
+        restart: async (cwd) => {
+            const childId = await sessions.create({ cwd });
+            sessions.open(childId);
+            return childId;
+        },
     });
     ctx.slots.inject('conversation.chat.assistant-actions', () => {
         const dispose = ctx.slots.register({

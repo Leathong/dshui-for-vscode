@@ -2111,7 +2111,10 @@ var RollbackRestore = class {
 					kept,
 					deleted,
 					skipped,
-					...request.scope === "turn" ? { forkAnchor: prepared.boundary.forkAtSeq } : {}
+					...request.scope === "turn" ? prepared.boundary.forkAtSeq !== void 0 ? { forkAnchor: prepared.boundary.forkAtSeq } : {
+						restart: true,
+						cwd: prepared.cwd
+					} : {}
 				});
 			} catch (error) {
 				await this.safety.rollbackGuard(this.ctx, provider, this.ledger, guardId, selected.value.all, policy).catch(() => void 0);
@@ -2309,7 +2312,10 @@ var RollbackRestore = class {
 				deleted: results.filter((item) => item.status === "restored" && item.detail?.includes("deleted")).map((item) => item.path),
 				skipped: [],
 				modificationResults: results,
-				...request.scope === "turn" ? { forkAnchor: prepared.boundary.forkAtSeq } : {}
+				...request.scope === "turn" ? prepared.boundary.forkAtSeq !== void 0 ? { forkAnchor: prepared.boundary.forkAtSeq } : {
+					restart: true,
+					cwd: prepared.cwd
+				} : {}
 			});
 		} catch (error) {
 			await this.safety.rollbackGuard(this.ctx, provider, this.ledger, guard.guardId, paths, policy).catch(() => void 0);
