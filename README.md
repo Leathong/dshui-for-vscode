@@ -379,8 +379,8 @@ code --extensionDevelopmentPath="$PWD" <文件夹>
 
 扩展把两处 dsh 版本绑定在一起，升级时需要一起对齐：
 
-1. **CLI 运行时**：`package.json` 的 `dependencies["@deepseek-ai/dsh"]`（当前 `0.1.1-rc.1`）。
-2. **客户端 bundle 的源码**：`.dsh-src` 检出（当前对应 rc.1 发布（`dsh-v0.1.1-rc.1`）加四个 dshui
+1. **CLI 运行时**：`package.json` 的 `dependencies["@deepseek-ai/dsh"]`（当前 `0.1.1-rc.2`）。
+2. **客户端 bundle 的源码**：`.dsh-src` 检出（当前对应 rc.2 发布（`dsh-v0.1.1-rc.2`）加四个 dshui
    提交；由于仓库 master 可能落后于 npm 发布，对齐方式是查看各包 `package.json` 的版本号，
    并以实际运行测试为准）。
 

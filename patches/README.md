@@ -38,13 +38,13 @@
 补丁针对的基提交（**固定，不能漂移**）：
 
 ```
-528c682e0635dd5843b1f5d15dacb1c0159c56f6b1
+b150a551b8d465e31e418e1b2eaf5e79bbb7d28e
 ```
 
 ```sh
 git clone https://github.com/deepseek-ai/deepseek-harness.git .dsh-src
 cd .dsh-src
-git fetch origin 528c682e0635dd5843b1f5d15dacb1c0159c56f6b1 && git checkout FETCH_HEAD
+git fetch origin b150a551b8d465e31e418e1b2eaf5e79bbb7d28e && git checkout FETCH_HEAD
 git apply ../patches/dshui-client-bundles.patch     # 基提交不匹配会安全失败
 pnpm install                                        # 需要 pnpm 11.7.0、Node ^22.19 || >=24
 pnpm run build:lib:host

@@ -453,8 +453,8 @@ workflow below.
 
 The extension binds two dsh versions together, and both must be aligned on upgrade:
 
-1. **CLI runtime:** `dependencies["@deepseek-ai/dsh"]` in `package.json` (currently `0.1.1-rc.1`).
-2. **Client bundle source:** the `.dsh-src` checkout (currently the `dsh-v0.1.1-rc.1` release plus the
+1. **CLI runtime:** `dependencies["@deepseek-ai/dsh"]` in `package.json` (currently `0.1.1-rc.2`).
+2. **Client bundle source:** the `.dsh-src` checkout (currently the `dsh-v0.1.1-rc.2` release plus the
    four dshui commits; since the repo's master may lag behind the npm release, align by checking each
    package's version in its `package.json` and confirm with real runtime tests).
 

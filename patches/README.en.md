@@ -44,13 +44,13 @@ source. The patch also includes tests for the changes above (five specs under `t
 The patch targets this base commit (**pinned; it must not drift**):
 
 ```
-528c682e0635dd5843b1f5d15dacb1c0159c56f6b1
+b150a551b8d465e31e418e1b2eaf5e79bbb7d28e
 ```
 
 ```sh
 git clone https://github.com/deepseek-ai/deepseek-harness.git .dsh-src
 cd .dsh-src
-git fetch origin 528c682e0635dd5843b1f5d15dacb1c0159c56f6b1 && git checkout FETCH_HEAD
+git fetch origin b150a551b8d465e31e418e1b2eaf5e79bbb7d28e && git checkout FETCH_HEAD
 git apply ../patches/dshui-client-bundles.patch     # fails safely if the base commit mismatches
 pnpm install                                        # requires pnpm 11.7.0, Node ^22.19 || >=24
 pnpm run build:lib:host

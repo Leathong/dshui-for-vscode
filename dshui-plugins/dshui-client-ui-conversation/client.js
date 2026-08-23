@@ -3241,8 +3241,8 @@ window.__ModuleLoader__.load({
 		//#region lib/types/client/skeleton/PermissionSelect.js
 		const FULL_ACCESS = "danger-full-access";
 		const shieldOutline = "M8.20554 0.899994L14.7901 3.36857V7.01026C14.7901 12 11.0466 14.2103 8.20554 15.3C5.36446 14.2103 1.62012 12 1.62012 7.01026V3.36857L8.20554 0.899994Z";
-		const permissionGlyphs = new Map([
-			["read-only", (0, react_jsx_runtime.jsxs)("svg", {
+		const permissionGlyphs = {
+			"read-only": (0, react_jsx_runtime.jsxs)("svg", {
 				width: "16",
 				height: "16",
 				viewBox: "0 0 16 16",
@@ -3257,8 +3257,8 @@ window.__ModuleLoader__.load({
 					d: "M12.1654 5.7552L8.9447 9.41475C8.73044 9.65816 8.53628 9.8804 8.35774 10.0423C8.1713 10.2114 7.94235 10.3717 7.64016 10.4254C7.48207 10.4535 7.32 10.4552 7.16151 10.4294C6.85843 10.3801 6.62728 10.2223 6.43836 10.0559C6.25752 9.89653 6.06037 9.67732 5.84264 9.43705L4.72925 8.20897L5.63557 7.38707L6.74897 8.61594C6.98603 8.87755 7.12974 9.03533 7.24673 9.13839C7.31033 9.19443 7.34485 9.21476 7.35823 9.22122C7.38068 9.22484 7.40352 9.22515 7.42593 9.22122C7.40522 9.22502 7.42893 9.23294 7.53583 9.136C7.65132 9.03126 7.79316 8.87139 8.02643 8.60638L11.2479 4.94763L12.1654 5.7552Z",
 					fill: "currentColor"
 				})]
-			})],
-			["workspace-write", (0, react_jsx_runtime.jsxs)("svg", {
+			}),
+			"workspace-write": (0, react_jsx_runtime.jsxs)("svg", {
 				width: "16",
 				height: "16",
 				viewBox: "0 0 16 16",
@@ -3286,8 +3286,8 @@ window.__ModuleLoader__.load({
 						fill: "currentColor"
 					})
 				]
-			})],
-			[FULL_ACCESS, (0, react_jsx_runtime.jsxs)("svg", {
+			}),
+			[FULL_ACCESS]: (0, react_jsx_runtime.jsxs)("svg", {
 				width: "16",
 				height: "16",
 				viewBox: "0 0 16 16",
@@ -3309,33 +3309,25 @@ window.__ModuleLoader__.load({
 						fill: "currentColor"
 					})
 				]
-			})]
-		]);
+			})
+		};
 		/** Glyph for a permission option value; host-configured names outside the design set get none. */
 		function permissionGlyph(value) {
-			return permissionGlyphs.get(value);
+			return permissionGlyphs[value];
 		}
 		/**
-		* Display transform: built-in machine names render as locale product labels;
-		* non-kebab host-configured names pass through.
+		* Display transform: kebab-case machine names render as title-case labels
+		* (`workspace-write` → `Workspace Write`); non-kebab host-configured names
+		* pass through. Full access intentionally overrides the machine-name
+		* transform so both permission surfaces use the product label `Full access`;
+		* the warning body remains locale-aware.
 		*/
 		function displayName(name) {
 			if (!/^[a-z0-9]+(-[a-z0-9]+)*$/.test(name)) return name;
 			return name.split("-").map((word) => word.charAt(0).toUpperCase() + word.slice(1)).join(" ");
 		}
-		const BUILT_IN_PERMISSION_NAMES = new Map([
-			["read-only", "Read Only"],
-			["workspace-write", "Workspace Write"],
-			[FULL_ACCESS, "Full access"]
-		]);
-		function permissionLabel(value, name, t) {
-			const builtInName = BUILT_IN_PERMISSION_NAMES.get(value);
-			if (builtInName !== void 0 && (name === value || name === builtInName)) {
-				if (value === "read-only") return t("access.preset.readOnly");
-				if (value === "workspace-write") return t("access.preset.workspaceWrite");
-				if (value === FULL_ACCESS) return t("access.preset.fullAccess");
-			}
-			return displayName(name);
+		function optionLabel(option) {
+			return option.value === FULL_ACCESS ? "Full access" : displayName(option.name);
 		}
 		function PermissionSelect({ value, locked, command, t }) {
 			const [pick, setPick] = (0, react.useState)(null);
@@ -3351,13 +3343,12 @@ window.__ModuleLoader__.load({
 			if (value === void 0) return null;
 			const currentValue = pick ?? value.currentValue;
 			const current = value.options.find((option) => option.value === currentValue);
-			const currentLabel = current === void 0 ? permissionLabel(currentValue, currentValue, t) : permissionLabel(current.value, current.name, t);
 			const busy = pick !== null || confirmation !== null;
 			const items = value.options.filter((o) => o.value !== "custom").map((option) => {
 				const icon = permissionGlyph(option.value);
 				return {
 					id: option.value,
-					label: permissionLabel(option.value, option.name, t),
+					label: optionLabel(option),
 					...icon === void 0 ? {} : { icon }
 				};
 			});
@@ -3399,7 +3390,7 @@ window.__ModuleLoader__.load({
 				anchor: (0, react_jsx_runtime.jsxs)("button", {
 					type: "button",
 					className: PermissionSelect_module_css_default.trigger,
-					"aria-label": t("input.accessMode", { name: currentLabel }),
+					"aria-label": t("input.accessMode", { name: current === void 0 ? displayName(currentValue) : optionLabel(current) }),
 					title: current?.description,
 					disabled: locked || busy,
 					onClick: () => {
@@ -3413,7 +3404,7 @@ window.__ModuleLoader__.load({
 						}),
 						(0, react_jsx_runtime.jsx)("span", {
 							className: PermissionSelect_module_css_default.triggerLabel,
-							children: currentLabel
+							children: current === void 0 ? displayName(currentValue) : optionLabel(current)
 						}),
 						(0, react_jsx_runtime.jsx)("span", {
 							className: clsx(PermissionSelect_module_css_default.chevron, open && PermissionSelect_module_css_default.chevronOpen),
@@ -6262,14 +6253,11 @@ window.__ModuleLoader__.load({
 			"settings.enter.description": "仅在智能体运行时生效；Cmd/Ctrl+Enter 使用另一行为",
 			"settings.enter.queue": "排队发送",
 			"settings.enter.steer": "插话发送",
-			"access.preset.readOnly": "仅可查看",
-			"access.preset.workspaceWrite": "可写入工作区",
-			"access.preset.fullAccess": "完全权限",
-			"access.confirm.title": "确认启用完全权限？",
-			"access.confirm.description": "启用完全权限后，智能体将减少确认步骤，并且可以直接执行更多操作，包括敏感操作、文件修改或外部命令。仅建议在你信任当前任务时使用。",
+			"access.confirm.title": "确认启用 Full access？",
+			"access.confirm.description": "启用 Full access 后，agent 将减少确认步骤，并且可以直接执行更多操作，包括敏感操作、文件修改或外部命令。仅建议在你信任当前任务时使用。",
 			"access.confirm.acknowledge": "我已了解风险，并愿意继续",
 			"access.confirm.cancel": "取消",
-			"access.confirm.enable": "启用完全权限",
+			"access.confirm.enable": "启用 Full access",
 			"hero.headline": "探索未至之境",
 			"hero.preview": "预览版",
 			"hero.chooseWorkspace": "选择工作区",
@@ -6438,9 +6426,6 @@ window.__ModuleLoader__.load({
 			"settings.enter.description": "Busy only; Cmd/Ctrl+Enter uses the other behavior",
 			"settings.enter.queue": "Queue",
 			"settings.enter.steer": "Steer",
-			"access.preset.readOnly": "Read Only",
-			"access.preset.workspaceWrite": "Workspace Write",
-			"access.preset.fullAccess": "Full access",
 			"access.confirm.title": "Enable Full access?",
 			"access.confirm.description": "Full access reduces confirmation steps and lets the agent perform more actions directly, including sensitive operations, file changes, or external commands. Only use it when you trust the current task.",
 			"access.confirm.acknowledge": "I understand the risks and want to continue",
