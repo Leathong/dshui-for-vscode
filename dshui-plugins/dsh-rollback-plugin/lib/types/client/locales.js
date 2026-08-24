@@ -1,6 +1,6 @@
 export const NS = 'rollback';
 export const zh = {
-    'action': '回到这条消息之后',
+    'action': '回到这条消息之前的状态',
     'title': '回滚预览',
     'loading': '正在生成预览…',
     'snapshot': '快照点',

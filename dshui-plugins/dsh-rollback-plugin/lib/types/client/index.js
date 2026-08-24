@@ -84,6 +84,10 @@ export async function apply(ctx) {
         document.head.appendChild(tag);
     }
     const sessions = ctx.sessions;
+    // Host workspace membership is keyed by workspaceId, never cwd alone: a
+    // session created with `cwd` only lands in the "Ungrouped" bucket. Resolve
+    // the source session's workspace so the fresh blank session groups under it.
+    const workspaces = ctx.workspaces;
     const unmountRemote = await ctx.remote.$mount(ROLLBACK_REMOTE);
     ctx.effect(() => () => { void unmountRemote(); }, 'rollback remote teardown');
     ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'rollback dictionaries');
@@ -106,7 +110,11 @@ export async function apply(ctx) {
             return childId;
         },
         restart: async (cwd) => {
-            const childId = await sessions.create({ cwd });
+            // Prefer the source session's workspace (host membership rule) so the
+            // fresh blank session groups under the current workspace; fall back to
+            // cwd only when the session has no workspace trail (would be Ungrouped).
+            const workspace = workspaces.list.getSnapshot().items.find(item => item.sessionIds.includes(sessionId));
+            const childId = await sessions.create(workspace === undefined ? { cwd } : { workspaceId: workspace.workspaceId });
             sessions.open(childId);
             return childId;
         },

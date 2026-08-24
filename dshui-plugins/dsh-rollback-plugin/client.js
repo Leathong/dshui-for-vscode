@@ -10,7 +10,7 @@ window.__ModuleLoader__.load({
 		//#region lib/types/client/locales.js
 		const NS = "rollback";
 		const zh = {
-			"action": "回到这条消息之后",
+			"action": "回到这条消息之前的状态",
 			"title": "回滚预览",
 			"loading": "正在生成预览…",
 			"snapshot": "快照点",
@@ -1232,6 +1232,7 @@ window.__ModuleLoader__.load({
 				document.head.appendChild(tag);
 			}
 			const sessions = ctx.sessions;
+			const workspaces = ctx.workspaces;
 			const unmountRemote = await ctx.remote.$mount(ROLLBACK_REMOTE);
 			ctx.effect(() => () => {
 				unmountRemote();
@@ -1260,7 +1261,8 @@ window.__ModuleLoader__.load({
 					return childId;
 				},
 				restart: async (cwd) => {
-					const childId = await sessions.create({ cwd });
+					const workspace = workspaces.list.getSnapshot().items.find((item) => item.sessionIds.includes(sessionId));
+					const childId = await sessions.create(workspace === void 0 ? { cwd } : { workspaceId: workspace.workspaceId });
 					sessions.open(childId);
 					return childId;
 				}
