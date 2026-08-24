@@ -1,7 +1,7 @@
 import { NS, en, zh } from "./locales.js";
 import ROLLBACK_REMOTE from "./remote.js";
 import { ModificationDock } from "./ModificationDock.js";
-import { MessageRollbackAction, TurnRollbackAction } from "./RollbackAction.js";
+import { UserRollbackAction } from "./RollbackAction.js";
 // `remote.rollback` must NOT appear in `inject`: the namespace service only
 // exists after `ctx.remote.$mount(ROLLBACK_REMOTE)` runs below, i.e. inside
 // this very apply(). Injecting it would make apply() wait for a service that
@@ -111,41 +111,18 @@ export async function apply(ctx) {
             return childId;
         },
     });
-    ctx.slots.inject('conversation.chat.assistant-actions', () => {
+    // Turn-opening user messages: anchor rollback to the Turn each message
+    // opens, so "还原到这个用户消息之后" is one click from the message itself.
+    // The ui-conversation user renderer owns the render site and passes the
+    // enclosing TurnLocation as owner currency.
+    ctx.slots.inject('conversation.chat.user-actions', () => {
         const dispose = ctx.slots.register({
-            name: 'conversation.chat.assistant-actions',
+            name: 'conversation.chat.user-actions',
             id: 'rollback',
             order: 20,
             locale: NS,
             inject: (sessionId) => rollbackFace(sessionId),
-        }, MessageRollbackAction);
-        return dispose;
-    });
-    // Unfinished (stopped/interrupted) turns: the closing assistant never
-    // renders its action row, so the rollback entry rides the turn tail chain.
-    // The selector matches turns WITHOUT a text closing assistant (replicating
-    // the shipped tail's `closing` computation) — exactly the turns whose
-    // assistant-message button is absent. Priority 100 lets the shipped
-    // deliverables entry (priority 0, produced-files tail) win when it claims
-    // the chain; completed turns keep using the assistant-message button above.
-    const hasClosingAssistant = (owner) => {
-        for (const step of owner.turn.steps) {
-            const data = step.data.get('assistant-step');
-            if (data === undefined || data.finalNode === undefined)
-                continue;
-            if (data.blocks.some(block => block.kind === 'text' && block.text.trim() !== ''))
-                return true;
-        }
-        return false;
-    };
-    ctx.slots.inject('conversation.chat.turnTail', () => {
-        const dispose = ctx.slots.register({
-            name: 'conversation.chat.turnTail',
-            priority: 100,
-            locale: NS,
-            select: (owner) => hasClosingAssistant(owner) ? null : { turn: owner.turn.turn },
-            inject: (sessionId) => rollbackFace(sessionId),
-        }, TurnRollbackAction);
+        }, UserRollbackAction);
         return dispose;
     });
     // Composer modification list: one strip above the input card, ordered

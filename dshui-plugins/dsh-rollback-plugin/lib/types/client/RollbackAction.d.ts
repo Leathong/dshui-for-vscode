@@ -1,6 +1,5 @@
 import type { ReactElement } from 'react';
-import type { TurnTailOwnerProps } from '@deepseek-ai/dsh-client-ui-conversation/client';
-import type { SessionId } from '@deepseek-ai/dsh-client-runtime/client';
+import type { SessionId, TurnLocation } from '@deepseek-ai/dsh-client-runtime/client';
 import type { OpenAtResult, RollbackExecuteRequest, RollbackExecuteResult, RollbackPrepareResult } from '../shared/types.ts';
 import type { RollbackLocaleKey } from './locales.ts';
 /** Rollback anchor: a finalized assistant message or a turn number. */
@@ -36,28 +35,12 @@ export interface RollbackActionProps {
     t: (key: RollbackLocaleKey) => string;
 }
 export declare function RollbackAction(props: RollbackActionProps): ReactElement;
-/** Assistant-message entry: the owner supplies the closing messageId. */
-export declare function MessageRollbackAction(props: {
-    messageId: string;
-    sessionId: RollbackActionInjected['sessionId'];
-    prepare: RollbackActionInjected['prepare'];
-    execute: RollbackActionInjected['execute'];
-    openAt: RollbackActionInjected['openAt'];
-    forkAt: RollbackActionInjected['forkAt'];
-    restart: RollbackActionInjected['restart'];
-    t: (key: RollbackLocaleKey) => string;
-}): ReactElement;
-/**
- * Turn-tail entry for turns without a text closing assistant (stopped /
- * interrupted / error turns): the ordinary action row never renders, so the
- * rollback button appears here. The chain selector decides the match; this
- * wrapper just anchors the core action to the turn.
+/** User-message entry: rollback anchored to the Turn the message opens. The
+ * user-actions owner passes the enclosing TurnLocation; this wrapper anchors
+ * the core action to that Turn (restore everything after the user message).
  */
-export declare function TurnRollbackAction(props: {
-    turn: TurnTailOwnerProps['turn'];
-    matched: {
-        turn: number;
-    };
+export declare function UserRollbackAction(props: {
+    turn: TurnLocation;
     sessionId: RollbackActionInjected['sessionId'];
     prepare: RollbackActionInjected['prepare'];
     execute: RollbackActionInjected['execute'];

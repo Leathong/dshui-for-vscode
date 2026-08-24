@@ -145,18 +145,11 @@ function FileRow(props) {
     const { change, selected, onToggle, onOpenReview, onOpenFile, t, modifications, selectedModifications, onToggleModification, modificationScope } = props;
     return (_jsxs("div", { style: { margin: '6px 0', padding: 6, border: '1px solid rgba(128,128,128,.25)', borderRadius: 8 }, children: [_jsxs("div", { style: { display: 'flex', alignItems: 'center', gap: 8 }, children: [change.restorable ? _jsx("input", { type: "checkbox", checked: selected, onChange: onToggle }) : null, _jsx("button", { type: "button", style: { textDecoration: 'underline', background: 'none', border: 0, padding: 0, cursor: 'pointer' }, onClick: onOpenReview, title: t('openInEditor'), children: change.path }), _jsx(Tooltip, { label: t('openAt'), side: "bottom", children: _jsx("button", { type: "button", style: { background: 'none', border: 0, padding: 0, cursor: 'pointer', display: 'inline-flex', alignItems: 'center' }, onClick: onOpenFile, "aria-label": t('openAt'), children: _jsx(IconRightUpOutline16, { size: 8 }) }) }), _jsx("span", { style: { opacity: .75 }, children: t(`status.${change.status}`) }), change.createdAfterSnapshot === true ? _jsx("span", { children: t('status.created') }) : null] }), modificationScope && modifications.length > 0 ? (_jsx("div", { style: { marginLeft: 20 }, children: modifications.map(item => (_jsxs("div", { style: { display: 'flex', gap: 8, alignItems: 'center' }, children: [_jsx("input", { type: "checkbox", checked: selectedModifications.has(item.modificationId), onChange: () => { onToggleModification(item.modificationId); } }), _jsxs("span", { children: [item.toolName, " #", item.modificationId] }), _jsx("span", { style: { opacity: .75 }, children: item.restorable === 'merge' ? t('merge') : item.restorable === 'file-only' ? t('fileOnly') : t('unsupported') }), item.laterModificationIds !== undefined && item.laterModificationIds.length > 0 ? _jsx("span", { style: { color: '#b8860b' }, children: t('conflictRisk') }) : null, item.reason !== undefined ? _jsx("span", { style: { opacity: .7 }, children: item.reason }) : null] }, item.modificationId))) })) : null] }));
 }
-/** Assistant-message entry: the owner supplies the closing messageId. */
-export function MessageRollbackAction(props) {
-    const { messageId, sessionId, prepare, execute, openAt, forkAt, restart, t } = props;
-    return _jsx(RollbackAction, { target: { messageId }, sessionId: sessionId, prepare: prepare, execute: execute, openAt: openAt, forkAt: forkAt, restart: restart, t: t });
-}
-/**
- * Turn-tail entry for turns without a text closing assistant (stopped /
- * interrupted / error turns): the ordinary action row never renders, so the
- * rollback button appears here. The chain selector decides the match; this
- * wrapper just anchors the core action to the turn.
+/** User-message entry: rollback anchored to the Turn the message opens. The
+ * user-actions owner passes the enclosing TurnLocation; this wrapper anchors
+ * the core action to that Turn (restore everything after the user message).
  */
-export function TurnRollbackAction(props) {
-    const { matched, sessionId, prepare, execute, openAt, forkAt, restart, t } = props;
-    return _jsx(RollbackAction, { target: { turn: matched.turn }, sessionId: sessionId, prepare: prepare, execute: execute, openAt: openAt, forkAt: forkAt, restart: restart, t: t });
+export function UserRollbackAction(props) {
+    const { turn, sessionId, prepare, execute, openAt, forkAt, restart, t } = props;
+    return _jsx(RollbackAction, { target: { turn: turn.turn }, sessionId: sessionId, prepare: prepare, execute: execute, openAt: openAt, forkAt: forkAt, restart: restart, t: t });
 }

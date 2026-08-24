@@ -5452,7 +5452,28 @@ window.__ModuleLoader__.load({
 			});
 		}
 		/** User and admitted-steering keyed Chat renderer. */
-		const UserMessageNodeView = (0, react.memo)(function UserMessageNodeView({ node, renderMessageImages, openFile, t }) {
+		const UserMessageNodeView = (0, react.memo)(function UserMessageNodeView({ node, renderMessageImages, openFile, renderSlot, t }) {
+			const data = node.data;
+			const turn = node.location.kind === "turn" || node.location.kind === "step" ? node.location.turn : void 0;
+			const userActions = turn === void 0 ? null : renderSlot("conversation.chat.user-actions", { turn });
+			return (0, react_jsx_runtime.jsx)(UserStyleBubble, {
+				content: data.content,
+				renderMessageImages,
+				openFile,
+				...data.referenceLabels === void 0 ? {} : { referenceLabels: data.referenceLabels },
+				t,
+				actions: (text) => (0, react_jsx_runtime.jsx)(MessageIconActions, {
+					text,
+					time: data.time,
+					clock: "start",
+					className: MessageItem_module_css_default.actions,
+					extraActions: userActions,
+					t
+				})
+			});
+		});
+		/** Steering (mid-turn admitted user message) keyed Chat renderer; no user-actions strip. */
+		const SteeringMessageNodeView = (0, react.memo)(function SteeringMessageNodeView({ node, renderMessageImages, openFile, t }) {
 			const data = node.data;
 			return (0, react_jsx_runtime.jsx)(UserStyleBubble, {
 				content: data.content,
@@ -9871,13 +9892,17 @@ window.__ModuleLoader__.load({
 			ctx.slots.inject("conversation.chat.node", () => ctx.slots.register({
 				name: "conversation.chat.node",
 				key: "user",
-				locale: NS
+				locale: NS,
+				children: { "conversation.chat.user-actions": {
+					kind: "list",
+					scope: "session"
+				} }
 			}, UserMessageNodeView));
 			ctx.slots.inject("conversation.chat.node", () => ctx.slots.register({
 				name: "conversation.chat.node",
 				key: "steering",
 				locale: NS
-			}, UserMessageNodeView));
+			}, SteeringMessageNodeView));
 			ctx.slots.inject("conversation.chat.node", () => ctx.slots.register({
 				name: "conversation.chat.node",
 				key: "context",

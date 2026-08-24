@@ -10,7 +10,7 @@ window.__ModuleLoader__.load({
 		//#region lib/types/client/locales.js
 		const NS = "rollback";
 		const zh = {
-			"action": "回滚到此回复之前",
+			"action": "回到这条消息之后",
 			"title": "回滚预览",
 			"loading": "正在生成预览…",
 			"snapshot": "快照点",
@@ -66,7 +66,7 @@ window.__ModuleLoader__.load({
 			"dock.updated": "修改列表已更新。"
 		};
 		const en = {
-			"action": "Roll back before this reply",
+			"action": "Roll back after this message",
 			"title": "Rollback preview",
 			"loading": "Preparing preview…",
 			"snapshot": "Snapshot",
@@ -1196,30 +1196,14 @@ window.__ModuleLoader__.load({
 				}) : null]
 			});
 		}
-		/** Assistant-message entry: the owner supplies the closing messageId. */
-		function MessageRollbackAction(props) {
-			const { messageId, sessionId, prepare, execute, openAt, forkAt, restart, t } = props;
-			return (0, react_jsx_runtime.jsx)(RollbackAction, {
-				target: { messageId },
-				sessionId,
-				prepare,
-				execute,
-				openAt,
-				forkAt,
-				restart,
-				t
-			});
-		}
-		/**
-		* Turn-tail entry for turns without a text closing assistant (stopped /
-		* interrupted / error turns): the ordinary action row never renders, so the
-		* rollback button appears here. The chain selector decides the match; this
-		* wrapper just anchors the core action to the turn.
+		/** User-message entry: rollback anchored to the Turn the message opens. The
+		* user-actions owner passes the enclosing TurnLocation; this wrapper anchors
+		* the core action to that Turn (restore everything after the user message).
 		*/
-		function TurnRollbackAction(props) {
-			const { matched, sessionId, prepare, execute, openAt, forkAt, restart, t } = props;
+		function UserRollbackAction(props) {
+			const { turn, sessionId, prepare, execute, openAt, forkAt, restart, t } = props;
 			return (0, react_jsx_runtime.jsx)(RollbackAction, {
-				target: { turn: matched.turn },
+				target: { turn: turn.turn },
 				sessionId,
 				prepare,
 				execute,
@@ -1281,31 +1265,14 @@ window.__ModuleLoader__.load({
 					return childId;
 				}
 			});
-			ctx.slots.inject("conversation.chat.assistant-actions", () => {
+			ctx.slots.inject("conversation.chat.user-actions", () => {
 				return ctx.slots.register({
-					name: "conversation.chat.assistant-actions",
+					name: "conversation.chat.user-actions",
 					id: "rollback",
 					order: 20,
 					locale: NS,
 					inject: (sessionId) => rollbackFace(sessionId)
-				}, MessageRollbackAction);
-			});
-			const hasClosingAssistant = (owner) => {
-				for (const step of owner.turn.steps) {
-					const data = step.data.get("assistant-step");
-					if (data === void 0 || data.finalNode === void 0) continue;
-					if (data.blocks.some((block) => block.kind === "text" && block.text.trim() !== "")) return true;
-				}
-				return false;
-			};
-			ctx.slots.inject("conversation.chat.turnTail", () => {
-				return ctx.slots.register({
-					name: "conversation.chat.turnTail",
-					priority: 100,
-					locale: NS,
-					select: (owner) => hasClosingAssistant(owner) ? null : { turn: owner.turn.turn },
-					inject: (sessionId) => rollbackFace(sessionId)
-				}, TurnRollbackAction);
+				}, UserRollbackAction);
 			});
 			ctx.slots.inject("conversation.input.dock", () => {
 				return ctx.slots.register({

@@ -1,6 +1,6 @@
 export const NS = 'rollback';
 export const zh = {
-    'action': '回滚到此回复之前',
+    'action': '回到这条消息之后',
     'title': '回滚预览',
     'loading': '正在生成预览…',
     'snapshot': '快照点',
@@ -56,7 +56,7 @@ export const zh = {
     'dock.updated': '修改列表已更新。',
 };
 export const en = {
-    'action': 'Roll back before this reply',
+    'action': 'Roll back after this message',
     'title': 'Rollback preview',
     'loading': 'Preparing preview…',
     'snapshot': 'Snapshot',
