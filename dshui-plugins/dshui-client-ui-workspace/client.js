@@ -2746,9 +2746,12 @@ window.__ModuleLoader__.load({
 					await workspaces.insertBefore(workspaceId, beforeWorkspaceId);
 				},
 				deleteSession: (sessionId) => {
-					window.postMessage({
+					const summary = sessions.list.getSnapshot().byId[sessionId];
+					const cwd = summary === void 0 || summary.cwd === void 0 ? "" : summary.cwd;
+					window.parent.postMessage({
 						type: "dshui:deleteSession",
-						sessionId
+						sessionId,
+						cwd
 					}, "*");
 					return Promise.resolve();
 				},

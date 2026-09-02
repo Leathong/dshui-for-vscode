@@ -865,10 +865,10 @@ index df17251c38..1b005d319d 100644
     * Reorder a session inside its Workspace account (DOM-insertBefore
     * semantics: omitted anchor appends to the end). The view refreshes from
 diff --git a/packages/client/ui-workspace/src/client/index.ts b/packages/client/ui-workspace/src/client/index.ts
-index 7c8e1108dc..aa70648207 100644
+index 7c8e1108dc..9c167cc228 100644
 --- a/packages/client/ui-workspace/src/client/index.ts
 +++ b/packages/client/ui-workspace/src/client/index.ts
-@@ -122,7 +122,12 @@ export function apply(ctx: Context): void {
+@@ -122,7 +122,22 @@ export function apply(ctx: Context): void {
      insertWorkspaceBefore: async (workspaceId, beforeWorkspaceId) => {
        await workspaces.insertBefore(workspaceId, beforeWorkspaceId)
      },
@@ -876,7 +876,17 @@ index 7c8e1108dc..aa70648207 100644
 +    deleteSession: (sessionId) => {
 +      // The extension host deletes the session log file; there is no
 +      // workspaces RPC for it, so the browser notifies the webview shell.
-+      window.postMessage({ type: 'dshui:deleteSession', sessionId }, '*')
++      // The host locates the session's directory by its cwd (see the host
++      // `deleteSessionFile`), which only a listed summary carries — resolve it
++      // here so the delete actually removes the log instead of being rejected
++      // as an invalid request.
++      const summary = sessions.list.getSnapshot().byId[sessionId]
++      const cwd = summary === undefined || summary.cwd === undefined ? '' : summary.cwd
++      // Post to the parent (the webview shell), not to this iframe's own window:
++      // the shell's message listener runs on the parent and matches
++      // `event.source === frame.contentWindow`, so a self-targeted message would
++      // never reach the extension host and the log would never be removed.
++      window.parent.postMessage({ type: 'dshui:deleteSession', sessionId, cwd }, '*')
 +      return Promise.resolve()
 +    },
      insertSessionBefore: async (workspaceId, sessionId, beforeSessionId) => {
