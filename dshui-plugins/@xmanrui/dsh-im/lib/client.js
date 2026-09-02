@@ -4000,7 +4000,7 @@ function BotCard({
   const { bot, health, state, connected } = connection;
   const stateForDisplay = busy === "reconnect" ? "connecting" : state;
   const tone = stateForDisplay === "connected" ? "success" : stateForDisplay === "connecting" ? "warning" : "error";
-  const summary = actionError?.message ?? connection.error?.message ?? (connected ? null : health.summary);
+  const summary = actionError?.message ?? connection.connection?.lastError ?? connection.error?.message ?? (connected ? null : health.summary);
   const titleId = `bxf-bot-${connection.botId.replace(/[^a-zA-Z0-9_-]/g, "-")}`;
   return h2(
     "article",

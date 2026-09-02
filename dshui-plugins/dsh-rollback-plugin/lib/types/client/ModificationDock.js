@@ -10,8 +10,26 @@ function unwrapRemote(remote) {
         return business.error.message;
     return business.value;
 }
+/**
+ * Whether an event-window delta listed a change that can alter the
+ * modification list. Surface events (user/assistant messages, stream chunks)
+ * are deliberately excluded — they fire continuously and never change the
+ * file set, so reloading on them would only burn list/echo/diff work. Tool
+ * results and turn boundaries are the moments a tool actually wrote a file or
+ * the snapshot baseline advanced.
+ */
+function isModificationRelevant(entries) {
+    for (const entry of entries) {
+        if (entry.type !== 'event')
+            continue;
+        const type = entry.event.type;
+        if (type === 'tool/result' || type === 'turn/start' || type === 'turn/end')
+            return true;
+    }
+    return false;
+}
 export function ModificationDock(props) {
-    const { session, t, sessionChanges, acceptAll, undoAll, acceptFile, acceptModification, undoFile, undoModification, openAt } = props;
+    const { session, t, sessionEvents, sessionChanges, acceptAll, undoAll, acceptFile, acceptModification, undoFile, undoModification, openAt } = props;
     const [data, setData] = useState(null);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState(null);
@@ -25,13 +43,18 @@ export function ModificationDock(props) {
     dataRef.current = data;
     const loadingRef = useRef(false);
     const queuedRef = useRef(false);
-    const load = async () => {
+    // `background` skips the header loading indicator: the session-event
+    // refresh (below) re-lists as tool results land, and flashing "…" on every
+    // one is noisy. Foreground loads (mount, session edges, mutations, the
+    // extension's refresh message) keep the indicator.
+    const load = async (background = false) => {
         if (loadingRef.current) {
             queuedRef.current = true;
             return;
         }
         loadingRef.current = true;
-        setLoading(true);
+        if (!background)
+            setLoading(true);
         try {
             const remote = await sessionChanges().catch((loadError) => {
                 setError(loadError instanceof Error ? loadError.message : String(loadError));
@@ -50,15 +73,19 @@ export function ModificationDock(props) {
         }
         finally {
             loadingRef.current = false;
-            setLoading(false);
+            if (!background)
+                setLoading(false);
             if (queuedRef.current) {
                 queuedRef.current = false;
-                void load();
+                void load(background);
             }
         }
     };
-    // Reload on mount and whenever the conversation snapshot moves on (turns,
-    // messages, tool calls); input keystrokes do not change `session` identity.
+    // Reload on mount and whenever the Session snapshot moves on (open, queue,
+    // running transitions, subagent changes). `session` identity is stable
+    // across mid-turn tool calls, so this alone would leave the list stale
+    // until the turn's running edge lands (or the user switches sessions and
+    // forces a remount); the session-event subscription below closes that gap.
     const mounted = useRef(false);
     useEffect(() => {
         const timer = setTimeout(() => {
@@ -186,7 +213,7 @@ export function ModificationDock(props) {
     // The VS Code extension may refresh the modification list after an accept /
     // undo performed from the editor review panel.
     const loadRef = useRef(() => { });
-    loadRef.current = () => { void load(); };
+    loadRef.current = (background = false) => { void load(background); };
     useEffect(() => {
         const onMessage = (event) => {
             const data = event.data;
@@ -197,6 +224,32 @@ export function ModificationDock(props) {
         window.addEventListener('message', onMessage);
         return () => { window.removeEventListener('message', onMessage); };
     }, []);
+    // Host→client push signal: the session's event window fires synchronously as
+    // the host appends session events. We re-list when a tool result or turn
+    // boundary lands — the moments a tool actually wrote a file or the snapshot
+    // baseline advanced — instead of polling on a timer. Surface events (stream
+    // chunks, messages) are ignored, and the delta is debounced so a burst of
+    // tool results coalesces into one refresh.
+    useEffect(() => {
+        if (sessionEvents === undefined)
+            return;
+        let timer;
+        const onEvent = () => {
+            const window = sessionEvents.getSnapshot();
+            // The seeding baseline is a `replace`; the dock already reads it on mount.
+            if (window.change.kind === 'replace')
+                return;
+            if (!isModificationRelevant(window.change.entries))
+                return;
+            if (timer !== undefined)
+                clearTimeout(timer);
+            timer = setTimeout(() => {
+                timer = undefined;
+                loadRef.current(true);
+            }, 2000);
+        };
+        return sessionEvents.subscribe(onEvent);
+    }, [sessionEvents]);
     // Nothing to show: no modifications, no error worth surfacing.
     if (data !== null && changes.length === 0)
         return null;

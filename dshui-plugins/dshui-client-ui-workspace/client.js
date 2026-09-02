@@ -2745,11 +2745,12 @@ window.__ModuleLoader__.load({
 				insertWorkspaceBefore: async (workspaceId, beforeWorkspaceId) => {
 					await workspaces.insertBefore(workspaceId, beforeWorkspaceId);
 				},
-				deleteSession: async (sessionId) => {
+				deleteSession: (sessionId) => {
 					window.postMessage({
 						type: "dshui:deleteSession",
 						sessionId
 					}, "*");
+					return Promise.resolve();
 				},
 				insertSessionBefore: async (workspaceId, sessionId, beforeSessionId) => {
 					await workspaces.insertSessionBefore(workspaceId, sessionId, beforeSessionId);

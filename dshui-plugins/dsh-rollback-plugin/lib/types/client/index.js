@@ -150,6 +150,11 @@ export async function apply(ctx) {
                 undoFile: (path, listId) => rollback.undoFile({ sessionId, path, listId }),
                 undoModification: (modificationId, listId) => rollback.undoModification({ sessionId, modificationId, listId }),
                 openAt: (path, line) => rollback.openAt(sessionId, path, line),
+                // Live session event window so the dock refreshes on host-side
+                // modification activity (tool results, turn boundaries) instead of
+                // polling. `binding` is the scope-addressed session feed; the dock is
+                // only rendered for the staged session, so the binding is present.
+                sessionEvents: sessions.binding(sessionId)?.eventSource,
             }),
         }, ModificationDock);
         return dispose;

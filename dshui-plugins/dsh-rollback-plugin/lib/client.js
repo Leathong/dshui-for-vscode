@@ -340,8 +340,24 @@ window.__ModuleLoader__.load({
 			if (!business.ok) return business.error.message;
 			return business.value;
 		}
+		/**
+		* Whether an event-window delta listed a change that can alter the
+		* modification list. Surface events (user/assistant messages, stream chunks)
+		* are deliberately excluded — they fire continuously and never change the
+		* file set, so reloading on them would only burn list/echo/diff work. Tool
+		* results and turn boundaries are the moments a tool actually wrote a file or
+		* the snapshot baseline advanced.
+		*/
+		function isModificationRelevant(entries) {
+			for (const entry of entries) {
+				if (entry.type !== "event") continue;
+				const type = entry.event.type;
+				if (type === "tool/result" || type === "turn/start" || type === "turn/end") return true;
+			}
+			return false;
+		}
 		function ModificationDock(props) {
-			const { session, t, sessionChanges, acceptAll, undoAll, acceptFile, acceptModification, undoFile, undoModification, openAt } = props;
+			const { session, t, sessionEvents, sessionChanges, acceptAll, undoAll, acceptFile, acceptModification, undoFile, undoModification, openAt } = props;
 			const [data, setData] = (0, react.useState)(null);
 			const [loading, setLoading] = (0, react.useState)(false);
 			const [error, setError] = (0, react.useState)(null);
@@ -355,13 +371,13 @@ window.__ModuleLoader__.load({
 			dataRef.current = data;
 			const loadingRef = (0, react.useRef)(false);
 			const queuedRef = (0, react.useRef)(false);
-			const load = async () => {
+			const load = async (background = false) => {
 				if (loadingRef.current) {
 					queuedRef.current = true;
 					return;
 				}
 				loadingRef.current = true;
-				setLoading(true);
+				if (!background) setLoading(true);
 				try {
 					const remote = await sessionChanges().catch((loadError) => {
 						setError(loadError instanceof Error ? loadError.message : String(loadError));
@@ -378,10 +394,10 @@ window.__ModuleLoader__.load({
 					setActionError(null);
 				} finally {
 					loadingRef.current = false;
-					setLoading(false);
+					if (!background) setLoading(false);
 					if (queuedRef.current) {
 						queuedRef.current = false;
-						load();
+						load(background);
 					}
 				}
 			};
@@ -474,8 +490,8 @@ window.__ModuleLoader__.load({
 				if (change !== void 0) openFile(change);
 			};
 			const loadRef = (0, react.useRef)(() => {});
-			loadRef.current = () => {
-				load();
+			loadRef.current = (background = false) => {
+				load(background);
 			};
 			(0, react.useEffect)(() => {
 				const onMessage = (event) => {
@@ -487,6 +503,21 @@ window.__ModuleLoader__.load({
 					window.removeEventListener("message", onMessage);
 				};
 			}, []);
+			(0, react.useEffect)(() => {
+				if (sessionEvents === void 0) return;
+				let timer;
+				const onEvent = () => {
+					const window = sessionEvents.getSnapshot();
+					if (window.change.kind === "replace") return;
+					if (!isModificationRelevant(window.change.entries)) return;
+					if (timer !== void 0) clearTimeout(timer);
+					timer = setTimeout(() => {
+						timer = void 0;
+						loadRef.current(true);
+					}, 2e3);
+				};
+				return sessionEvents.subscribe(onEvent);
+			}, [sessionEvents]);
 			if (data !== null && changes.length === 0) return null;
 			if (data === null && error === null) return null;
 			const allBusy = busy.has("all");
@@ -1313,7 +1344,8 @@ window.__ModuleLoader__.load({
 							modificationId,
 							listId
 						}),
-						openAt: (path, line) => rollback.openAt(sessionId, path, line)
+						openAt: (path, line) => rollback.openAt(sessionId, path, line),
+						sessionEvents: sessions.binding(sessionId)?.eventSource
 					})
 				}, ModificationDock);
 			});
