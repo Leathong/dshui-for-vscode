@@ -1,31 +1,72 @@
 {
   "name": "dsh-whitelist-sandbox",
-  "description": "Additive writable-path whitelist for the DSH sandbox: extra roots under workspace-write, honored by both bash and write/edit tools",
+  "description": "Additive writable-path whitelist for the DSH sandbox: extra roots under workspace-write, honored by both bash and write/edit tools, plus a settings-page section to edit them",
   "version": "0.1.0",
   "type": "module",
   "main": "lib/index.js",
+  "types": "lib/types/index.d.ts",
   "exports": {
     ".": {
+      "types": "./lib/types/index.d.ts",
       "default": "./lib/index.js"
+    },
+    "./client": {
+      "types": "./lib/types/client/index.d.ts",
+      "default": "./lib/client.js"
     },
     "./package.json": "./package.json"
   },
   "files": [
-    "lib",
+    "lib/index.js",
+    "lib/client.js",
+    "lib/types/**/*.d.ts",
+    "lib/types/**/*.js",
     "cordis.patch.yml"
   ],
   "scripts": {
-    "test": "node --test test/whitelist.test.mjs"
+    "build": "npm run build:types && tsdown",
+    "build:types": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-settings",
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-api-remotes"
+      ]
+    }
   },
   "dependencies": {
+    "@deepseek-ai/cordis": "^0.1.0-rc.7",
     "@deepseek-ai/dsh-bash-local": "^0.1.0-rc.7",
     "@deepseek-ai/dsh-bash-sandbox": "^0.1.0-rc.7",
     "@deepseek-ai/dsh-fs": "^0.1.0-rc.7",
+    "@deepseek-ai/dsh-fs-local": "^0.1.0-rc.7",
     "@deepseek-ai/dsh-fs-sandbox": "^0.1.0-rc.7",
     "@deepseek-ai/dsh-home-paths": "^0.1.0-rc.7",
     "@deepseek-ai/dsh-sandbox": "^0.1.0-rc.7",
     "@deepseek-ai/dsh-settings": "^0.1.0-rc.7",
-    "@deepseek-ai/schemastery": "^3.18.1"
+    "@deepseek-ai/dsh-client-store": "^0.1.0-rc.7",
+    "@deepseek-ai/dsh-client-ui-primitives": "^0.1.0-rc.7",
+    "@deepseek-ai/dsh-client-locale": "^0.1.0-rc.7",
+    "@deepseek-ai/dsh-client-ui-settings": "^0.1.0-rc.7",
+    "@deepseek-ai/dsh-api-remotes": "^0.1.0-rc.7",
+    "@deepseek-ai/schemastery": "^3.18.1",
+    "react": "^18.2.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.0",
+    "@types/react": "~18.3.1",
+    "tsdown": "^0.22.2",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.8"
   },
   "license": "MIT"
 }

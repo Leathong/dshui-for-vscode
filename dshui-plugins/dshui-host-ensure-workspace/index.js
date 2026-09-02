@@ -317,39 +317,81 @@ const NEW_SESSION_PATCH = `<script>
  * Composer reference intake. The extension's context-menu commands
  * (dshui.referenceFile / dshui.referenceSelection) post a
  * { type: 'dshui:reference', text } message to the webview shell, which
- * relays it into this iframe. The composer draft is React-controlled (the
- * input machine owns it), so the text is written with the native textarea
- * value setter followed by an 'input' event — the same path as user typing —
- * which updates the machine draft and its backdrop mirror. The composer can
- * be absent (SPA still booting) or read-only (busy/submitting), so inbound
- * texts queue and drain once a writable composer exists (capped, so a
- * permanently unusable composer cannot spin forever). The ready handshake
- * tells the shell this listener is live, so references posted while the page
- * loaded are flushed instead of dropped.
+ * relays it into this iframe. The composer is a Lexical contenteditable
+ * (`[data-composer-input]`), so the text is routed through the SPA's own
+ * paste path: a synthetic `ClipboardEvent('paste')` carrying a `text/plain`
+ * payload is exactly what the composer's PASTE_COMMAND consumes (the same
+ * mechanism a real paste uses) — it inserts into the Lexical draft and lets
+ * the input machine update its backdrop mirror and history with the correct
+ * undo boundary. A legacy `<textarea>` composer is also supported. The
+ * composer can be absent (SPA still booting) or read-only (busy/submitting),
+ * so inbound texts queue and drain once a writable composer exists (capped,
+ * so a permanently unusable composer cannot spin forever). The ready
+ * handshake tells the shell this listener is live, so references posted
+ * while the page loaded are flushed instead of dropped.
  */
 const REFERENCE_PATCH = `<script>
 (function () {
   var pending = [];
   var retries = 0;
-  function insertInto(textarea, text) {
-    var draft = textarea.value;
-    var sep = draft !== '' && !draft.endsWith('\\n') ? '\\n' : '';
-    var next = draft + sep + text;
-    var setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set;
-    setter.call(textarea, next);
-    textarea.dispatchEvent(new Event('input', { bubbles: true }));
+  function insertInto(surface, text) {
+    if (surface.tagName === 'TEXTAREA') {
+      var draft = surface.value;
+      var sep = draft !== '' && !draft.endsWith('\\n') ? '\\n' : '';
+      var next = draft + sep + text;
+      var setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set;
+      setter.call(surface, next);
+      surface.dispatchEvent(new Event('input', { bubbles: true }));
+      try {
+        surface.focus();
+        surface.setSelectionRange(next.length, next.length);
+      } catch (error) { /* focus/selection are best-effort */ }
+      return;
+    }
+    // Contenteditable (Lexical) composer: keep the reference on its own line
+    // when the draft already holds content, then land it through the SPA's
+    // own paste path. The caret is moved to the end so the paste appends,
+    // matching the textarea behavior.
+    var current = surface.textContent;
+    var sep = current !== '' && !current.endsWith('\\n') ? '\\n' : '';
+    var payload = sep + text;
     try {
-      textarea.focus();
-      var end = next.length;
-      textarea.setSelectionRange(end, end);
-    } catch (error) { /* focus/selection are best-effort */ }
+      surface.focus();
+      var selection = window.getSelection();
+      var range = document.createRange();
+      range.selectNodeContents(surface);
+      range.collapse(false);
+      if (selection !== null) { selection.removeAllRanges(); selection.addRange(range); }
+    } catch (error) { /* focus/caret are best-effort */ }
+    try {
+      var transfer = new DataTransfer();
+      transfer.setData('text/plain', payload);
+      surface.dispatchEvent(new ClipboardEvent('paste', {
+        clipboardData: transfer, bubbles: true, cancelable: true,
+      }));
+    } catch (error) {
+      // Some engines refuse to construct/invoke ClipboardEvent here; fall back
+      // to the native editing command on the focused editable surface.
+      try { document.execCommand('insertText', false, payload); } catch (e) { /* ignore */ }
+    }
+  }
+  function surfaceOf(card) {
+    if (card === null) return null;
+    var editable = card.querySelector('[data-composer-input]');
+    if (editable !== null) return editable;
+    return card.querySelector('textarea');
+  }
+  function writable(surface) {
+    if (surface === null) return false;
+    if (surface.tagName === 'TEXTAREA') return !surface.disabled && !surface.readOnly;
+    return surface.isContentEditable === true;
   }
   function drain() {
     if (pending.length === 0) return;
     var card = document.querySelector('[data-composer-card]');
-    var textarea = card === null ? null : card.querySelector('textarea');
-    if (textarea !== null && !textarea.disabled && !textarea.readOnly) {
-      pending.forEach(function (text) { insertInto(textarea, text); });
+    var surface = surfaceOf(card);
+    if (writable(surface)) {
+      pending.forEach(function (text) { insertInto(surface, text); });
       pending = [];
       retries = 0;
       return;

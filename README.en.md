@@ -391,10 +391,11 @@ sidebar/input-box changes are not upstream — they live in two "client plugin b
 from the upstream client packages with the dshui changes injected, shipped as **prebuilt artifacts**
 (`dshui-plugins/`), and loaded by the dsh server from installed packages.
 
-Changes to the upstream client source are published with the repo as a patch:
-`patches/dshui-client-bundles.patch` (15 files covering `ui-workspace` / `ui-conversation` and their
-tests; base commit is pinned — see `patches/README.md` for the apply steps). Upstream source
-(`.dsh-src`) and build tooling (`.tools/`) are **not committed to git**.
+Changes to the upstream source are published with the repo as a patch:
+`patches/dshui-bundles.patch` (26 files covering `ui-workspace` / `ui-conversation` / `ui-chat`
+and their tests, plus the host file-opener and browser-redirect runtime changes; base commit is
+pinned — see `patches/README.md` for the apply steps). Upstream source (`.dsh-src`) and build tooling
+(`.tools/`) are **not committed to git**.
 
 | What to change | Where | Rebuild needed? |
 | --- | --- | --- |
@@ -420,11 +421,12 @@ structural changes to the dsh client code need a full rebuild:
 git clone https://github.com/deepseek-ai/deepseek-harness.git .dsh-src
 cd .dsh-src
 git fetch origin <base commit from patches/README.md> && git checkout FETCH_HEAD
-git apply ../patches/dshui-client-bundles.patch   # fails safely if the base commit mismatches
+git apply ../patches/dshui-bundles.patch   # fails safely if the base commit mismatches
 cd ..
 
 # 1. Build the changed client bundles from source
 cd .dsh-src
+pnpm clean
 pnpm install                      # requires pnpm 11.7.0, Node ^22.19 || >=24
 pnpm run build:lib:host           # generates the shared /remote modules
 pnpm run build:lib:client         # compiles and packages all client packages
@@ -453,10 +455,12 @@ workflow below.
 
 The extension binds two dsh versions together, and both must be aligned on upgrade:
 
-1. **CLI runtime:** `dependencies["@deepseek-ai/dsh"]` in `package.json` (currently `0.1.1-rc.2`).
-2. **Client bundle source:** the `.dsh-src` checkout (currently the `dsh-v0.1.1-rc.2` release plus the
-   four dshui commits; since the repo's master may lag behind the npm release, align by checking each
-   package's version in its `package.json` and confirm with real runtime tests).
+1. **CLI runtime:** `dependencies["@deepseek-ai/dsh"]` in `package.json` (currently `0.1.2-alpha.4`).
+2. **Client bundle source:** the `.dsh-src` checkout (currently `dsh-v0.1.2-alpha.4` with the dshui
+   client patch re-applied — since 0.1.2 the session/chat clients were restructured, so re-apply the
+   patch to the new structure per `scripts/verify-patches.mjs`; since the repo's master may lag behind
+   the npm release, align by checking each package's version in its `package.json` and confirm with
+   real runtime tests).
 
 Upgrade steps:
 
@@ -464,16 +468,16 @@ Upgrade steps:
 # 0. (Optional) Re-checkout source aligned with the target version — the base commit is pinned to the
 #    value in patches/README.md
 #    git clone https://github.com/deepseek-ai/deepseek-harness.git .dsh-src
-#    cd .dsh-src && git fetch origin <base commit> && git checkout FETCH_HEAD && git apply ../patches/dshui-client-bundles.patch
+#    cd .dsh-src && git fetch origin <base commit> && git checkout FETCH_HEAD && git apply ../patches/dshui-bundles.patch
 
 # 1. Upgrade the bundled CLI
 npm install @deepseek-ai/dsh@<new version>
 
 # 2. Check that the patch is still complete — the core step
 node scripts/verify-patches.mjs      # each file flagged as missing needs its patch re-applied
-#    The changes are frozen in patches/dshui-client-bundles.patch: if it applies cleanly to the base
+#    The changes are frozen in patches/dshui-bundles.patch: if it applies cleanly to the base
 #    commit, use it as-is; if it drifted, re-apply per the checklist in step 3 and re-export with:
-#    git -C .dsh-src diff > patches/dshui-client-bundles.patch
+#    git -C .dsh-src diff > patches/dshui-bundles.patch
 
 # 3. Re-apply any missing patches per the checklist below (the changes are small; follow the comments
 #    in each file)

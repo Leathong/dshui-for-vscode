@@ -2,9 +2,10 @@
 #
 #   make            完整部署（默认目标）：编译 → 打包 vsix → 覆盖安装
 #   make deploy     同上
-#   make package    只重新打包 vsix（内部先跑 vscode:prepublish：compile + copy:clients）
+#   make package    只重新打包 vsix（内部先跑 vscode:prepublish：compile + copy:clients + sync:dsh）
 #   make install    打包并覆盖安装
 #   make compile    只编译 TypeScript 到 out/
+#   make sync-dsh   （可选）从 .dsh-src 构建产物同步 @deepseek-ai/* 到 node_modules
 #   make sync       快速同步运行产物到已安装副本（改 src/*.ts / dshui-plugins/ 后免打包）
 #   make login      登录 VS Code 市场（发布前一次性操作，或导出 VSCE_PAT 代替）
 #   make publish    发布到 VS Code 市场（默认不递增版本，BUMP=... 时递增）
@@ -14,6 +15,10 @@
 #   make unpublish  从 VS Code 市场下架（危险，需 FORCE=1 确认）
 #   make clean      清理 out/ 与 vsix
 #   make help       列出目标
+#
+# 依赖说明：扩展的 @deepseek-ai/* 运行时不再从 npm 下载，而是由 .dsh-src 源码构建产物
+# 填充（scripts/sync-dsh.mjs）。打包（vsce 的 vscode:prepublish）会自动跑 sync:dsh；
+# 手动 npm install 后 postinstall 也会跑一次，故开发机需先 clone 并构建 .dsh-src。
 
 # 以下均从 package.json 动态读取，改 publisher/name/version 后无需改 Makefile。
 NAME      := $(shell node -p "require('./package.json').name")
@@ -46,13 +51,18 @@ AUTH_FLAG := $(if $(AZURE),--azure-credential,$(if $(VSCE_PAT),--pat '$(VSCE_PAT
 GH_TAG    ?= v$(VERSION)
 GH_REPO   ?=
 
-.PHONY: all deploy package install compile sync clean help \
+.PHONY: all deploy package install compile sync-dsh sync clean help \
         login verify-pat publish publish-vsix publish-ovsx release unpublish
 
 all: deploy
 
 compile:
 	npm run compile
+
+# 从 .dsh-src 构建产物同步 @deepseek-ai/* 到 node_modules（源码编译，非 npm）。
+# 注意目标名用 sync-dsh（冒号在 make 里是保留字）；npm script 名仍是 sync:dsh。
+sync-dsh:
+	npm run sync:dsh
 
 # vsce package 内部会先执行 vscode:prepublish（compile + copy:clients），
 # 因此打包无需显式依赖 compile（见 `Executing prepublish script` 输出）。
@@ -118,7 +128,8 @@ unpublish:
 
 # 开发期快速同步：把运行产物拷入已安装副本，免重新打包 vsix。
 # 同步内容：out/（扩展主程序）、dshui-plugins/（host 插件 + 客户端 bundle）、
-# patch.yml、media/、package.json。依赖变更（npm install）后请改用 make deploy 完整重装。
+# patch.yml、media/、package.json。注意：node_modules/@deepseek-ai（源码构建）
+# 不在同步范围，依赖变更后请改用 make deploy 完整重装。
 sync: compile
 	@test -d "$(EXT_DIR)" || (echo "错误：未找到已安装副本 $(EXT_DIR)，请先 make install" && exit 1)
 	@DEST="$(EXT_DIR)" && \
@@ -140,6 +151,7 @@ help:
 	@echo "  make package    只重新打包 vsix"
 	@echo "  make install    打包并覆盖安装"
 	@echo "  make compile    只编译 TypeScript"
+	@echo "  make sync-dsh   从 .dsh-src 源码构建产物同步 @deepseek-ai/* 到 node_modules"
 	@echo "  make sync       快速同步运行产物到已安装副本（免打包）"
 	@echo "  make login      登录 VS Code 市场（发布前一次性操作，或导出 VSCE_PAT）"
 	@echo "  make verify-pat 校验认证是否有效（PAT 或 AZURE=1 的 Entra ID 身份）"

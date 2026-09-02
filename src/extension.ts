@@ -11,15 +11,14 @@ import * as fs from 'node:fs'
 import * as https from 'node:https'
 import * as path from 'node:path'
 import * as vscode from 'vscode'
-import { bundledCliPath, DshServer, probeDshuiServer } from './dshServer'
+import { bundledCliPath, DshServer, probeDshuiMarker, probeDshuiServer } from './dshServer'
 import { installCrashHandlers, logger, setLogFile } from './logger'
 import { killProcessOnPort } from './killPort'
 import { OpenBridge } from './openBridge'
-import { patchFileOpener } from './openPatch'
 import { isObject, RollbackReviewManager, type RollbackFileChange } from './rollbackReview'
 import { installPlugins, resolveDshHome, type InstalledPlugin } from './plugins'
 import {
-  bridgesPath, registerBridge, registerServerUser, startServerUserHeartbeat,
+  bridgesPath, readRegistry, registerBridge, registerServerUser, startServerUserHeartbeat,
   unregisterBridge, unregisterServerUser, writeWorkspaceMarker,
 } from './sharedBackend'
 import {
@@ -257,6 +256,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   let server: DshServer | null = null
   let serverStart: Promise<number> | null = null
+  /** The dsh launch token for the active server (empty when none/attached without it). */
+  let serverLaunchToken = ''
   let currentView: vscode.WebviewView | null = null
   let currentWorkspacePath: string | undefined
   let registeredSharedUser = false
@@ -281,12 +282,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     } catch (error) {
       logger.error('[dshui] open bridge failed to start:', error)
     }
-    const result = patchFileOpener(
-      path.join(extensionRoot, 'node_modules', '@deepseek-ai', 'dsh-host-apiproxy', 'lib', 'index.js'),
-    )
-    logger.info(`[dshui] file opener patch: patched=${result.patched} note=${result.note ?? ''}`)
-    // 登记本窗口的桥：api-proxy 补丁按「打开路径所属工作区」路由到对应窗口的桥，
-    // 这样共享后端下点开的文件能在当前窗口打开（而不总是落在 owner 窗口）。
+    // 登记本窗口的桥：源码编译后的 host 原生 opener（dshui-host-bundles.patch）
+    // 按「打开路径所属工作区」路由到对应窗口的桥，这样共享后端下点开的文件能在
+    // 当前窗口打开（而不总是落在 owner 窗口）。
     if (openBridge.running) {
       const initialWorkspace = currentWorkspace()
       if (initialWorkspace !== undefined) {
@@ -400,6 +398,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       }
     }
     const notifyReady = (boundPort: number): void => {
+      // Prefer the process token we just read from the child's URL; when this
+      // window adopted another window's server (launchTokenValue is empty),
+      // fall back to the shared registry record so the webview can still
+      // authenticate against the server's browser-token index.
+      serverLaunchToken = server?.launchTokenValue || readRegistry(dshHome)?.token || serverLaunchToken
       logger.info(`[dshui] dsh web ready on port ${boundPort} for ${workspacePath}`)
       serverStart = null
       if (currentView !== null && currentWorkspacePath === workspacePath) {
@@ -411,7 +414,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       registeredSharedUser = true
       serverUserHeartbeat ??= startServerUserHeartbeat(dshHome)
       try {
-        await registerServerUser(dshHome, boundPort, owner)
+        await registerServerUser(dshHome, boundPort, owner, server?.launchTokenValue)
       } catch (error) {
         logger.error('[dshui] shared registry register failed:', error)
       }
@@ -422,10 +425,23 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         // 注册自己的工作区（host 插件会经 marker 登记）并以普通用户身份加入。
         if (await probeDshuiServer(port)) {
           server = DshServer.attach(port, workspacePath)
+          // Adopt the owner window's launch token so the browser-auth index can
+          // exchange it for a signed cookie (otherwise this window's webview 401s).
+          serverLaunchToken = readRegistry(dshHome)?.token ?? ''
           writeWorkspaceMarker(dshHome, workspacePath)
           await registerUse(port, false)
           notifyReady(port)
           return port
+        }
+        // No compatible dshui server on the port. Do NOT auto-reclaim here: a
+        // probe can transiently miss the boot manifest (a restarting/starting
+        // server), and killing a valid shared server would disrupt every window.
+        // If a genuinely incompatible server holds the port, the fresh spawn
+        // below fails with EADDRINUSE and surfaces that clearly instead.
+        if (shared && await probeDshuiMarker(port)) {
+          logger.warn(
+            `[dshui] detected an incompatible dshui server on port ${port}; spawning a fresh one (if it fails to bind, the port is held by an older-version server)`,
+          )
         }
       }
       server = new DshServer({
@@ -479,9 +495,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   /** Point a view's iframe at the server URL for the given scope. The URL also
    *  carries the current VS Code color scheme (`dshui_theme`) so the embedded
-   *  SPA boots with the right palette before any relayed message arrives. */
-  function makeUrl(workspacePath: string, port: number): string {
-    return `http://127.0.0.1:${port}/?dshui_workspace=${encodeURIComponent(workspacePath)}&dshui_theme=${activeColorScheme()}`
+   *  SPA boots with the right palette before any relayed message arrives. Since
+   *  dsh 0.1.2 the index is behind browser-token auth, so the dsh launch token
+   *  rides the URL too (`token=`), letting the server mint a signed cookie. */
+  function makeUrl(workspacePath: string, port: number, token = serverLaunchToken): string {
+    return `http://127.0.0.1:${port}/?${token === '' ? '' : `token=${encodeURIComponent(token)}&`}dshui_workspace=${encodeURIComponent(workspacePath)}&dshui_theme=${activeColorScheme()}`
   }
 
   /** Point a view's iframe at the server URL for the given scope. */

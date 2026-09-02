@@ -1,5 +1,5 @@
 import type { OpenAtRequest, OpenAtValue, RollbackExecuteRequest, RollbackExecuteResult, RollbackFileChange, RollbackModification, RollbackPrepareResult, RollbackResult, RollbackStatusValue } from '../shared/types.ts';
-import type { RollbackCordisContext, Session } from './context.ts';
+import type { RollbackCordisContext, SessionEvent } from './context.ts';
 import { ChangeLedger } from './ledger.ts';
 import type { LedgerModificationRecord } from './ledger.ts';
 import { RollbackSafety } from './safety.ts';
@@ -36,7 +36,7 @@ export declare class RollbackRestore {
 }
 export declare function parseRecordArgs(raw: string | undefined): Record<string, unknown>;
 /** Reusable modification builder: ledger records + log-only write/edit events. */
-export declare function buildModificationsFromRecords(cwd: string, events: readonly Session['events'][number][], records: readonly LedgerModificationRecord[], later: (record: LedgerModificationRecord) => LedgerModificationRecord[], turn?: number): RollbackModification[];
+export declare function buildModificationsFromRecords(cwd: string, events: readonly SessionEvent[], records: readonly LedgerModificationRecord[], later: (record: LedgerModificationRecord) => LedgerModificationRecord[], turn?: number): RollbackModification[];
 /** Attach per-path tool-call patch lists onto file-level changes. */
 export declare function attachToolCallsToChanges(changes: RollbackFileChange[], modifications: readonly RollbackModification[]): void;
 export declare function sessionLogHunks(event: {

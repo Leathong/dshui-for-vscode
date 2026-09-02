@@ -205,11 +205,11 @@ function countLines(text) {
     return text.split('\n').length;
 }
 /** Open turn/step for a session, derived from the durable log boundaries. */
-export function sessionTurnPosition(session) {
+export function sessionTurnPosition(events) {
     let turn = 0;
     let step = 0;
     let seq = -1;
-    for (const event of session.events) {
+    for (const event of events) {
         seq = event.seq;
         if (event.type === 'turn/start')
             turn = event.data.turn;
@@ -289,8 +289,9 @@ export class ChangeLedger {
         if (list.length === 0)
             this.pending.delete(key);
         const session = actor?.agent?.session;
-        const position = session === undefined ? undefined : this.positionForCall(session, selected.modificationId);
-        const fallback = session === undefined ? undefined : sessionTurnPosition(session);
+        const sessionEvents = session === undefined ? undefined : session.snapshotEvents();
+        const position = sessionEvents === undefined ? undefined : this.positionForCall(sessionEvents, selected.modificationId);
+        const fallback = sessionEvents === undefined ? undefined : sessionTurnPosition(sessionEvents);
         const turn = position?.turn ?? fallback?.turn ?? 0;
         const step = position?.step ?? fallback?.step ?? 0;
         const seq = position?.seq ?? fallback?.seq ?? -1;
@@ -580,8 +581,8 @@ export class ChangeLedger {
         list.push(pending);
         this.pending.set(key, list);
     }
-    positionForCall(session, callId) {
-        for (const event of [...session.events].reverse()) {
+    positionForCall(events, callId) {
+        for (const event of [...events].reverse()) {
             if (event.type !== 'tool/call')
                 continue;
             const data = event.data;

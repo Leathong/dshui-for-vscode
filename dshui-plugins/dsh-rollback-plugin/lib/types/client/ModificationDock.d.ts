@@ -1,6 +1,6 @@
 import type { ReactElement } from 'react';
 import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots';
-import type { ConversationSnapshot, SessionId } from '@deepseek-ai/dsh-client-runtime/client';
+import type { SessionSnapshot } from '@deepseek-ai/dsh-api-session-controller/client';
 import type { RemoteResult } from '@deepseek-ai/dsh-typert-protocol';
 import type { OpenAtResult, RollbackAcceptResult, RollbackSessionChangesResult, RollbackUndoFileResult, RollbackUndoModificationResult } from '../shared/types.ts';
 export interface ModificationDockInjected {
@@ -14,8 +14,7 @@ export interface ModificationDockInjected {
     openAt: (path: string, line?: number) => Promise<RemoteResult<OpenAtResult>>;
 }
 export interface ModificationDockProps extends ModificationDockInjected {
-    session: ConversationSnapshot;
-    sessionId: SessionId;
+    session: SessionSnapshot;
     t: TranslateNS<'rollback'>;
 }
 export declare function ModificationDock(props: ModificationDockProps): ReactElement | null;

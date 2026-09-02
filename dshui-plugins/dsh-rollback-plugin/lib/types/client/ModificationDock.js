@@ -169,7 +169,7 @@ export function ModificationDock(props) {
         const change = current.changes.find(item => item.path === path);
         const payload = {
             type: 'dshui:reviewModifications',
-            sessionId: props.sessionId,
+            sessionId: props.session.sessionId,
             listId: current.listId,
             path,
             ...(change === undefined ? {} : { change }),

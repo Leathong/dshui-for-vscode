@@ -15,12 +15,16 @@ const src = path.join(root, '.dsh-src')
 /** 每个改动文件需要存在的标记（一项即可视为该文件已补丁）。 */
 const CHECKS = [
   {
-    file: 'packages/client/ui-workspace/src/client/tree.ts',
-    markers: ['export function scopedWorkspacePath', 'scope: string = \'\''],
+    file: 'packages/client/tsdown.client.ts',
+    markers: ["id.startsWith('dshui-client-')"],
   },
   {
-    file: 'packages/client/ui-workspace/src/client/WorkspaceBrowser.tsx',
-    markers: ["typeof window === 'undefined' ? '' : scopedWorkspacePath()", 'SCOPE === \'\' && directoryFlowAvailable', "SCOPE !== '' && !wide ? null", 'onSessionDelete', 'deletedSessionIds'],
+    file: 'packages/client/ui-workspace/src/client/tree.ts',
+    markers: ['export function scopedWorkspacePath', 'deletedSessionIds', 'scope: string'],
+  },
+  {
+    file: 'packages/client/ui-workspace/src/client/rows/WorkspaceBrowser.tsx',
+    markers: ['scopedWorkspacePath', 'onSessionDelete', 'deletedSessionIds'],
   },
   {
     file: 'packages/client/ui-workspace/src/client/contract/slots.ts',
@@ -28,27 +32,15 @@ const CHECKS = [
   },
   {
     file: 'packages/client/ui-workspace/src/client/index.ts',
-    markers: ["type: 'dshui:deleteSession'", 'requestSessionDelete'],
+    markers: ["type: 'dshui:deleteSession'", "window.postMessage({ type: 'dshui:deleteSession', sessionId }"],
   },
   {
     file: 'packages/client/ui-workspace/src/client/rows/Rows.tsx',
-    markers: ["t('menu.deleteSession')", "onDelete: (id: SessionNode['id']) => void"],
+    markers: ["t('menu.deleteSession')", 'onDelete'],
   },
   {
     file: 'packages/client/ui-workspace/src/client/locales.ts',
     markers: ["'menu.deleteSession': '删除会话'"],
-  },
-  {
-    file: 'packages/client/ui-workspace/tests/rows.client.spec.tsx',
-    markers: ["name: '删除会话'"],
-  },
-  {
-    file: 'packages/client/ui-workspace/tests/workspace-browser.client.spec.tsx',
-    markers: ['deleteSession'],
-  },
-  {
-    file: 'packages/client/ui-workspace/tests/tree.client.spec.ts',
-    markers: ["deleted('gone')"],
   },
   {
     file: 'packages/client/ui-workspace/tsdown.config.ts',
@@ -56,7 +48,7 @@ const CHECKS = [
   },
   {
     file: 'packages/client/ui-conversation/src/client/skeleton/ConversationRoot.tsx',
-    markers: ['data-dshui-scope', 'staticChip={SCOPE !== \'\'}'],
+    markers: ['data-dshui-scope', "staticChip={SCOPE !== ''}"],
   },
   {
     file: 'packages/client/ui-conversation/src/client/skeleton/EmptyHero.tsx',
@@ -71,28 +63,52 @@ const CHECKS = [
     markers: ['.workspaceStatic'],
   },
   {
-    file: 'packages/client/ui-conversation/src/client/apply.ts',
-    markers: ['dshuiOrigin: cwd', 'ctx.get(\'connection\') as ConnectionHandle'],
-  },
-  {
-    file: 'packages/client/ui-conversation/src/client/chat/MessageItem.tsx',
-    markers: ['function userLinkDestination', "kind: 'file'", 'projectUserText(text: string, sessionLabels: readonly string[], openFile', "kind: 'link'"],
-  },
-  {
-    file: 'packages/client/ui-conversation/src/client/chat/ChatView.tsx',
-    markers: ['renderMessageImages={renderMessageImages}\n              openFile={openFile}'],
-  },
-  {
-    file: 'packages/client/ui-conversation/src/client/chat/MessageItem.module.css',
-    markers: ['.projectedText {', '.link {'],
-  },
-  {
-    file: 'packages/client/ui-conversation/tests/chat-branch-tails.client.spec.tsx',
-    markers: ['user bubbles open relative markdown-link destinations as files'],
-  },
-  {
     file: 'packages/client/ui-conversation/tsdown.config.ts',
     markers: ["clientBundle('dshui-client-ui-conversation'"],
+  },
+  {
+    file: 'packages/util/native-command/src/path-opener.ts',
+    markers: ['dshuiOpenViaBridge', 'dshuiVscodeFileUrl', 'dshuiOpenViaCli'],
+  },
+  {
+    file: 'packages/client/connection/src/browser-auth.ts',
+    markers: ["p[0] !== TOKEN_QUERY"],
+  },
+  {
+    file: 'packages/client/ui-conversation/src/client/apply.ts',
+    markers: ['const absent = (): ComposerBarInjected'],
+  },
+  {
+    file: 'packages/client/ui-chat/src/client/chat/MessageItem.tsx',
+    markers: ['userLinkDestination', 'projectUserTextWithLinks', "renderSlot('conversation.chat.user-actions'"],
+  },
+  {
+    file: 'packages/client/ui-chat/src/client/chat/MessageItem.module.css',
+    markers: ['.projectedText', '.link {'],
+  },
+  {
+    file: 'packages/client/ui-chat/src/client/chat/ChatView.tsx',
+    markers: ['openFile={requestOpenFile}'],
+  },
+  {
+    file: 'packages/client/ui-chat/src/client/chat/register-node-renderers.ts',
+    markers: ['SteeringMessageNodeView', "'conversation.chat.user-actions'"],
+  },
+  {
+    file: 'packages/client/ui-chat/src/client/contract/slots.ts',
+    markers: ["'conversation.chat.user-actions'", 'UserActionOwnerProps'],
+  },
+  {
+    file: 'packages/client/ui-chat/tests/chat-branch-tails.client.spec.tsx',
+    markers: ["'conversation.chat.user-actions'", 'openFile'],
+  },
+  {
+    file: 'packages/client/ui-chat/tests/chat-view.client.spec.tsx',
+    markers: ['SteeringMessageNodeView'],
+  },
+  {
+    file: 'packages/extensions/cordis-client-runner/src/client/slot-catalog.ts',
+    markers: ["'conversation.chat.user-actions'"],
   },
 ]
 

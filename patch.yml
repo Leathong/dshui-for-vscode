@@ -56,7 +56,3 @@
         # settings 段被拒时保留上一次生效的白名单并记录错误日志。
         extraWritableRoots: []
 
-    # 设置页「沙箱白名单」表单：读写 settings.yaml 的 sandbox-whitelist 段，
-    # 复用既有 settings 传输，不新增宿主事件面；最终生效仍受宿主守卫校验。
-    - id: dsh-client-ui-whitelist
-      name: dsh-client-ui-whitelist

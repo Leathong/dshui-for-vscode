@@ -96,13 +96,26 @@ code --install-extension dshui-for-vscode-0.1.0.vsix
 **方式二：从源码打包**
 
 ```sh
-npm install
-npm run compile                       # TypeScript → out/
-npx @vscode/vsce package              # 产出 dshui-for-vscode-<version>.vsix
+npm install                             # postinstall 会从 .dsh-src 同步 @deepseek-ai/*（见下）
+npm run compile                         # TypeScript → out/
+npx @vscode/vsce package                # 产出 dshui-for-vscode-<version>.vsix
 ```
 
-> 从源码打包**不需要**上游源码：`.dsh-src/` 与 `.tools/` 不入库，全新克隆中不存在；
-> `scripts/copy-clients.mjs` 在检出缺失时会自动跳过，使用随包提交的预编译客户端 bundle。
+> 从源码打包**需要**上游源码检出 `.dsh-src/`（不入库）：扩展的 `@deepseek-ai/*` 运行时不再从
+> npm 下载，而是由 `scripts/sync-dsh.mjs` 从 `.dsh-src` 的构建产物填充（含 dshui 对 host 的改动，
+> 见 `patches/README.md`）。全新克隆需先 clone 并构建 `.dsh-src`：
+>
+> ```sh
+> git clone https://github.com/deepseek-ai/deepseek-harness.git .dsh-src
+> cd .dsh-src && git checkout <patches/README.md 中锁定的基提交> \
+>   && git apply ../patches/dshui-bundles.patch \
+>   && pnpm install && pnpm run build:lib:host && pnpm run build:lib:client
+> cd .. && node scripts/sync-dsh.mjs
+> ```
+>
+> 打包（vsce 的 `vscode:prepublish`＝compile + copy:clients + sync:dsh）与 `npm install` 的
+> postinstall 都会自动跑 `sync-dsh`；`scripts/copy-clients.mjs` 在检出缺失时会自动跳过，使用随包
+> 提交的预编译客户端 bundle。
 
 开发调试：按 **F5**（仓库自带 `.vscode/launch.json`），或运行
 `code --extensionDevelopmentPath="$PWD" <文件夹>`。
@@ -136,7 +149,7 @@ npx @vscode/vsce package              # 产出 dshui-for-vscode-<version>.vsix
 
 ### 日志与排查
 
-扩展的报错、插件安装结果、内嵌 dsh 服务器自身的 stdout/stderr（含 api-proxy 补丁的告警）都会写入
+扩展的报错、插件安装结果、内嵌 dsh 服务器自身的 stdout/stderr（含 host 补丁桥接/CLI 回退的告警）都会写入
 VS Code 的**输出面板**（View → Output → 下拉选择 **dsh UI**，或命令面板运行 **dsh UI: Show Logs**）：
 服务器启动/退出、共享后端注册、打开桥、版本检查等生命周期事件也记录在内。服务器启动失败时，
 错误通知会附带 **View Logs / 查看日志** 按钮，一键打开输出面板。
@@ -323,9 +336,9 @@ webview 渲染的是**原版 dsh SPA**（deepseek-harness 仓库的上游代码�
 上游，而是集中在两个「客户端插件 bundle」中——它们由上游客户端包重新构建并注入 dshui 改动，
 随扩展分发**预编译产物**（`dshui-plugins/`），由 dsh 服务器从已安装包加载。
 
-对上游客户端源码的改动以补丁形式随仓库发布：`patches/dshui-client-bundles.patch`（15 个文件，
-覆盖 `ui-workspace` / `ui-conversation` 及其测试；基提交固定，应用步骤见 `patches/README.md`）。
-上游源码（`.dsh-src`）与构建工具（`.tools/`）**不提交到 git**。
+对上游源码的改动以补丁形式随仓库发布：`patches/dshui-bundles.patch`（26 个文件，覆盖
+`ui-workspace` / `ui-conversation` / `ui-chat` 及其测试、host 的文件打开与浏览器重定向；基提交固定，
+应用步骤见 `patches/README.md`）。上游源码（`.dsh-src`）与构建工具（`.tools/`）**不提交到 git**。
 
 | 改什么 | 改哪里 | 需要重建？ |
 | --- | --- | --- |
@@ -349,11 +362,12 @@ node scripts/check-theme-patch.mjs && node scripts/test-theme-patch.mjs
 git clone https://github.com/deepseek-ai/deepseek-harness.git .dsh-src
 cd .dsh-src
 git fetch origin <patches/README.md 中的基提交> && git checkout FETCH_HEAD
-git apply ../patches/dshui-client-bundles.patch   # 基提交不匹配会安全失败
+git apply ../patches/dshui-bundles.patch   # 基提交不匹配会安全失败
 cd ..
 
 # 1. 从源码构建改过的客户端 bundle
 cd .dsh-src
+pnpm clean
 pnpm install                      # 需要 pnpm 11.7.0、Node ^22.19 || >=24
 pnpm run build:lib:host           # 生成共享 /remote 模块
 pnpm run build:lib:client         # 编译并打包全部客户端包
@@ -379,26 +393,31 @@ code --extensionDevelopmentPath="$PWD" <文件夹>
 
 扩展把两处 dsh 版本绑定在一起，升级时需要一起对齐：
 
-1. **CLI 运行时**：`package.json` 的 `dependencies["@deepseek-ai/dsh"]`（当前 `0.1.1-rc.2`）。
-2. **客户端 bundle 的源码**：`.dsh-src` 检出（当前对应 rc.2 发布（`dsh-v0.1.1-rc.2`）加四个 dshui
-   提交；由于仓库 master 可能落后于 npm 发布，对齐方式是查看各包 `package.json` 的版本号，
-   并以实际运行测试为准）。
+1. **运行时与 host 源码**：`@deepseek-ai/*` 不再从 npm 下载，而是由 `.dsh-src` 构建产物填充
+   （根 `package.json` 只声明一个锚点 `@deepseek-ai/dsh`，闭包是其清单的传递依赖；`preinstall`
+   的 `sync-dsh` 先落好源码产物，`npm list`/`npm install` 不再走 registry）。dshui 对 host 的
+   改动经 `patches/dshui-bundles.patch` 固化并烘焙进构建产物（当前 `0.1.2-alpha.4`）。
+2. **客户端 bundle 的源码**：`.dsh-src` 检出（当前对应 `dsh-v0.1.2-alpha.4` 并重套 dshui
+   客户端补丁——自 0.1.2 起上游重构了会话/聊天客户端，补丁需按 `scripts/verify-patches.mjs`
+   重新套用到新结构；由于仓库 master 可能落后于 npm 发布，对齐方式是查看各包 `package.json`
+   的版本号，并以实际运行测试为准）。
 
 升级步骤：
 
 ```sh
-# 0. （可选）重新检出与目标版本对齐的源码——基提交固定为 patches/README.md 中的值
-#    git clone https://github.com/deepseek-ai/deepseek-harness.git .dsh-src
-#    cd .dsh-src && git fetch origin <基提交> && git checkout FETCH_HEAD && git apply ../patches/dshui-client-bundles.patch
+# 0. 重新检出与目标版本对齐的源码——基提交固定为 patches/README.md 中的值
+git clone https://github.com/deepseek-ai/deepseek-harness.git .dsh-src
+cd .dsh-src && git fetch origin <基提交> && git checkout FETCH_HEAD \
+  && git apply ../patches/dshui-bundles.patch
 
-# 1. 升级内置 CLI
-npm install @deepseek-ai/dsh@<新版本>
+# 1. 在 .dsh-src 内安装依赖并构建（host + client）
+pnpm install && pnpm run build:lib:host && pnpm run build:lib:client
 
-# 2. 检查补丁是否仍完整——核心一步
-node scripts/verify-patches.mjs      # 逐个标记缺失即说明该文件需要重新套用补丁
-#    改动已固化为 patches/dshui-client-bundles.patch：对基提交能干净应用则直接使用；
+# 2. 检查补丁是否仍完整——核心一步（在扩展根目录）
+cd .. && node scripts/verify-patches.mjs   # 逐个标记缺失即说明该文件需要重新套用补丁
+#    改动已固化为 patches/dshui-bundles.patch：对基提交能干净应用则直接使用；
 #    出现漂移则按步骤 3 的清单重套，并重新导出：
-#    git -C .dsh-src diff > patches/dshui-client-bundles.patch
+#    git -C .dsh-src diff > patches/dshui-bundles.patch
 
 # 3. 缺失的补丁按以下清单重新套用（改动都很小，按文件内注释即可）
 #    - ui-workspace/src/client/tree.ts                 加 scopedWorkspacePath 与各 derive 的 scope 参数与 deletedSessionIds
@@ -416,22 +435,27 @@ node scripts/verify-patches.mjs      # 逐个标记缺失即说明该文件需�
 #    - ui-conversation/tsdown.config.ts                bundle id 改为 dshui-client-ui-conversation
 #    - ui-conversation/tests/apply-inject.client.spec.tsx  openFile 经 host + click origin 打开（无 cwd 回退、宿主失败静默）
 #    - packages/client/tsdown.client.ts                workspaceManifest 对 dshui-client-* id 按包目录回退（rc.1 起按包名校验）
+#    - packages/util/native-command/src/path-opener.ts  darwin 分支改桥接/CLI/vscode://file + dshuiOrigin
+#    - packages/client/connection/src/browser-auth.ts     token 交换重定向保留 dshui 查询参数
 
 # 4. 重建并拷入
 pnpm run build:lib:host && pnpm run build:lib:client   # 在 .dsh-src 内
-node scripts/copy-clients.mjs
+node scripts/copy-clients.mjs                          # 客户端 bundle 拷入 dshui-plugins/
+node scripts/sync-dsh.mjs                              # @deepseek-ai/* 拷入 node_modules
 
-# 5. 重新编译扩展并打包
+# 5. 重新编译扩展并打包（vscode:prepublish 会再跑 copy:clients + sync:dsh）
 npm run compile && npx @vscode/vsce package
 ```
 
 其他随版本漂移的风险点（升级后应逐项检查）：
 
-- **`src/openPatch.ts`**（配合 `src/openBridge.ts`）：补丁定位的是 api-proxy 内原版 darwin 打开分支
-  的字符串，并依赖服务器环境变量 `DSHUI_OPEN_ENDPOINT`（扩展启动桥时注入）与 `DSHUI_CODE_CLI`
-  （应用内 `code` CLI 路径，桥不可用时的回退）。dsh 若修改该段代码，补丁会安全跳过并记录日志
-  （`file opener patch: ... skipping`）——此时按新代码重新编写分支字符串即可；桥接不可用时会自动
-  回退 `vscode://file`。
+- **`patches/dshui-bundles.patch` 的 host 部分**：定位的是 `packages/util/native-command/src/path-opener.ts`
+  的 darwin 打开分支与 `packages/client/connection/src/browser-auth.ts` 的 token 交换重定向，
+  并依赖服务器环境变量 `DSHUI_OPEN_ENDPOINT`（扩展启动桥时注入）、`DSHUI_CODE_CLI`（应用内 `code`
+  CLI 路径，桥不可用时的回退）与 `DSHUI_BRIDGES_FILE`。dsh 若修改该段代码，补丁会安全失败（`git
+  apply` 报错），按新源码重写即可；桥接不可用时会自动回退 `vscode://file`。
+- **`scripts/sync-dsh.mjs`**：拷贝 `@deepseek-ai/dsh` 运行时闭包含的包；若某包在 `.dsh-src`
+  未构建出 `lib/`，脚本会告警列名，此时不要打包发布。
 - **`patch.yml`**：覆盖的行 id（`ui-workspace` / `ui-conversation`）与插入的
   `dshui-host-ensure-workspace` 依赖 `web-app` bundle 中的行名与 `workspaceRegistry` / `webServer`
   服务名；这些若有变化，需同步更新。

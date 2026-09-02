@@ -1,0 +1,1962 @@
+diff --git a/packages/client/connection/src/browser-auth.ts b/packages/client/connection/src/browser-auth.ts
+index 10353d9a06..a2ca442c05 100644
+--- a/packages/client/connection/src/browser-auth.ts
++++ b/packages/client/connection/src/browser-auth.ts
+@@ -255,7 +255,11 @@ export class BrowserAuth {
+         }, this.secret)
+         res.writeHead(303, {
+           'cache-control': 'no-store',
+-          'location': '/',
++          // dshui patch: the bare `/` redirect strips every query param, which
++          // would drop the workspace scope (`dshui_workspace`) and theme
++          // (`dshui_theme`) from a shared-backend window's URL. Keep every
++          // non-token query parameter so the scope survives the token exchange.
++          'location': (q => q === '' ? '/' : '/?' + q)([...url.searchParams].filter(p => p[0] !== TOKEN_QUERY).map(p => p[0] + '=' + encodeURIComponent(p[1])).join('&')),
+           'referrer-policy': 'no-referrer',
+           'set-cookie': sessionCookie(
+             cookieName(authority), value, expiresAt, Math.floor(this.maxAgeMilliseconds / 1000),
+diff --git a/packages/client/tsdown.client.ts b/packages/client/tsdown.client.ts
+index d6d8bad550..da88a458a0 100644
+--- a/packages/client/tsdown.client.ts
++++ b/packages/client/tsdown.client.ts
+@@ -357,6 +357,20 @@ function workspaceManifest(id: string): WorkspaceManifest {
+     manifestCache.set(id, manifest)
+     return manifest
+   }
++  // dshui overlay: dshui bundle ids name the profile rows (dshui-client-*),
++  // not the workspace package. The row name derives from the package
++  // directory, so locate the manifest by that directory.
++  if (id.startsWith('dshui-client-')) {
++    const dir = `packages/client/${id.slice('dshui-client-'.length)}`
++    const manifestPath = `${dir}/package.json`
++    if (existsSync(resolvePath(REPOSITORY_ROOT, manifestPath))) {
++      const manifest = JSON.parse(
++        readFileSync(resolvePath(REPOSITORY_ROOT, manifestPath), 'utf8'),
++      ) as WorkspaceManifest
++      manifestCache.set(id, manifest)
++      return manifest
++    }
++  }
+   throw new Error(`tsdown: no packages/*/*/package.json declares the name ${id}`)
+ }
+ 
+diff --git a/packages/client/ui-chat/src/client/chat/ChatView.tsx b/packages/client/ui-chat/src/client/chat/ChatView.tsx
+index 403eecd96f..273f105ac5 100644
+--- a/packages/client/ui-chat/src/client/chat/ChatView.tsx
++++ b/packages/client/ui-chat/src/client/chat/ChatView.tsx
+@@ -803,6 +803,7 @@ export function ChatView({
+               key={item.id}
+               content={item.content}
+               renderMessageImages={renderMessageImages}
++              openFile={requestOpenFile}
+               t={t}
+             />
+           ))}
+@@ -811,6 +812,7 @@ export function ChatView({
+               key={submission.requestId}
+               submission={submission}
+               renderMessageImages={renderMessageImages}
++              openFile={requestOpenFile}
+               t={t}
+             />
+           ))}
+diff --git a/packages/client/ui-chat/src/client/chat/MessageItem.module.css b/packages/client/ui-chat/src/client/chat/MessageItem.module.css
+index 7c616f4a0e..606d3ed229 100644
+--- a/packages/client/ui-chat/src/client/chat/MessageItem.module.css
++++ b/packages/client/ui-chat/src/client/chat/MessageItem.module.css
+@@ -292,3 +292,31 @@
+     animation: none;
+   }
+ }
++
++/* dshui overlay: decorated user-text projection (runs + chips + markdown
++   links) flows inline in one pre-wrap span — block MessageText boxes would
++   stack every segment. */
++.projectedText {
++  white-space: pre-wrap;
++  word-break: break-word;
++}
++
++/* dshui overlay: markdown link in a user bubble, same link language as
++   assistant markdown — business-primary blue at rest, underline on
++   hover/focus. External destinations are anchors, file paths are buttons, so
++   the button chrome resets to plain inline text. */
++.link {
++  margin: 0;
++  padding: 0;
++  border: none;
++  background: none;
++  font: inherit;
++  color: var(--dsw-alias-state-business-primary);
++  text-decoration: none;
++  cursor: pointer;
++}
++
++.link:hover,
++.link:focus-visible {
++  text-decoration: underline;
++}
+diff --git a/packages/client/ui-chat/src/client/chat/MessageItem.tsx b/packages/client/ui-chat/src/client/chat/MessageItem.tsx
+index 07e9fb32a0..4083d50175 100644
+--- a/packages/client/ui-chat/src/client/chat/MessageItem.tsx
++++ b/packages/client/ui-chat/src/client/chat/MessageItem.tsx
+@@ -2,6 +2,7 @@ import { memo, useEffect, useMemo, useState } from 'react'
+ import type { ReactNode } from 'react'
+ import type { PendingSubmission } from '@deepseek-ai/dsh-api-session-controller/client'
+ import type { MessageImageSource } from '@deepseek-ai/dsh-client-ui-conversation/client'
++import type { PropsRenderSlots } from '@deepseek-ai/dsh-client-ui-slots'
+ import { JsonBlock, projectUserText, StateDot } from '@deepseek-ai/dsh-client-ui-primitives'
+ import type { ChatNodeOwnerProps, ChatNodeViewProps, ChatViewSlotProps } from '../contract/slots.ts'
+ import type { ModelRetryNode, TurnErrorNode, UserMessageNode } from '../contract/snapshot.ts'
+@@ -146,12 +147,93 @@ function TurnMaxTokensItem({ t }: {
+   )
+ }
+ 
++/**
++ * Classification of a `[label](destination)` token's destination in a user
++ * bubble: an allowlisted absolute URL opens externally; anything `new URL`
++ * cannot parse reads as a file path the view's opener resolves against the
++ * session cwd.
++ */
++type UserLinkDestination =
++  | { kind: 'external'; href: string; newTab: boolean }
++  | { kind: 'file'; path: string }
++
++/**
++ * @param raw - The verbatim `(destination)` of a `[label](destination)` token.
++ * @returns the classified destination, or null to keep the syntax literal
++ * (absolute URLs outside the http/https/mailto allowlist).
++ */
++function userLinkDestination(raw: string): UserLinkDestination | null {
++  let protocol: string
++  try {
++    protocol = new URL(raw).protocol
++  } catch {
++    // Unparseable as an absolute URL — a (relative) file path.
++    return { kind: 'file', path: raw }
++  }
++  if (protocol === 'http:' || protocol === 'https:') return { kind: 'external', href: raw, newTab: true }
++  return protocol === 'mailto:' ? { kind: 'external', href: raw, newTab: false } : null
++}
++
++/**
++ * Display projection of sent user text: the upstream reference-chip projection
++ * (wire session form, exact session labels, and plain `/name` / `@name`
++ * tokens) plus `[label](destination)` markdown links (dshui overlay). An
++ * allowlisted absolute URL opens externally; a destination `new URL` cannot
++ * parse reads as a path the view's `openFile` resolves against the session
++ * cwd; any other absolute URL keeps the literal syntax. Everything flows
++ * inline in one pre-wrap span — block boxes would stack every segment.
++ */
++function projectUserTextWithLinks(
++  text: string,
++  referenceLabels: readonly string[],
++  openFile: (path: string) => void,
++): ReactNode {
++  const re = /\[([^\][\n]+)\]\(([^)\s]+)\)/g
++  const parts: ReactNode[] = []
++  let cursor = 0
++  let m: RegExpExecArray | null
++  while ((m = re.exec(text)) !== null) {
++    const destination = userLinkDestination(m[2] ?? '')
++    if (destination === null) continue
++    if (m.index > cursor) parts.push(<span key={`t${cursor}`}>{projectUserText(text.slice(cursor, m.index), referenceLabels)}</span>)
++    parts.push(
++      destination.kind === 'external'
++        ? (
++          <a
++            key={`l${m.index}`}
++            className={css.link}
++            href={destination.href}
++            {...(destination.newTab ? { target: '_blank', rel: 'noopener noreferrer' } : {})}
++          >
++            {m[1]}
++          </a>
++        )
++        : (
++          <button
++            key={`l${m.index}`}
++            type="button"
++            className={css.link}
++            onClick={() => { openFile(destination.path) }}
++          >
++            {m[1]}
++          </button>
++        ),
++    )
++    cursor = m.index + m[0].length
++  }
++  if (parts.length === 0) return projectUserText(text, referenceLabels)
++  if (cursor < text.length) parts.push(<span key={`t${cursor}`}>{projectUserText(text.slice(cursor), referenceLabels)}</span>)
++  return <span className={css.projectedText}>{parts}</span>
++}
++
+ /** Right-aligned bubble shared by user and steering rows. */
+ function UserStyleBubble({
+-  content, renderMessageImages, actions, pending = false, echo = false, referenceLabels = [], previewImages, t,
++  content, renderMessageImages, openFile, actions, pending = false, echo = false, referenceLabels = [], previewImages, t,
+ }: {
+   content: readonly unknown[]
+   renderMessageImages: ChatNodeOwnerProps['renderMessageImages']
++  /** Open a markdown-link file path (resolved against the session cwd by the view). */
++  openFile: (path: string) => void
+   /** Optional IconActions (or similar) below the bubble; receives the joined text. */
+   actions?: (text: string) => ReactNode
+   /** Whether this is the Host-authoritative pre-admission steering projection. */
+@@ -177,7 +259,7 @@ function UserStyleBubble({
+       <div className={css.userStack}>
+         {renderMessageImages({ images, align: 'end' })}
+         {showBubble && <div className={css.bubble}>
+-          {projectUserText(text, referenceLabels)}
++          {projectUserTextWithLinks(text, referenceLabels, openFile)}
+           {rest.map((block, i) => <JsonBlock key={i} label={t('message.extraBlock')} payload={block} truncatedLabel={truncated} />)}
+         </div>}
+         {referenceLabels.length > 0 && (
+@@ -197,15 +279,17 @@ function UserStyleBubble({
+  * @param props - Pending message content and conversation translator.
+  * @returns the pending steering bubble.
+  */
+-export function PendingSteeringBubble({ content, renderMessageImages, t }: {
++export function PendingSteeringBubble({ content, renderMessageImages, openFile, t }: {
+   content: readonly unknown[]
+   renderMessageImages: ChatNodeOwnerProps['renderMessageImages']
++  openFile: (path: string) => void
+   t: ChatViewSlotProps['t']
+ }): ReactNode {
+   return (
+     <UserStyleBubble
+       content={content}
+       renderMessageImages={renderMessageImages}
++      openFile={openFile}
+       pending
+       t={t}
+       actions={text => (
+@@ -228,9 +312,10 @@ export function PendingSteeringBubble({ content, renderMessageImages, t }: {
+  * @param props - the session snapshot's pending submission and render seats.
+  * @returns the echoed user bubble.
+  */
+-export function PendingSubmissionBubble({ submission, renderMessageImages, t }: {
++export function PendingSubmissionBubble({ submission, renderMessageImages, openFile, t }: {
+   submission: PendingSubmission
+   renderMessageImages: ChatNodeOwnerProps['renderMessageImages']
++  openFile: (path: string) => void
+   t: ChatViewSlotProps['t']
+ }): ReactNode {
+   const content = useMemo(
+@@ -253,6 +338,7 @@ export function PendingSubmissionBubble({ submission, renderMessageImages, t }:
+       content={content}
+       previewImages={previewImages}
+       renderMessageImages={renderMessageImages}
++      openFile={openFile}
+       pending={submission.placement === 'steering'}
+       echo
+       t={t}
+@@ -271,13 +357,46 @@ export function PendingSubmissionBubble({ submission, renderMessageImages, t }:
+ 
+ /** User and admitted-steering keyed Chat renderer. */
+ export const UserMessageNodeView = memo(function UserMessageNodeView({
+-  node, renderMessageImages, t,
++  node, renderMessageImages, openFile, renderSlot, t,
++}: ChatNodeViewProps<'user' | 'steering'> & PropsRenderSlots<'conversation.chat.user-actions'>) {
++  const data = node.data
++  const turn = node.location.kind === 'turn' || node.location.kind === 'step'
++    ? node.location.turn
++    : undefined
++  const userActions: ReactNode = turn === undefined
++    ? null
++    : renderSlot('conversation.chat.user-actions', { turn })
++  return (
++    <UserStyleBubble
++      content={data.content}
++      renderMessageImages={renderMessageImages}
++      openFile={openFile}
++      {...data.referenceLabels === undefined ? {} : { referenceLabels: data.referenceLabels }}
++      t={t}
++      actions={text => (
++        <MessageIconActions
++          text={text}
++          time={data.time}
++          clock="start"
++          className={css.actions}
++          extraActions={userActions}
++          t={t}
++        />
++      )}
++    />
++  )
++})
++
++/** Steering (mid-turn admitted user message) keyed Chat renderer; no user-actions strip. */
++export const SteeringMessageNodeView = memo(function SteeringMessageNodeView({
++  node, renderMessageImages, openFile, t,
+ }: ChatNodeViewProps<'user' | 'steering'>) {
+   const data = node.data
+   return (
+     <UserStyleBubble
+       content={data.content}
+       renderMessageImages={renderMessageImages}
++      openFile={openFile}
+       {...data.referenceLabels === undefined ? {} : { referenceLabels: data.referenceLabels }}
+       t={t}
+       actions={text => (
+diff --git a/packages/client/ui-chat/src/client/chat/register-node-renderers.ts b/packages/client/ui-chat/src/client/chat/register-node-renderers.ts
+index e58ec4a9ad..8ef22bd89d 100644
+--- a/packages/client/ui-chat/src/client/chat/register-node-renderers.ts
++++ b/packages/client/ui-chat/src/client/chat/register-node-renderers.ts
+@@ -3,8 +3,8 @@ import { NS } from '../locale.ts'
+ import { AssistantNodeView } from './AssistantNodeView.tsx'
+ import { CommandNodeView, ManualCompactionNodeView } from './CommandNodeView.tsx'
+ import {
+-  CompactionNodeView, ContextMessageNodeView, RetryNodeView, TurnErrorNodeView,
+-  TurnMaxTokensNodeView, UnknownNodeView, UserMessageNodeView,
++  CompactionNodeView, ContextMessageNodeView, RetryNodeView, SteeringMessageNodeView,
++  TurnErrorNodeView, TurnMaxTokensNodeView, UnknownNodeView, UserMessageNodeView,
+ } from './MessageItem.tsx'
+ import { SystemPromptNodeView } from './SystemPromptRow.tsx'
+ import { TurnProcessNodeView } from './TurnProcessNodeView.tsx'
+@@ -15,10 +15,14 @@ import { TurnTailNodeView } from './TurnTailNodeView.tsx'
+  * @param ctx - owning UI Conversation context.
+  */
+ export function registerChatNodeRenderers(ctx: Context): void {
++  ctx.slots.inject('conversation.chat.node', () => ctx.slots.register({
++    name: 'conversation.chat.node',
++    key: 'user',
++    locale: NS,
++    children: { 'conversation.chat.user-actions': { kind: 'list', scope: 'session' } },
++  }, UserMessageNodeView))
+   ctx.slots.inject('conversation.chat.node', () => ctx.slots.register(
+-    { name: 'conversation.chat.node', key: 'user', locale: NS }, UserMessageNodeView))
+-  ctx.slots.inject('conversation.chat.node', () => ctx.slots.register(
+-    { name: 'conversation.chat.node', key: 'steering', locale: NS }, UserMessageNodeView))
++    { name: 'conversation.chat.node', key: 'steering', locale: NS }, SteeringMessageNodeView))
+   ctx.slots.inject('conversation.chat.node', () => ctx.slots.register(
+     { name: 'conversation.chat.node', key: 'context', locale: NS }, ContextMessageNodeView))
+   ctx.slots.inject('conversation.chat.node', () => ctx.slots.register(
+diff --git a/packages/client/ui-chat/src/client/contract/slots.ts b/packages/client/ui-chat/src/client/contract/slots.ts
+index 16daf32b2b..c8ab164ece 100644
+--- a/packages/client/ui-chat/src/client/contract/slots.ts
++++ b/packages/client/ui-chat/src/client/contract/slots.ts
+@@ -43,6 +43,17 @@ export interface AssistantActionOwnerProps {
+   messageId: MessageId
+ }
+ 
++/**
++ * Owner currency of the user-message action strip: the enclosing Turn the
++ * message opens. Only turn-resolved user messages reach this slot, so a
++ * registrant can anchor turn-scoped actions (e.g. workspace rollback) to the
++ * message's own Turn.
++ */
++export interface UserActionOwnerProps {
++  /** Engine-owned enclosing Turn boundary the message belongs to. */
++  turn: TurnLocation
++}
++
+ /** Optional prose file-mention provider consumed by Chat. */
+ export interface ChatFileMentions {
+   /**
+@@ -219,6 +230,14 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
+      * that entry. With no entries, the standard action row remains unchanged.
+      */
+     'conversation.chat.assistant-actions': { kind: 'list'; scope: 'session'; owner: AssistantActionOwnerProps }
++    /**
++     * Action strip attached to one user message, rendered inside that
++     * message's IconActions row. The chat entry owns the render site and
++     * passes the enclosing Turn; contributors add per-message actions
++     * without importing the conversation implementation. Entries render by
++     * ascending `order`.
++     */
++    'conversation.chat.user-actions': { kind: 'list'; scope: 'session'; owner: UserActionOwnerProps }
+     /**
+      * Whole details-panel body for the selected Tool call. The component receives
+      * the running or settled block and optional workspace root. A registration
+diff --git a/packages/client/ui-chat/tests/chat-branch-tails.client.spec.tsx b/packages/client/ui-chat/tests/chat-branch-tails.client.spec.tsx
+index 7bcd9373b2..195faa2fa7 100644
+--- a/packages/client/ui-chat/tests/chat-branch-tails.client.spec.tsx
++++ b/packages/client/ui-chat/tests/chat-branch-tails.client.spec.tsx
+@@ -1,6 +1,7 @@
+ // @vitest-environment jsdom
+ 
+ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
++import type { ComponentProps } from 'react'
+ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
+ import { bindSnapshotSelector, makeTranslate } from '@deepseek-ai/dsh-client-test-runtime'
+ import { zh as commonZh } from '@deepseek-ai/dsh-client-locale/src/locales/zh.ts'
+@@ -12,8 +13,8 @@ import {
+   formatMessageClock, msUntilNextLocalMidnight, startOfLocalDay,
+ } from '../src/client/chat/message-chrome.ts'
+ import {
+-  CompactionNodeView, ContextMessageNodeView, RetryNodeView, UnknownNodeView,
+-  UserMessageNodeView,
++  CompactionNodeView, ContextMessageNodeView, RetryNodeView, SteeringMessageNodeView,
++  UnknownNodeView, UserMessageNodeView,
+ } from '../src/client/chat/MessageItem.tsx'
+ import { AssistantMarkdown, type AssistantMarkdownProps } from '../src/client/chat/AssistantMarkdown.tsx'
+ import { StatsLine } from '../src/client/chat/StatsLine.tsx'
+@@ -36,6 +37,8 @@ afterEach(() => {
+ 
+ const t: ChatNodeViewProps['t'] = makeTranslate(zh, commonZh)
+ const renderMessageImages: AssistantMarkdownProps['renderMessageImages'] = () => null
++/** The user-actions child slot is unopened in these arms; stub it out. */
++const renderUserActionsSlot = (() => null) as unknown as ComponentProps<typeof UserMessageNodeView>['renderSlot']
+ const RETRY_ID = 'retry-fixture' as Extract<ConversationNode, { kind: 'model-retry' }>['retryId']
+ 
+ // Recency scans the whole transcript; a detached fixture is its own latest row.
+@@ -48,10 +51,12 @@ interface MessageItemProps {
+   readonly node: ConversationNode
+   readonly t: ChatNodeViewProps['t']
+   readonly referenceLabels?: readonly string[]
++  /** Open a markdown-link file path (resolved against the session cwd by the view). */
++  readonly openFile?: (path: string) => void
+ }
+ 
+ /** Legacy-node fixture adapter for the independently registered renderers. */
+-function MessageItem({ node, t: translate, referenceLabels }: MessageItemProps) {
++function MessageItem({ node, t: translate, referenceLabels, openFile = () => {} }: MessageItemProps) {
+   const kind = node.kind === 'assistant' ? 'assistant-step' : node.kind
+   const viewNode: ChatConversationViewNode = {
+     key: `fixture:${node.kind}:${node.seq}`,
+@@ -67,11 +72,16 @@ function MessageItem({ node, t: translate, referenceLabels }: MessageItemProps)
+         ? { ...node, referenceLabels }
+         : node,
+   }
+-  const props = { node: viewNode, t: translate, renderMessageImages, useChat: useDetachedChat } as ChatNodeViewProps
++  const props = { node: viewNode, t: translate, renderMessageImages, useChat: useDetachedChat, openFile } as ChatNodeViewProps
+   switch (node.kind) {
+     case 'user':
++      return (
++        <UserMessageNodeView
++          {...{ ...props, renderSlot: renderUserActionsSlot } as unknown as ComponentProps<typeof UserMessageNodeView>}
++        />
++      )
+     case 'steering':
+-      return <UserMessageNodeView {...props as ChatNodeViewProps<'user' | 'steering'>} />
++      return <SteeringMessageNodeView {...props as ChatNodeViewProps<'user' | 'steering'>} />
+     case 'context':
+       return <ContextMessageNodeView {...props as ChatNodeViewProps<'context'>} />
+     case 'compaction':
+@@ -141,6 +151,35 @@ describe('MessageItem arms', () => {
+     expect(view.container.textContent).toContain('README.md, please.')
+   })
+ 
++  it('projects [label](destination) links, opening allowlisted URLs externally and relative paths as files', () => {
++    const openFile = vi.fn()
++    const view = render(
++      <MessageItem
++        t={t}
++        openFile={openFile}
++        node={{
++          kind: 'user',
++          seq: 1,
++          time: 1_000,
++          content: [{ type: 'text', text: 'See [DeepSeek](https://deepseek.com), [mail me](mailto:a@b.com), read [Makefile](./Makefile) and [src](src/index.ts); note [raw ftp](ftp://example.com/x).' }] as never,
++          source: null,
++        }}
++      />,
++    )
++    const external = view.getByRole('link', { name: 'DeepSeek' })
++    expect(external.getAttribute('href')).toBe('https://deepseek.com')
++    expect(external.getAttribute('target')).toBe('_blank')
++    expect(view.getByRole('link', { name: 'mail me' }).getAttribute('href')).toBe('mailto:a@b.com')
++    // Relative destinations render as file-open buttons resolved against the session cwd.
++    fireEvent.click(view.getByRole('button', { name: 'Makefile' }))
++    fireEvent.click(view.getByRole('button', { name: 'src' }))
++    expect(openFile).toHaveBeenCalledTimes(2)
++    expect(openFile).toHaveBeenNthCalledWith(1, './Makefile')
++    expect(openFile).toHaveBeenNthCalledWith(2, 'src/index.ts')
++    // An absolute URL outside the allowlist keeps the literal syntax.
++    expect(view.container.textContent).toContain('[raw ftp](ftp://example.com/x)')
++  })
++
+   it('user bubbles expose clock / copy and neither branch nor edit; copy writes the text', () => {
+     const writeText = vi.fn().mockResolvedValue(undefined)
+     Object.defineProperty(navigator, 'clipboard', {
+@@ -396,6 +435,28 @@ describe('MessageItem arms', () => {
+     expect(files).toEqual(['new/AGENTS.md已新增', 'old/AGENTS.md已更新'])
+   })
+ 
++  it('opens the user-actions slot anchored to the message Turn when a contributor is present', () => {
++    const renderSlot = vi.fn(() => null)
++    const turnLocation = { turn: 3 } as never
++    const userProps = {
++      node: {
++        key: 'u1', kind: 'user' as const, id: 'u1', target: 'chat' as const, anchorSeq: 1,
++        location: { kind: 'turn' as const, turn: turnLocation },
++        visibility: 'visible' as const,
++        data: { seq: 1, time: 1_000, content: [{ type: 'text', text: 'hi' }], source: { kind: 'user' } },
++      } as never,
++      renderMessageImages,
++      openFile: () => {},
++      inspectCall: () => {},
++      forkAt: () => {},
++      fileMentions: () => undefined,
++      renderSlot,
++      t,
++    } as unknown as ComponentProps<typeof UserMessageNodeView>
++    render(<UserMessageNodeView {...userProps} />)
++    expect(renderSlot).toHaveBeenCalledWith('conversation.chat.user-actions', { turn: turnLocation })
++  })
++
+   it('keeps an interleaved unknown block in the order the model received it', () => {
+     const view = render(
+       <MessageItem t={t} node={{
+diff --git a/packages/client/ui-chat/tests/chat-view.client.spec.tsx b/packages/client/ui-chat/tests/chat-view.client.spec.tsx
+index 9e0818f37c..9d6e72e340 100644
+--- a/packages/client/ui-chat/tests/chat-view.client.spec.tsx
++++ b/packages/client/ui-chat/tests/chat-view.client.spec.tsx
+@@ -32,8 +32,8 @@ import { zh } from '../src/client/locale.ts'
+ import { AssistantNodeView } from '../src/client/chat/AssistantNodeView.tsx'
+ import { CommandNodeView, ManualCompactionNodeView } from '../src/client/chat/CommandNodeView.tsx'
+ import {
+-  CompactionNodeView, ContextMessageNodeView, RetryNodeView, TurnErrorNodeView,
+-  TurnMaxTokensNodeView, UnknownNodeView, UserMessageNodeView,
++  CompactionNodeView, ContextMessageNodeView, RetryNodeView, SteeringMessageNodeView,
++  TurnErrorNodeView, TurnMaxTokensNodeView, UnknownNodeView, UserMessageNodeView,
+ } from '../src/client/chat/MessageItem.tsx'
+ import { TurnTailNodeView } from '../src/client/chat/TurnTailNodeView.tsx'
+ import { TurnProcessNodeView } from '../src/client/chat/TurnProcessNodeView.tsx'
+@@ -277,6 +277,8 @@ function makeHarness(
+     React.ComponentProps<typeof TurnTailNodeView>['renderSlotChain']
+   const renderTurnTailSlot = (() => null) as unknown as
+     React.ComponentProps<typeof TurnTailNodeView>['renderSlot']
++  const renderUserActionsSlot = (() => null) as unknown as
++    React.ComponentProps<typeof UserMessageNodeView>['renderSlot']
+   let nodeSlotOverride: React.ComponentProps<typeof ChatNodeSeat>['renderSlot'] | undefined
+   const renderNodeSlot = ((key: string, owner: object, opts?: {
+     fallback?: React.ReactNode
+@@ -293,8 +295,13 @@ function makeHarness(
+     )
+     switch (nodeOwner.node.kind) {
+       case 'user':
++        return (
++          <UserMessageNodeView
++            {...{ ...nodeProps<'user'>(), renderSlot: renderUserActionsSlot } as unknown as React.ComponentProps<typeof UserMessageNodeView>}
++          />
++        )
+       case 'steering':
+-        return <UserMessageNodeView {...nodeProps<'user' | 'steering'>()} />
++        return <SteeringMessageNodeView {...nodeProps<'user' | 'steering'>()} />
+       case 'context':
+         return <ContextMessageNodeView {...nodeProps<'context'>()} />
+       case 'assistant-step':
+diff --git a/packages/client/ui-conversation/src/client/apply.ts b/packages/client/ui-conversation/src/client/apply.ts
+index 4c8527c1ee..d57ce74c19 100644
+--- a/packages/client/ui-conversation/src/client/apply.ts
++++ b/packages/client/ui-conversation/src/client/apply.ts
+@@ -84,10 +84,8 @@ function scopedConversation(sessions: ISessions, id: SessionId): IConversation {
+ }
+ 
+ /** Resolve package-internal attachment operations from the public service. */
+-function concreteConversation(ctx: Context): ConversationController {
+-  const conversation = ctx.get('conversation') as ConversationController | undefined
+-  if (conversation === undefined) throw new Error('ui-conversation: conversation service unavailable')
+-  return conversation
++function concreteConversation(ctx: Context): ConversationController | undefined {
++  return ctx.get('conversation') as ConversationController | undefined
+ }
+ 
+ /**
+@@ -281,25 +279,32 @@ export function apply(ctx: Context): void {
+       'conversation.composer.dock': { kind: 'list', scope: 'session' },
+     },
+     inject: (sessionId: SessionId | undefined): ComposerBarInjected => {
+-      if (sessionId === undefined) {
+-        return {
+-          keyboard: undefined,
+-          addImages: undefined,
+-          removeImage: undefined,
+-          draftImages: undefined,
+-          resolveSubmitMode: (running, gesture, steeringAvailable) =>
+-            submissionPolicy.resolve(running, gesture, steeringAvailable),
+-          toggleCommandMenu: undefined,
+-          stop: undefined,
+-          command: undefined,
+-          hooks: {
+-            notices: ABSENT_NOTICES,
+-            lexicon: ABSENT_LEXICON,
+-            menuLauncher: ABSENT_MENU_LAUNCHER,
+-          },
+-        }
+-      }
++      const absent = (): ComposerBarInjected => ({
++        keyboard: undefined,
++        addImages: undefined,
++        removeImage: undefined,
++        draftImages: undefined,
++        resolveSubmitMode: (running, gesture, steeringAvailable) =>
++          submissionPolicy.resolve(running, gesture, steeringAvailable),
++        toggleCommandMenu: undefined,
++        stop: undefined,
++        command: undefined,
++        hooks: {
++          notices: ABSENT_NOTICES,
++          lexicon: ABSENT_LEXICON,
++          menuLauncher: ABSENT_MENU_LAUNCHER,
++        },
++      })
++      if (sessionId === undefined) return absent()
++      // dshui patch: a shared-backend coalesced session-maybe re-bind (a
++      // second window connecting) can re-resolve the binding before the
++      // ConversationController fiber re-activates, so the service reads
++      // undefined here. Throwing crashes the slot entry and abdicates it
++      // (one-shot, no retry), permanently vanishing the composer until a window
++      // reload. Degrade to the absent posture; the next binding re-resolution
++      // re-runs this cached inject and restores the live composer.
+       const conversation = concreteConversation(ctx)
++      if (conversation === undefined) return absent()
+       const shell = inputHub.shell(sessionId)
+       const inputTriggers = inputHub.inputTriggers(sessionId)
+       return {
+diff --git a/packages/client/ui-conversation/src/client/skeleton/ConversationRoot.module.css b/packages/client/ui-conversation/src/client/skeleton/ConversationRoot.module.css
+index 3e98b17b42..bc7011315f 100644
+--- a/packages/client/ui-conversation/src/client/skeleton/ConversationRoot.module.css
++++ b/packages/client/ui-conversation/src/client/skeleton/ConversationRoot.module.css
+@@ -445,8 +445,25 @@
+   overflow-y: auto;
+ }
+ 
++/* dshui scope: no centered hero chrome — the input card is pinned to the
++   bottom of the column in the hero phase too, so the input box always sits
++   at the very bottom. */
++.root[data-dshui-scope='true'][data-phase='hero'] .scrollBody {
++  justify-content: flex-end;
++}
++
+ /* Settling (session replaying, hero/docked unknown): keep the composer seat
+    mounted but invisible so no wrong layout flashes before the phase lands. */
+ .root[data-phase='settling'] .composerSeat {
+   visibility: hidden;
+ }
++
++/* dshui scope: the input box is a permanent fixture, so never hide it during a
++   shared-backend coalesced settling — a second window connecting can push this
++   connection into a brief/lingering settling, and hiding the composer makes the
++   input box vanish for the window the user is looking at. */
++.root[data-dshui-scope='true'][data-phase='settling'] .composerSeat {
++  visibility: visible;
++  opacity: 0.35;
++  pointer-events: none;
++}
+diff --git a/packages/client/ui-conversation/src/client/skeleton/ConversationRoot.tsx b/packages/client/ui-conversation/src/client/skeleton/ConversationRoot.tsx
+index dfb515bde6..2c42714d20 100644
+--- a/packages/client/ui-conversation/src/client/skeleton/ConversationRoot.tsx
++++ b/packages/client/ui-conversation/src/client/skeleton/ConversationRoot.tsx
+@@ -10,6 +10,23 @@ import { conversationPhase } from '../contract/snapshot.ts'
+ import { HeroShell, WorkspaceChip, workspaceLabel } from './EmptyHero.tsx'
+ import css from './ConversationRoot.module.css'
+ 
++/**
++ * The dshui workspace scope: the VS Code workspace root published by the
++ * dshui host plugin as `window.__DSHUI_WORKSPACE__` (with a fallback to the
++ * boot URL's `dshui_workspace` query parameter). When set, the conversation
++ * treats that Workspace as fixed: no picker, hero chrome pinned to the
++ * bottom like the docked composer.
++ */
++const SCOPE = ((): string => {
++  // Guard: this module is also imported by Node-env specs (window undefined).
++  if (typeof window === 'undefined') return ''
++  const global = (window as unknown as { __DSHUI_WORKSPACE__?: unknown }).__DSHUI_WORKSPACE__
++  const fromGlobal = typeof global === 'string' ? global : ''
++  const value = fromGlobal !== '' ? fromGlobal : (new URLSearchParams(window.location.search).get('dshui_workspace') ?? '')
++  if (value === '') return ''
++  try { return decodeURIComponent(value) } catch { return value }
++})()
++
+ /** Full props composed from the slot contract. */
+ export type ConversationRootProps = ConversationSlotProps
+ 
+@@ -240,6 +257,9 @@ export function ConversationRoot({
+   const pendingWorkspace = workspaces.items.find(
+     workspace => workspace.workspaceId === pendingWorkspaceId,
+   )
++  const scopedWorkspace = SCOPE === ''
++    ? undefined
++    : workspaces.items.find(workspace => workspace.path === SCOPE)
+ 
+   // Clear the pending pick once the session lands in it, or when the picked
+   // workspace disappears from a ready list (deleted from the sidebar).
+@@ -282,24 +302,30 @@ export function ConversationRoot({
+   //      flash on refresh (empty cwd → placeholder);
+   //   5. list ready but no owning workspace (deleted from the sidebar) →
+   //      placeholder, never the deleted folder's name via cwd.
+-  const chipTitle = pendingWorkspace?.title
+-    ?? (sessionId === undefined
+-      ? undefined
+-      : sessionWorkspace?.title
+-        ?? (workspaces.phase === 'ready' || cwd === undefined || cwd === ''
+-          ? undefined
+-          : workspaceLabel(cwd)))
++  // Under the dshui scope the workspace is fixed: the chip always shows the
++  // scoped Workspace's title (falling back to the folder basename until the
++  // list baseline lands), and nothing offers a choice.
++  const chipTitle = SCOPE !== ''
++    ? scopedWorkspace?.title ?? workspaceLabel(SCOPE)
++    : pendingWorkspace?.title
++      ?? (sessionId === undefined
++        ? undefined
++        : sessionWorkspace?.title
++          ?? (workspaces.phase === 'ready' || cwd === undefined || cwd === ''
++            ? undefined
++            : workspaceLabel(cwd)))
+ 
+   const heroWorkspaceRow = (
+     <div className={css.heroWorkspaceRow}>
+       <WorkspaceChip
+         buttonRef={pickerAnchor}
+         label={chipTitle}
++        staticChip={SCOPE !== ''}
+         menuOpen={pickerOpen}
+-        onClick={() => { setPickerOpen(open => !open) }}
++        {...(SCOPE === '' ? { onClick: () => { setPickerOpen(open => !open) } } : {})}
+         t={t}
+       />
+-      {renderSlot('conversation.hero.workspace', {
++      {SCOPE === '' && renderSlot('conversation.hero.workspace', {
+         open: pickerOpen,
+         anchorRef: pickerAnchor,
+         selectedId: pendingWorkspaceId ?? sessionWorkspace?.workspaceId,
+@@ -321,7 +347,12 @@ export function ConversationRoot({
+   // blank session whose workspace vanished (deleted from the sidebar). The
+   // bar is ONE session-maybe slot rendered unconditionally — inert is a prop,
+   // not a different tree, so the textarea DOM survives the transition.
+-  const inert = sessionId === undefined || (hero && chipTitle === undefined)
++  // Under the dshui scope the composer is always live: with no session it is
++  // the "start a new thread in this workspace" entry (rc.2-style always-bottom
++  // input), so it is never inert just because a session is not open yet.
++  const inert = SCOPE !== ''
++    ? false
++    : sessionId === undefined || (hero && chipTitle === undefined)
+   // A raised block is the same inert posture with the blocker's own reason:
+   // one disabled textarea, never a second tree. The no-workspace state wins
+   // when both hold — picking a workspace is the earlier prerequisite.
+@@ -331,9 +362,9 @@ export function ConversationRoot({
+     ...(inert
+       ? {
+         disabled: true,
+-        placeholder: t('placeholder.workspace'),
++        placeholder: SCOPE === '' ? t('placeholder.workspace') : t('placeholder.hero'),
+         workspacePickerOpen: pickerOpen,
+-        onRequestWorkspace: () => { setPickerOpen(true) },
++        ...(SCOPE === '' ? { onRequestWorkspace: () => { setPickerOpen(true) } } : {}),
+       }
+       : blocked
+         // `blocked`, not `disabled`: the bar refuses input either way, but a
+@@ -345,7 +376,7 @@ export function ConversationRoot({
+ 
+   const composerBar = (
+     <div className={clsx(css.composerStack, hero && css.composerHero)}>
+-      {hero && <HeroShell t={t} renderSlot={renderSlot} />}
++      {hero && SCOPE === '' && <HeroShell t={t} renderSlot={renderSlot} />}
+       {hero && heroWorkspaceRow}
+       {zone !== undefined && renderSlot('conversation.input.dock', zone)}
+       {inputBar}
+@@ -370,7 +401,7 @@ export function ConversationRoot({
+   )
+ 
+   return (
+-    <div ref={rootResizeRef} className={css.root} data-phase={phase}>
++    <div ref={rootResizeRef} className={css.root} data-phase={phase} data-dshui-scope={SCOPE === '' ? undefined : 'true'}>
+       {sessionId === undefined ? null : renderSlot('conversation.session.header', {})}
+       <div className={css.body}>
+         <div className={css.scrollBody} data-conversation-scroll="">
+diff --git a/packages/client/ui-conversation/src/client/skeleton/EmptyHero.tsx b/packages/client/ui-conversation/src/client/skeleton/EmptyHero.tsx
+index 6c4820ed4f..a0188582c7 100644
+--- a/packages/client/ui-conversation/src/client/skeleton/EmptyHero.tsx
++++ b/packages/client/ui-conversation/src/client/skeleton/EmptyHero.tsx
+@@ -29,19 +29,32 @@ export function workspaceLabel(cwd: string): string {
+  * the first message the workspace stays switchable — picking another one
+  * moves the New Session flow to that workspace's blank session. Without a
+  * label the chip renders its placeholder state: closed folder + the
+- * "Choose workspace" call to action.
++ * "Choose workspace" call to action. Under the dshui scope the chip is a
++ * static label (`staticChip`): the workspace is fixed, so the chevron and
++ * interactivity disappear.
+  * @param props.label - chip label (see {@link workspaceLabel}); omitted → placeholder.
++ * @param props.staticChip - render as a non-interactive label (dshui scope).
+  * @param props.menuOpen - menu expansion echo.
+  * @param props.onClick - menu toggle.
+- * @returns the chip button element.
++ * @returns the chip element.
+  */
+-export function WorkspaceChip({ buttonRef, label, menuOpen = false, onClick, t }: {
++export function WorkspaceChip({ buttonRef, label, staticChip = false, menuOpen = false, onClick, t }: {
+   buttonRef?: RefObject<HTMLButtonElement>
+   label?: string | undefined
++  staticChip?: boolean
+   menuOpen?: boolean
+   onClick?: () => void
+   t: HeroTranslate
+ }) {
++  const chipLabel = label === undefined ? t('hero.chooseWorkspace') : label
++  if (staticChip) {
++    return (
++      <span className={css.workspaceStatic} aria-label={chipLabel}>
++        <IconFolderOpen16 className={css.folder} size={16} />
++        <span className={css.workspaceLabel}>{chipLabel}</span>
++      </span>
++    )
++  }
+   return (
+     <button
+       ref={buttonRef}
+@@ -55,7 +68,7 @@ export function WorkspaceChip({ buttonRef, label, menuOpen = false, onClick, t }
+       {label === undefined
+         ? <IconFolderClose16 className={css.folder} size={16} />
+         : <IconFolderOpen16 className={css.folder} size={16} />}
+-      <span className={css.workspaceLabel}>{label ?? t('hero.chooseWorkspace')}</span>
++      <span className={css.workspaceLabel}>{chipLabel}</span>
+       <IconChevronDownOutline14 className={css.chevron} size={12} />
+     </button>
+   )
+diff --git a/packages/client/ui-conversation/src/client/skeleton/HeroShell.module.css b/packages/client/ui-conversation/src/client/skeleton/HeroShell.module.css
+index 6c5053e9c6..207b3f9787 100644
+--- a/packages/client/ui-conversation/src/client/skeleton/HeroShell.module.css
++++ b/packages/client/ui-conversation/src/client/skeleton/HeroShell.module.css
+@@ -161,6 +161,23 @@
+   cursor: default;
+ }
+ 
++/* dshui scope: the workspace is fixed, so the chip is a static echo — same
++   geometry and label contrast, no pointer affordance and no chevron. */
++.workspaceStatic {
++  display: inline-flex;
++  align-items: center;
++  gap: 4px;
++  max-width: min(100%, 360px);
++  min-height: 28px;
++  padding: 0 8px;
++  border-radius: 16px;
++  color: var(--dsw-alias-label-primary);
++  font-size: 13px;
++  line-height: 20px;
++  font-weight: 500;
++  cursor: default;
++}
++
+ .folder {
+   flex: none;
+   color: var(--dsw-alias-label-primary);
+diff --git a/packages/client/ui-conversation/tsdown.config.ts b/packages/client/ui-conversation/tsdown.config.ts
+index 6ccfee9612..35be86df0a 100644
+--- a/packages/client/ui-conversation/tsdown.config.ts
++++ b/packages/client/ui-conversation/tsdown.config.ts
+@@ -1,3 +1,3 @@
+ import { clientBundle } from '../tsdown.client.ts'
+ 
+-export default clientBundle('@deepseek-ai/dsh-client-ui-conversation', ['lib/types/index.js'])
++export default clientBundle('dshui-client-ui-conversation', ['lib/types/index.js'])
+diff --git a/packages/client/ui-workspace/src/client/contract/slots.ts b/packages/client/ui-workspace/src/client/contract/slots.ts
+index df17251c38..1b005d319d 100644
+--- a/packages/client/ui-workspace/src/client/contract/slots.ts
++++ b/packages/client/ui-workspace/src/client/contract/slots.ts
+@@ -129,11 +129,11 @@ export type WorkspaceBrowserInjected = {
+    */
+   insertWorkspaceBefore: (workspaceId: WorkspaceId, beforeWorkspaceId?: WorkspaceId) => Promise<void>
+   /**
+-   * Archive a Session into the registry-global set: hidden from grouping
+-   * surfaces, log and accounting slot retained. Archiving the current
+-   * session clears the selection into the New Session view state.
++   * Delete a Session: the extension host removes its log file. The browser
++   * hides the row once the host confirms; the accounting slot and any
++   * registry archive set are out of scope for this verb.
+    */
+-  archiveSession: (sessionId: SessionId) => Promise<void>
++  deleteSession: (sessionId: SessionId) => Promise<void>
+   /**
+    * Reorder a session inside its Workspace account (DOM-insertBefore
+    * semantics: omitted anchor appends to the end). The view refreshes from
+diff --git a/packages/client/ui-workspace/src/client/index.ts b/packages/client/ui-workspace/src/client/index.ts
+index 7c8e1108dc..aa70648207 100644
+--- a/packages/client/ui-workspace/src/client/index.ts
++++ b/packages/client/ui-workspace/src/client/index.ts
+@@ -122,7 +122,12 @@ export function apply(ctx: Context): void {
+     insertWorkspaceBefore: async (workspaceId, beforeWorkspaceId) => {
+       await workspaces.insertBefore(workspaceId, beforeWorkspaceId)
+     },
+-    archiveSession: async (sessionId) => { await uiWorkspace.archiveSession(sessionId) },
++    deleteSession: (sessionId) => {
++      // The extension host deletes the session log file; there is no
++      // workspaces RPC for it, so the browser notifies the webview shell.
++      window.postMessage({ type: 'dshui:deleteSession', sessionId }, '*')
++      return Promise.resolve()
++    },
+     insertSessionBefore: async (workspaceId, sessionId, beforeSessionId) => {
+       await workspaces.insertSessionBefore(workspaceId, sessionId, beforeSessionId)
+     },
+diff --git a/packages/client/ui-workspace/src/client/locales.ts b/packages/client/ui-workspace/src/client/locales.ts
+index af0f535b68..dd5837c658 100644
+--- a/packages/client/ui-workspace/src/client/locales.ts
++++ b/packages/client/ui-workspace/src/client/locales.ts
+@@ -44,7 +44,7 @@ export const zh = {
+   'delete.desc': '将把“{name}”从工作区列表中移除。文件夹与会话记录会保留，其会话将显示在“未分组”下。',
+   'delete.pending': '正在删除工作区…',
+   'menu.fork': '分叉会话',
+-  'menu.archiveSession': '归档会话',
++  'menu.deleteSession': '删除会话',
+   'sessions.count.one': '{n} 个会话',
+   'sessions.count.other': '{n} 个会话',
+   'actions.workspace.aria': '工作区“{name}”的操作',
+@@ -114,7 +114,7 @@ export const en = {
+   'delete.desc': 'This removes “{name}” from the workspace list. The folder and session logs will be kept. Its sessions will appear under Ungrouped.',
+   'delete.pending': 'Deleting workspace…',
+   'menu.fork': 'Fork session',
+-  'menu.archiveSession': 'Archive session',
++  'menu.deleteSession': 'Delete session',
+   'sessions.count.one': '{n} session',
+   'sessions.count.other': '{n} sessions',
+   'actions.workspace.aria': 'Workspace actions for {name}',
+diff --git a/packages/client/ui-workspace/src/client/rows/Rows.tsx b/packages/client/ui-workspace/src/client/rows/Rows.tsx
+index 0f917100ff..651ace70cf 100644
+--- a/packages/client/ui-workspace/src/client/rows/Rows.tsx
++++ b/packages/client/ui-workspace/src/client/rows/Rows.tsx
+@@ -2,13 +2,13 @@
+  * Workspace browser tree row components (figma Cell set 14:3080): pure presentational —
+  * all data and callbacks arrive via props. Hover swaps (folder->chevron,
+  * time->ellipsis, action buttons) are CSS-only. Row ... menus are visual-only
+- * except workspace Rename/Delete and session Rename/Fork/Archive; the session
++ * except workspace Rename/Delete and session Rename/Fork/Delete; the session
+  * and workspace hover cards are suppressed while a menu is open.
+  */
+ import { useState } from 'react'
+ import clsx from 'clsx'
+ import {
+-  HoverCard, IconAlarmClockOutline16, IconArchiveOutline20, IconBranchOutline16,
++  HoverCard, IconAlarmClockOutline16, IconBranchOutline16,
+   IconEditOutline16, IconEllipsisOutline16, IconFolderClose16, IconFolderOpen16,
+   IconPlusOutline16, IconTrashOutline16, IconTriangleRightFill14, Menu, relativeTime,
+   StateDot,
+@@ -369,13 +369,13 @@ export function SearchResultItem({ result, currentId, onOpen, t }: {
+  * @param props.onOpen - open a session by id.
+  * @param props.onRename - open the session rename dialog (id + current title).
+  * @param props.onFork - fork a session at its last completed turn.
+- * @param props.onArchive - archive a session by id.
++ * @param props.onDelete - delete this session by id (extension host removes the log).
+  * @param props.drag - optional draggable-row wiring.
+  * @param props.flat - omit the empty status slot in the hierarchy-free flat list.
+  * @param props.t - the browser root's locale seat.
+  * @returns the session row.
+  */
+-export function SessionNodeItem({ node, currentId, now, onOpen, onRename, onFork, onArchive, drag, flat = false, t }: {
++export function SessionNodeItem({ node, currentId, now, onOpen, onRename, onFork, onDelete, drag, flat = false, t }: {
+   node: SessionNode
+   currentId: string | undefined
+   now: number
+@@ -384,8 +384,8 @@ export function SessionNodeItem({ node, currentId, now, onOpen, onRename, onFork
+   onRename: (id: SessionNode['id'], currentTitle: string) => void
+   /** Fork a session at its last completed turn (row menu action). */
+   onFork: (id: SessionNode['id']) => void
+-  /** Archive this session (row menu action; commits without a dialog). */
+-  onArchive: (id: SessionNode['id']) => void
++  /** Delete this session (row menu action; commits without a dialog). */
++  onDelete: (id: SessionNode['id']) => void
+   /** Present only on draggable rows (workspace-group sessions outside search). */
+   drag?: RowDragProps | undefined
+   /** The row is rendered without a parent Workspace header. */
+@@ -399,14 +399,13 @@ export function SessionNodeItem({ node, currentId, now, onOpen, onRename, onFork
+   const primaryStatus = statuses[0]
+   const showStatus = primaryStatus.state !== 'done' || row.completed
+   const [menuOpen, setMenuOpen] = useState(false)
+-  // Archive hides the row through the registry-global archive set and never
+-  // touches the session log, so it is not styled as destructive and needs no
+-  // confirmation dialog.
++  // Delete drops the session log (extension host confirmation), so the row
++  // gesture is styled as destructive but still commits without a dialog; the
++  // browser hides the row locally, then the host list re-pull removes it.
+   const sessionMenuItems = [
+     { id: 'rename', label: t('rename'), icon: <IconEditOutline16 /> },
+     { id: 'fork', label: t('menu.fork'), icon: <IconBranchOutline16 /> },
+-    // 20-native glyph in the menu's 16px icon slot (Menu.module.css .itemIcon).
+-    { id: 'archive', label: t('menu.archiveSession'), icon: <IconArchiveOutline20 size={16} /> },
++    { id: 'delete', label: t('menu.deleteSession'), icon: <IconTrashOutline16 />, danger: true },
+   ]
+   // Figma session cell: pad 8, status slot 16, then a 4px title gap.
+   const ownRow = (
+@@ -469,7 +468,7 @@ export function SessionNodeItem({ node, currentId, now, onOpen, onRename, onFork
+               setMenuOpen(false)
+               if (id === 'rename') onRename(node.id, row.title)
+               if (id === 'fork') onFork(node.id)
+-              if (id === 'archive') onArchive(node.id)
++              if (id === 'delete') onDelete(node.id)
+             }}
+             portal
+             closeOnPointerLeave
+diff --git a/packages/client/ui-workspace/src/client/rows/WorkspaceBrowser.tsx b/packages/client/ui-workspace/src/client/rows/WorkspaceBrowser.tsx
+index 9d9dd376e4..991d5af649 100644
+--- a/packages/client/ui-workspace/src/client/rows/WorkspaceBrowser.tsx
++++ b/packages/client/ui-workspace/src/client/rows/WorkspaceBrowser.tsx
+@@ -22,7 +22,7 @@ import type { WorkspaceId, WorkspaceView } from '@deepseek-ai/dsh-api-workspace-
+ import type { SessionId } from '@deepseek-ai/dsh-session/types'
+ import type { WorkspaceBrowserProps } from '../contract/slots.ts'
+ import type { SessionNode, SessionOrderBy } from '../tree.ts'
+-import { deriveFlat, deriveGroups, deriveSearchResults, UNGROUPED_KEY } from '../tree.ts'
++import { deriveFlat, deriveGroups, deriveSearchResults, scopedWorkspacePath, UNGROUPED_KEY } from '../tree.ts'
+ import { ProjectRowItem, SearchResultItem, SessionNodeItem } from './Rows.tsx'
+ import { FLAT_SESSION_ORDER_KEY } from '../stores.ts'
+ import { WorkspacePickFlow } from '../WorkspacePicker.tsx'
+@@ -258,8 +258,12 @@ type SessionTreeProps = Pick<
+   onDeleteRequest: (workspaceId: WorkspaceId, currentTitle: string) => void
+   /** Open the browser-owned session rename dialog. */
+   onSessionRename: (sessionId: SessionNode['id'], currentTitle: string) => void
+-  /** Archive a session (row menu action; the row disappears on the state echo). */
+-  onSessionArchive: (sessionId: SessionNode['id']) => void
++  /** Delete a session (row menu action; the row disappears on the host echo). */
++  onSessionDelete: (sessionId: SessionNode['id']) => void
++  /** dshui workspace scope; empty keeps the stock cross-workspace listing. */
++  scope: string
++  /** Locally-deleted sessions hidden until the next list re-pull drops them. */
++  deletedSessionIds: readonly SessionNode['id'][]
+   /** Session order behavior: fixed after edits, or additionally promoted by user activity. */
+   orderBy: SessionOrderBy
+ }
+@@ -267,7 +271,7 @@ type SessionTreeProps = Pick<
+ /** The scrolling session tree; unmounting drops the sessions subscription and expand-all state. */
+ function SessionTree({
+   useSessions, useSessionPendingInteraction, startSession, open, forkSession, workspaces, archivedSessionIds,
+-  onRenameRequest, onDeleteRequest, onSessionRename, onSessionArchive,
++  onRenameRequest, onDeleteRequest, onSessionRename, onSessionDelete, scope, deletedSessionIds,
+   insertWorkspaceBefore, insertSessionBefore, orderBy,
+   groupExpansion, setGroupExpanded,
+   sessionOrderByAccount, sessionUpdatedAtByAccount, syncSessionOrderAccount, setSessionOrder, home, t,
+@@ -344,8 +348,8 @@ function SessionTree({
+       ...(sessionOrderByAccount[UNGROUPED_KEY] === undefined
+         ? {}
+         : { ungroupedOrder: sessionOrderByAccount[UNGROUPED_KEY] }),
+-    }),
+-    [list, orderedWorkspaces, archivedSessionIds, pendingInteractions, expandedGroups, sessionOrderByAccount],
++    }, scope, deletedSessionIds),
++    [list, orderedWorkspaces, archivedSessionIds, pendingInteractions, expandedGroups, sessionOrderByAccount, scope, deletedSessionIds],
+   )
+   const now = Date.now()
+   const commitSessionDrag = (activeDrag: DragState, over: NonNullable<DragState['over']>): void => {
+@@ -563,7 +567,7 @@ function SessionTree({
+                     onOpen={open}
+                     onRename={onSessionRename}
+                     onFork={forkSession}
+-                    onArchive={onSessionArchive}
++                    onDelete={onSessionDelete}
+                     drag={dragProps}
+                     t={t}
+                   />
+@@ -592,8 +596,8 @@ function SessionTree({
+ 
+ /** The flat "In one list" body: every session is one draggable top-level row. */
+ function FlatList({
+-  useSessions, useSessionPendingInteraction, open, forkSession, onSessionRename, onSessionArchive,
+-  archivedSessionIds,
++  useSessions, useSessionPendingInteraction, open, forkSession, onSessionRename, onSessionDelete,
++  archivedSessionIds, scope, deletedSessionIds,
+   orderBy, sessionOrderByAccount, sessionUpdatedAtByAccount, syncSessionOrderAccount, setSessionOrder, t,
+ }: Pick<
+   SessionTreeProps,
+@@ -602,8 +606,10 @@ function FlatList({
+   | 'open'
+   | 'forkSession'
+   | 'onSessionRename'
+-  | 'onSessionArchive'
++  | 'onSessionDelete'
+   | 'archivedSessionIds'
++  | 'scope'
++  | 'deletedSessionIds'
+   | 'orderBy'
+   | 'sessionOrderByAccount'
+   | 'sessionUpdatedAtByAccount'
+@@ -614,8 +620,8 @@ function FlatList({
+   const list = useSessions(s => s)
+   const pendingInteractions = useSessionPendingInteraction(s => s)
+   const baseRows = useMemo(
+-    () => deriveFlat(list, archivedSessionIds, pendingInteractions),
+-    [list, archivedSessionIds, pendingInteractions],
++    () => deriveFlat(list, archivedSessionIds, pendingInteractions, scope, deletedSessionIds),
++    [list, archivedSessionIds, pendingInteractions, scope, deletedSessionIds],
+   )
+   const sessionIds = useMemo(() => baseRows.map(row => row.id), [baseRows])
+   const previousOrderBy = useRef(orderBy)
+@@ -682,7 +688,7 @@ function FlatList({
+               onOpen={open}
+               onRename={onSessionRename}
+               onFork={forkSession}
+-              onArchive={onSessionArchive}
++              onDelete={onSessionDelete}
+               flat
+               drag={{
+                 start: () => {
+@@ -727,6 +733,8 @@ function SearchResults({
+   open,
+   workspaces,
+   archivedSessionIds,
++  scope,
++  deletedSessionIds,
+   query,
+   remote,
+   resultLimit,
+@@ -734,6 +742,8 @@ function SearchResults({
+ }: Pick<SessionTreeProps, 'useSessions' | 'useSessionPendingInteraction' | 'open' | 't'> & {
+   workspaces: readonly WorkspaceView[]
+   archivedSessionIds: readonly SessionNode['id'][]
++  scope: string
++  deletedSessionIds: readonly SessionNode['id'][]
+   query: string
+   remote: RemoteSearchState
+   resultLimit: number
+@@ -752,8 +762,10 @@ function SearchResults({
+       pendingInteractions,
+       currentRemote,
+       resultLimit,
++      scope,
++      deletedSessionIds,
+     ),
+-    [list, workspaces, query, archivedSessionIds, pendingInteractions, currentRemote, resultLimit],
++    [list, workspaces, query, archivedSessionIds, pendingInteractions, currentRemote, resultLimit, scope, deletedSessionIds],
+   )
+   const pending = currentRemote.status === 'loading'
+   const failed = currentRemote.status === 'error'
+@@ -814,7 +826,7 @@ export function WorkspaceBrowser({
+   renameWorkspace,
+   deleteWorkspace,
+   insertWorkspaceBefore,
+-  archiveSession,
++  deleteSession,
+   insertSessionBefore,
+   createWorkspace,
+   searchSessions,
+@@ -828,6 +840,11 @@ export function WorkspaceBrowser({
+   const workspaces = useWorkspaces(state => state.items)
+   const workspacePhase = useWorkspaces(state => state.phase)
+   const archivedSessionIds = useWorkspaces(state => state.archivedSessionIds)
++  // dshui scope (extension host or boot-URL workspace path); empty keeps the
++  // stock cross-workspace listing. Locally-deleted sessions hide until the
++  // host list re-pull drops them.
++  const scope = scopedWorkspacePath()
++  const [deletedSessionIds, setDeletedSessionIds] = useState<SessionId[]>([])
+   // Live occupancy of this surface's directory-flow hole (the same source the
+   // flow reads): a composition without a picking affordance can add nothing.
+   const directoryFlowAvailable = useDirectoryFlow(occupied => occupied)
+@@ -1022,13 +1039,15 @@ export function WorkspaceBrowser({
+     setSessionRenameError(null)
+   }
+ 
+-  // Archive is dialog-free: not destructive (the log and the accounting slot
+-  // remain), so the menu action commits directly; the row disappears when the
+-  // archive-set echo lands. Failures are non-fatal console diagnostics, the
+-  // same posture as reorder rejections.
+-  const onSessionArchive = (sessionId: SessionNode['id']) => {
+-    archiveSession(sessionId).catch((reason: unknown) => {
+-      console.warn('session archive rejected:', reason)
++  // Delete is dialog-free: the extension host removes the session log, and the
++  // row hides once the host confirms (adding the id to the local hidden set
++  // until the next session list re-pull drops the row). Failures are non-fatal
++  // console diagnostics, the same posture as reorder rejections.
++  const onSessionDelete = (sessionId: SessionNode['id']) => {
++    void deleteSession(sessionId).then(() => {
++      setDeletedSessionIds(prev => prev.includes(sessionId) ? prev : [...prev, sessionId])
++    }).catch((reason: unknown) => {
++      console.warn('session delete rejected:', reason)
+     })
+   }
+ 
+@@ -1209,6 +1228,8 @@ export function WorkspaceBrowser({
+               open={open}
+               workspaces={workspaces}
+               archivedSessionIds={archivedSessionIds}
++              scope={scope}
++              deletedSessionIds={deletedSessionIds}
+               query={normalizedQuery}
+               remote={remoteSearch}
+               resultLimit={searchResultLimit}
+@@ -1220,8 +1241,10 @@ export function WorkspaceBrowser({
+               <FlatList
+                 useSessions={useSessions} useSessionPendingInteraction={useSessionPendingInteraction}
+                 open={open} forkSession={forkSession}
+-                onSessionRename={onSessionRename} onSessionArchive={onSessionArchive}
++                onSessionRename={onSessionRename} onSessionDelete={onSessionDelete}
+                 archivedSessionIds={archivedSessionIds}
++                scope={scope}
++                deletedSessionIds={deletedSessionIds}
+                 orderBy={orderBy}
+                 sessionOrderByAccount={sessionOrderByAccount}
+                 sessionUpdatedAtByAccount={sessionUpdatedAtByAccount}
+@@ -1235,7 +1258,7 @@ export function WorkspaceBrowser({
+                 useSessions={useSessions}
+                 useSessionPendingInteraction={useSessionPendingInteraction}
+                 onSessionRename={onSessionRename}
+-                onSessionArchive={onSessionArchive}
++                onSessionDelete={onSessionDelete}
+                 forkSession={forkSession}
+                 workspaces={workspaces}
+                 groupExpansion={groupExpansion}
+@@ -1245,6 +1268,8 @@ export function WorkspaceBrowser({
+                 syncSessionOrderAccount={actions.syncSessionOrderAccount}
+                 setSessionOrder={actions.setSessionOrder}
+                 archivedSessionIds={archivedSessionIds}
++                scope={scope}
++                deletedSessionIds={deletedSessionIds}
+                 startSession={startSession}
+                 open={open}
+                 insertWorkspaceBefore={insertWorkspaceBefore}
+diff --git a/packages/client/ui-workspace/src/client/tree.ts b/packages/client/ui-workspace/src/client/tree.ts
+index ec921306f9..d1f00dd7dd 100644
+--- a/packages/client/ui-workspace/src/client/tree.ts
++++ b/packages/client/ui-workspace/src/client/tree.ts
+@@ -20,6 +20,28 @@ import {
+ /** Group key for Sessions outside every Workspace. */
+ export const UNGROUPED_KEY = ''
+ 
++/**
++ * The dshui workspace scope: an absolute directory path the dshui host
++ * plugin publishes as `window.__DSHUI_WORKSPACE__` (the VS Code workspace
++ * root), with a fallback to the boot URL's `dshui_workspace` query parameter.
++ * When set, the browser lists only that Workspace's Sessions; an empty string
++ * keeps the stock cross-workspace behavior.
++ * @returns the scope path, or an empty string when neither source is set.
++ */
++export function scopedWorkspacePath(): string {
++  const view = window as typeof window & { __DSHUI_WORKSPACE__?: unknown }
++  const global = view.__DSHUI_WORKSPACE__
++  if (typeof global === 'string' && global !== '') return global
++  const param = new URLSearchParams(window.location.search).get('dshui_workspace')
++  if (param === null || param === '') return ''
++  try {
++    const decoded = decodeURIComponent(param)
++    return decoded === '' ? '' : decoded
++  } catch {
++    return ''
++  }
++}
++
+ /** Pending interaction kinds with dedicated Workspace-row presentation. */
+ export type SessionPendingInteractionStatus = 'approval' | 'plan-review' | 'question'
+ type SessionPendingInteractions = ReadonlyMap<SessionId, SessionPendingInteractionBase>
+@@ -125,12 +147,23 @@ function byRecency(a: SessionSummary, b: SessionSummary): number {
+ /**
+  * Ordinary sessions are visible; among blank sessions, only the current one
+  * is visible. Subagent children use their parent header catalog; archived
+- * sessions are visible nowhere, while their accounting slots remain so
+- * unarchiving restores position.
++ * and locally-deleted sessions are visible nowhere, while their accounting
++ * slots remain so restoring or re-pulling recovers position. When a dshui
++ * scope is active, a session whose `cwd` is set to a different directory is
++ * hidden; an unset `cwd` remains visible (it may belong to the scoped
++ * Workspace by membership).
+  */
+-function sessionVisible(session: SessionSummary, current: SessionId | undefined, archived: ReadonlySet<SessionId>): boolean {
++function sessionVisible(
++  session: SessionSummary,
++  current: SessionId | undefined,
++  archived: ReadonlySet<SessionId>,
++  deleted: ReadonlySet<SessionId>,
++  scope: string,
++): boolean {
++  if (scope !== '' && session.cwd !== undefined && session.cwd !== scope) return false
+   return session.origin !== 'subagent'
+     && !archived.has(session.id)
++    && !deleted.has(session.id)
+     && (!session.blank || session.id === current)
+ }
+ 
+@@ -194,16 +227,20 @@ function groupByWorkspace(
+   workspaces: readonly WorkspaceView[],
+   archived: ReadonlySet<SessionId>,
+   ungroupedOrder: readonly string[] | undefined,
++  deleted: ReadonlySet<SessionId>,
++  scope: string,
+ ): Group[] {
+   const groups: Group[] = []
+   const accounted = new Set<SessionId>()
+   for (const workspace of workspaces) {
++    // Under a dshui scope only the scoped Workspace's section participates.
++    if (scope !== '' && workspace.path !== scope) continue
+     const members: SessionSummary[] = []
+     for (const id of workspace.sessionIds) {
+       const summary = list.byId[id]
+       if (summary === undefined) continue // account may lead the list pull; the row appears when the summary lands
+       accounted.add(id)
+-      if (!sessionVisible(summary, list.current, archived)) continue
++      if (!sessionVisible(summary, list.current, archived, deleted, scope)) continue
+       members.push(summary)
+     }
+     groups.push(buildGroup(
+@@ -214,7 +251,8 @@ function groupByWorkspace(
+   const stray = list.ids
+     .map(id => list.byId[id])
+     .filter((s): s is SessionSummary =>
+-      s !== undefined && !accounted.has(s.id) && sessionVisible(s, list.current, archived))
++      s !== undefined && !accounted.has(s.id) && sessionVisible(s, list.current, archived, deleted, scope)
++        && (scope === '' || s.cwd === scope))
+   if (stray.length > 0) {
+     groups.push(buildGroup(
+       UNGROUPED_KEY,
+@@ -273,6 +311,8 @@ function sessionNode(
+  * @param archivedSessionIds - registry-global archive set.
+  * @param pendingInteractions - pending UI interactions by Session.
+  * @param view - local expansion arrays.
++ * @param scope - dshui workspace scope; when non-empty only that Workspace's Sessions are listed.
++ * @param deletedSessionIds - locally hidden sessions (host-confirmed log removal).
+  * @returns group sections in render order.
+  */
+ export function deriveGroups(
+@@ -281,8 +321,11 @@ export function deriveGroups(
+   archivedSessionIds: readonly SessionId[],
+   pendingInteractions: SessionPendingInteractions,
+   view: TreeView,
++  scope = '',
++  deletedSessionIds: readonly SessionId[] = [],
+ ): GroupNode[] {
+   const archived = new Set(archivedSessionIds)
++  const deleted = new Set(deletedSessionIds)
+   const expandedGroups = new Set(view.expandedGroups)
+   const descendants = indexSubagentDescendants(list.byId)
+   const currentGroup = list.current === undefined
+@@ -290,7 +333,7 @@ export function deriveGroups(
+     : (workspaces.find(w => w.sessionIds.includes(list.current as SessionId))?.workspaceId as string | undefined)
+         ?? UNGROUPED_KEY
+   const groups: GroupNode[] = []
+-  for (const g of groupByWorkspace(list, workspaces, archived, view.ungroupedOrder)) {
++  for (const g of groupByWorkspace(list, workspaces, archived, view.ungroupedOrder, deleted, scope)) {
+     const expanded = expandedGroups.has(g.key)
+     groups.push({
+       key: g.key,
+@@ -317,19 +360,25 @@ export function deriveGroups(
+  * @param list - sessions list snapshot.
+  * @param archivedSessionIds - registry-global archive set.
+  * @param pendingInteractions - pending UI interactions by Session.
++ * @param scope - dshui workspace scope; when non-empty only that Workspace's Sessions are listed.
++ * @param deletedSessionIds - locally hidden sessions (host-confirmed log removal).
+  * @returns flat rows in render order.
+  */
+ export function deriveFlat(
+   list: SessionListState,
+   archivedSessionIds: readonly SessionId[],
+   pendingInteractions: SessionPendingInteractions,
++  scope = '',
++  deletedSessionIds: readonly SessionId[] = [],
+ ): SessionNode[] {
+   const archived = new Set(archivedSessionIds)
++  const deleted = new Set(deletedSessionIds)
+   const descendants = indexSubagentDescendants(list.byId)
+   const rows: SessionSummary[] = []
+   for (const id of list.ids) {
+     const s = list.byId[id]
+-    if (s === undefined || !sessionVisible(s, list.current, archived)) continue
++    if (s === undefined || (scope !== '' && s.cwd !== scope)
++      || !sessionVisible(s, list.current, archived, deleted, scope)) continue
+     rows.push(s)
+   }
+   rows.sort(byRecency)
+@@ -347,6 +396,8 @@ export function deriveFlat(
+  * @param pendingInteractions - pending UI interactions by Session.
+  * @param content - ranked Host content-search page.
+  * @param limit - protocol-owned maximum merged row count.
++ * @param scope - dshui workspace scope; when non-empty only that Workspace's Sessions are searched.
++ * @param deletedSessionIds - locally hidden sessions (host-confirmed log removal).
+  * @returns bounded deduplicated flat rows and a refine-query hint bit.
+  */
+ export function deriveSearchResults(
+@@ -357,10 +408,13 @@ export function deriveSearchResults(
+   pendingInteractions: SessionPendingInteractions,
+   content: { items: readonly SessionSearchResultItem[]; hasMore: boolean },
+   limit: number,
++  scope = '',
++  deletedSessionIds: readonly SessionId[] = [],
+ ): SearchResultSet {
+   const q = query.trim().toLowerCase()
+   if (q === '') return { items: [], hasMore: false }
+   const archived = new Set(archivedSessionIds)
++  const deleted = new Set(deletedSessionIds)
+   const descendants = indexSubagentDescendants(list.byId)
+ 
+   const workspaceBySession = new Map<SessionId, string>()
+@@ -381,7 +435,8 @@ export function deriveSearchResults(
+     const summary = list.byId[id]
+     // Blank placeholders never match a query (their canonical title displays
+     // localized, so matching it would tie search to one language).
+-    if (summary === undefined || summary.blank || !sessionVisible(summary, list.current, archived)) continue
++    if (summary === undefined || summary.blank || (scope !== '' && summary.cwd !== scope)
++      || !sessionVisible(summary, list.current, archived, deleted, scope)) continue
+     if (
+       sessionTitle(summary).toLowerCase().includes(q)
+       || labelOf(summary).toLowerCase().includes(q)
+@@ -401,7 +456,8 @@ export function deriveSearchResults(
+   for (const summary of local) include(summary)
+   for (const item of content.items) {
+     const summary = list.byId[item.sessionId]
+-    if (summary !== undefined && !summary.blank && sessionVisible(summary, list.current, archived)) include(summary)
++    if (summary !== undefined && !summary.blank && (scope === '' || summary.cwd === scope)
++      && sessionVisible(summary, list.current, archived, deleted, scope)) include(summary)
+   }
+ 
+   return {
+diff --git a/packages/client/ui-workspace/tests/rows.client.spec.tsx b/packages/client/ui-workspace/tests/rows.client.spec.tsx
+index 7865c31c22..1d7be5b19d 100644
+--- a/packages/client/ui-workspace/tests/rows.client.spec.tsx
++++ b/packages/client/ui-workspace/tests/rows.client.spec.tsx
+@@ -63,12 +63,12 @@ describe('workspace browser rows', () => {
+       runningSubagentCount: 0, completed: false, hasActiveSchedule: false, updatedAt: 0,
+     }
+     const view = render(<SessionNodeItem node={idle} currentId={undefined} now={0} onOpen={vi.fn()}
+-      onRename={vi.fn()} onFork={vi.fn()} onArchive={vi.fn()} flat t={t} />)
++      onRename={vi.fn()} onFork={vi.fn()} onDelete={vi.fn()} flat t={t} />)
+     const title = screen.getByText('Flat Session')
+     expect(title.previousElementSibling).toBeNull()
+ 
+     view.rerender(<SessionNodeItem node={{ ...idle, running: true }} currentId={undefined} now={0}
+-      onOpen={vi.fn()} onRename={vi.fn()} onFork={vi.fn()} onArchive={vi.fn()} flat t={t} />)
++      onOpen={vi.fn()} onRename={vi.fn()} onFork={vi.fn()} onDelete={vi.fn()} flat t={t} />)
+     expect(screen.getByText('Flat Session').previousElementSibling?.querySelector('[data-state="ongoing"]')).toBeTruthy()
+   })
+ 
+@@ -158,7 +158,7 @@ describe('workspace browser rows', () => {
+     const onOpen = vi.fn()
+     render(
+       <SessionNodeItem node={node} currentId={node.id} now={0} onOpen={onOpen}
+-        onRename={vi.fn()} onFork={vi.fn()} onArchive={vi.fn()} t={t} />,
++        onRename={vi.fn()} onFork={vi.fn()} onDelete={vi.fn()} t={t} />,
+     )
+ 
+     const row = screen.getByRole('treeitem')
+@@ -177,7 +177,7 @@ describe('workspace browser rows', () => {
+     }
+     const view = render(
+       <SessionNodeItem node={node} currentId={undefined} now={0} onOpen={onOpen}
+-        onRename={vi.fn()} onFork={vi.fn()} onArchive={vi.fn()} t={t} />,
++        onRename={vi.fn()} onFork={vi.fn()} onDelete={vi.fn()} t={t} />,
+     )
+ 
+     const assertIndicator = (): HTMLElement => {
+@@ -196,7 +196,7 @@ describe('workspace browser rows', () => {
+ 
+     view.rerender(
+       <SessionNodeItem node={node} currentId={undefined} now={0} onOpen={onOpen}
+-        onRename={vi.fn()} onFork={vi.fn()} onArchive={vi.fn()} flat t={t} />,
++        onRename={vi.fn()} onFork={vi.fn()} onDelete={vi.fn()} flat t={t} />,
+     )
+     assertIndicator()
+   })
+@@ -209,7 +209,7 @@ describe('workspace browser rows', () => {
+           runningSubagentCount: 0, completed: false, hasActiveSchedule: false, updatedAt: 0, ...over,
+         }}
+         currentId={undefined} now={0} onOpen={vi.fn()}
+-        onRename={vi.fn()} onFork={vi.fn()} onArchive={vi.fn()} t={t}
++        onRename={vi.fn()} onFork={vi.fn()} onDelete={vi.fn()} t={t}
+       />,
+     )
+     const stateDot = (view: ReturnType<typeof renderRow>) =>
+@@ -241,7 +241,7 @@ describe('workspace browser rows', () => {
+         runningSubagentCount: 2, completed: false, hasActiveSchedule: false, updatedAt: 0,
+       }
+       render(<SessionNodeItem node={node} currentId={undefined} now={0} onOpen={vi.fn()}
+-        onRename={vi.fn()} onFork={vi.fn()} onArchive={vi.fn()} t={t} />)
++        onRename={vi.fn()} onFork={vi.fn()} onDelete={vi.fn()} t={t} />)
+       const row = screen.getByRole('treeitem')
+       expect(row.querySelector('[data-state="ongoing"]')).not.toBeNull()
+       expect(screen.getByText('2 个子代理运行中')).toBeTruthy()
+@@ -263,7 +263,7 @@ describe('workspace browser rows', () => {
+         runningSubagentCount: 1, completed: false, hasActiveSchedule: false, updatedAt: 0,
+       }
+       render(<SessionNodeItem node={node} currentId={undefined} now={0} onOpen={vi.fn()}
+-        onRename={vi.fn()} onFork={vi.fn()} onArchive={vi.fn()} t={t} />)
++        onRename={vi.fn()} onFork={vi.fn()} onDelete={vi.fn()} t={t} />)
+       const row = screen.getByRole('treeitem')
+       expect(row.querySelectorAll('[data-state="ongoing"]')).toHaveLength(1)
+       expect(screen.getByText('进行中')).toBeTruthy()
+@@ -284,7 +284,7 @@ describe('workspace browser rows', () => {
+       running: false, runningSubagentCount: 1, completed: false, hasActiveSchedule: false, updatedAt: 0,
+     }
+     render(<SessionNodeItem node={node} currentId={undefined} now={0} onOpen={vi.fn()}
+-      onRename={vi.fn()} onFork={vi.fn()} onArchive={vi.fn()} t={t} />)
++      onRename={vi.fn()} onFork={vi.fn()} onDelete={vi.fn()} t={t} />)
+     const row = screen.getByRole('treeitem')
+     expect(row.querySelector('[data-state="warning"]')).not.toBeNull()
+     expect(row.querySelector('[data-state="ongoing"]')).toBeNull()
+@@ -431,7 +431,7 @@ describe('workspace browser rows', () => {
+         runningSubagentCount: 0, completed: false, hasActiveSchedule: false, updatedAt: 0,
+       }
+       render(<SessionNodeItem node={node} currentId={node.id} now={0} onOpen={vi.fn()}
+-        onRename={vi.fn()} onFork={vi.fn()} onArchive={vi.fn()} t={t} />)
++        onRename={vi.fn()} onFork={vi.fn()} onDelete={vi.fn()} t={t} />)
+       // The placeholder has no content yet: no row verbs, no "now" stamp.
+       expect(screen.queryByRole('button', { name: /会话.*的操作/ })).toBeNull()
+       expect(screen.queryByText('刚刚')).toBeNull()
+@@ -448,21 +448,21 @@ describe('workspace browser rows', () => {
+     }
+   })
+ 
+-  it('session row menu opens without opening the session and dispatches rename, fork, and archive', () => {
++  it('session row menu opens without opening the session and dispatches rename, fork, and delete', () => {
+     const onOpen = vi.fn()
+     const onRename = vi.fn()
+     const onFork = vi.fn()
+-    const onArchive = vi.fn()
++    const onDelete = vi.fn()
+     const node: SessionNode = {
+       id: sid('s1'), title: 'One', blank: false, running: false,
+       runningSubagentCount: 0, completed: false, hasActiveSchedule: false, updatedAt: 0,
+     }
+     render(<SessionNodeItem node={node} currentId={undefined} now={0} onOpen={onOpen}
+-      onRename={onRename} onFork={onFork} onArchive={onArchive} t={t} />)
++      onRename={onRename} onFork={onFork} onDelete={onDelete} t={t} />)
+     fireEvent.click(screen.getByRole('button', { name: '会话“One”的操作' }))
+     expect(onOpen).not.toHaveBeenCalled()
+-    // Archive is not destructive (log and accounting slot remain): no danger styling.
+-    expect(screen.getByRole('menuitem', { name: '归档会话' }).className).not.toMatch(/danger/)
++    // Delete drops the session log, so the row gesture carries danger styling.
++    expect(screen.getByRole('menuitem', { name: '删除会话' }).className).toMatch(/danger/)
+     // Rename dispatches with the current display title (dialog prefill).
+     fireEvent.click(screen.getByRole('menuitem', { name: '重命名' }))
+     expect(screen.queryByRole('menu')).toBeNull()
+@@ -471,10 +471,10 @@ describe('workspace browser rows', () => {
+     fireEvent.click(screen.getByRole('button', { name: '会话“One”的操作' }))
+     fireEvent.click(screen.getByRole('menuitem', { name: '分叉会话' }))
+     expect(onFork).toHaveBeenCalledWith(node.id)
+-    // Archive dispatches without opening the session.
++    // Delete dispatches without opening the session.
+     fireEvent.click(screen.getByRole('button', { name: '会话“One”的操作' }))
+-    fireEvent.click(screen.getByRole('menuitem', { name: '归档会话' }))
+-    expect(onArchive).toHaveBeenCalledWith(node.id)
++    fireEvent.click(screen.getByRole('menuitem', { name: '删除会话' }))
++    expect(onDelete).toHaveBeenCalledWith(node.id)
+     expect(onRename).toHaveBeenCalledOnce()
+     expect(onOpen).not.toHaveBeenCalled()
+     // Escape closes without selecting (Menu onClose path).
+@@ -492,7 +492,7 @@ describe('workspace browser rows', () => {
+         runningSubagentCount: 0, completed: false, hasActiveSchedule: false, updatedAt: 0,
+       }
+       render(<SessionNodeItem node={node} currentId={undefined} now={60_000} onOpen={vi.fn()}
+-        onRename={vi.fn()} onFork={vi.fn()} onArchive={vi.fn()} t={t} />)
++        onRename={vi.fn()} onFork={vi.fn()} onDelete={vi.fn()} t={t} />)
+       const wrapper = screen.getByRole('treeitem').parentElement as HTMLElement
+       fireEvent.pointerEnter(wrapper)
+       act(() => { vi.advanceTimersByTime(500) })
+@@ -524,14 +524,14 @@ describe('workspace browser rows', () => {
+         hasActiveSchedule: false, updatedAt: 0,
+       }
+       const view = render(<SessionNodeItem node={node} currentId={undefined} now={0} onOpen={vi.fn()}
+-        onRename={vi.fn()} onFork={vi.fn()} onArchive={vi.fn()} t={t} />)
++        onRename={vi.fn()} onFork={vi.fn()} onDelete={vi.fn()} t={t} />)
+       const row = screen.getByRole('treeitem')
+       expect(row.querySelector('[data-state="warning"]')).toBeTruthy()
+       expect(row.querySelector('[data-state="ongoing"]')).toBeNull()
+       expect(screen.getByText(label)).toBeTruthy()
+ 
+       view.rerender(<SessionNodeItem node={{ ...node, running: false }} currentId={undefined} now={0}
+-        onOpen={vi.fn()} onRename={vi.fn()} onFork={vi.fn()} onArchive={vi.fn()} t={t} />)
++        onOpen={vi.fn()} onRename={vi.fn()} onFork={vi.fn()} onDelete={vi.fn()} t={t} />)
+       expect(screen.getByRole('treeitem').querySelector('[data-state="warning"]')).toBeTruthy()
+ 
+       fireEvent.pointerEnter(screen.getByRole('treeitem').parentElement as HTMLElement)
+@@ -551,7 +551,7 @@ describe('workspace browser rows', () => {
+         runningSubagentCount: 0, completed: false, hasActiveSchedule: false, updatedAt: 0,
+       }
+       render(<SessionNodeItem node={node} currentId={undefined} now={0} onOpen={vi.fn()}
+-        onRename={vi.fn()} onFork={vi.fn()} onArchive={vi.fn()} t={t} />)
++        onRename={vi.fn()} onFork={vi.fn()} onDelete={vi.fn()} t={t} />)
+       fireEvent.pointerEnter(screen.getByRole('treeitem').parentElement as HTMLElement)
+       act(() => { vi.advanceTimersByTime(500) })
+       expect(screen.getByText('空闲')).toBeTruthy()
+@@ -569,7 +569,7 @@ describe('workspace browser rows', () => {
+         runningSubagentCount: 0, completed: true, hasActiveSchedule: false, updatedAt: 0,
+       }
+       render(<SessionNodeItem node={node} currentId={undefined} now={0} onOpen={vi.fn()}
+-        onRename={vi.fn()} onFork={vi.fn()} onArchive={vi.fn()} t={t} />)
++        onRename={vi.fn()} onFork={vi.fn()} onDelete={vi.fn()} t={t} />)
+       fireEvent.pointerEnter(screen.getByRole('treeitem').parentElement as HTMLElement)
+       act(() => { vi.advanceTimersByTime(500) })
+       // Row's visually-hidden reminder label plus the hover card's status line.
+@@ -587,7 +587,7 @@ describe('workspace browser rows', () => {
+     const inactive = dragProps()
+     const { rerender } = render(
+       <SessionNodeItem node={node} currentId={undefined} now={0} onOpen={vi.fn()}
+-        onRename={vi.fn()} onFork={vi.fn()} onArchive={vi.fn()} drag={inactive} t={t} />,
++        onRename={vi.fn()} onFork={vi.fn()} onDelete={vi.fn()} drag={inactive} t={t} />,
+     )
+     const row = screen.getByRole('treeitem')
+     stubRect(row)
+@@ -605,7 +605,7 @@ describe('workspace browser rows', () => {
+     const active = dragProps({ active: true, marker: 'before' })
+     rerender(
+       <SessionNodeItem node={node} currentId={undefined} now={0} onOpen={vi.fn()}
+-        onRename={vi.fn()} onFork={vi.fn()} onArchive={vi.fn()} drag={active} t={t} />,
++        onRename={vi.fn()} onFork={vi.fn()} onDelete={vi.fn()} drag={active} t={t} />,
+     )
+     stubRect(screen.getByRole('treeitem'))
+     // Top half hovers/drops 'before'; bottom half 'after' (row mid = 117).
+@@ -619,7 +619,7 @@ describe('workspace browser rows', () => {
+     const after = dragProps({ active: true, marker: 'after' })
+     rerender(
+       <SessionNodeItem node={node} currentId={undefined} now={0} onOpen={vi.fn()}
+-        onRename={vi.fn()} onFork={vi.fn()} onArchive={vi.fn()} drag={after} t={t} />,
++        onRename={vi.fn()} onFork={vi.fn()} onDelete={vi.fn()} drag={after} t={t} />,
+     )
+     expect(screen.getByRole('treeitem').className).toMatch(/dropAfter/)
+   })
+diff --git a/packages/client/ui-workspace/tests/workspace-browser.client.spec.tsx b/packages/client/ui-workspace/tests/workspace-browser.client.spec.tsx
+index 8ee31d37c9..111db0ccc2 100644
+--- a/packages/client/ui-workspace/tests/workspace-browser.client.spec.tsx
++++ b/packages/client/ui-workspace/tests/workspace-browser.client.spec.tsx
+@@ -79,7 +79,7 @@ function mount(overrides: Partial<WorkspaceBrowserProps> = {}) {
+     forkSession: vi.fn(),
+     renameWorkspace: vi.fn(async () => {}),
+     deleteWorkspace: vi.fn(async () => {}),
+-    archiveSession: vi.fn(async () => {}),
++    deleteSession: vi.fn(async () => {}),
+     insertWorkspaceBefore: vi.fn(async () => {}),
+     insertSessionBefore: vi.fn(async () => {}),
+     createWorkspace: vi.fn(async () => workspace('created', [])),
+@@ -410,43 +410,42 @@ describe('WorkspaceBrowser', () => {
+     expect(screen.getAllByRole('treeitem').slice(1)[0]?.textContent).toContain('two')
+   })
+ 
+-  it('archives a session from the row menu and hides archived rows in both modes', async () => {
+-    const archiveSession = vi.fn(async () => {})
+-    const b = mount({
++  it('deletes a session from the row menu and hides deleted rows in both modes', async () => {
++    const deleteSession = vi.fn(async () => {})
++    mount({
+       useSessions: hook(sessionState([summary('kept-s', 2), summary('gone-s', 1)])),
+       useWorkspaces: hook(workspaceState([workspace('alpha', ['kept-s', 'gone-s'])])),
+-      archiveSession,
++      deleteSession,
+     })
+     fireEvent.click(screen.getByText('alpha'))
+     fireEvent.click(screen.getByRole('button', { name: '会话“gone-s”的操作' }))
+-    fireEvent.click(screen.getByRole('menuitem', { name: '归档会话' }))
+-    expect(archiveSession).toHaveBeenCalledWith(sid('gone-s'))
++    fireEvent.click(screen.getByRole('menuitem', { name: '删除会话' }))
++    expect(deleteSession).toHaveBeenCalledWith(sid('gone-s'))
+ 
+-    // The archive-set echo hides the row in grouped and flat modes.
+-    rerender(b, { useWorkspaces: hook(workspaceState([workspace('alpha', ['kept-s', 'gone-s'])], [sid('gone-s')])) })
+-    expect(screen.queryByText('gone-s')).toBeNull()
++    // The host-confirmed delete hides the row locally in grouped and flat modes.
++    await waitFor(() => { expect(screen.queryByText('gone-s')).toBeNull() })
+     fireEvent.click(screen.getByRole('button', { name: '视图选项' }))
+     fireEvent.click(screen.getByRole('menuitem', { name: '单列表' }))
+     expect(screen.getByText('kept-s')).toBeTruthy()
+     expect(screen.queryByText('gone-s')).toBeNull()
+   })
+ 
+-  it('logs and keeps the tree when the archive call rejects', async () => {
+-    const rejection = new Error('archive exploded')
+-    const archiveSession = vi.fn(async () => { throw rejection })
++  it('logs and keeps the tree when the delete call rejects', async () => {
++    const rejection = new Error('delete exploded')
++    const deleteSession = vi.fn(async () => { throw rejection })
+     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+     try {
+       mount({
+         useSessions: hook(sessionState([summary('alpha-s', 1)])),
+         useWorkspaces: hook(workspaceState([workspace('alpha', ['alpha-s'])])),
+-        archiveSession,
++        deleteSession,
+       })
+       fireEvent.click(screen.getByText('alpha'))
+       fireEvent.click(screen.getByRole('button', { name: '会话“alpha-s”的操作' }))
+-      fireEvent.click(screen.getByRole('menuitem', { name: '归档会话' }))
++      fireEvent.click(screen.getByRole('menuitem', { name: '删除会话' }))
+       await Promise.resolve()
+       await Promise.resolve()
+-      expect(warn).toHaveBeenCalledWith('session archive rejected:', rejection)
++      expect(warn).toHaveBeenCalledWith('session delete rejected:', rejection)
+       expect(screen.getByText('alpha-s')).toBeTruthy()
+     } finally {
+       warn.mockRestore()
+diff --git a/packages/client/ui-workspace/tsdown.config.ts b/packages/client/ui-workspace/tsdown.config.ts
+index c4bb255e57..b1838e5da4 100644
+--- a/packages/client/ui-workspace/tsdown.config.ts
++++ b/packages/client/ui-workspace/tsdown.config.ts
+@@ -1,3 +1,3 @@
+ import { clientBundle } from '../tsdown.client.ts'
+ 
+-export default clientBundle('@deepseek-ai/dsh-client-ui-workspace', ['lib/types/index.js'])
++export default clientBundle('dshui-client-ui-workspace', ['lib/types/index.js'])
+diff --git a/packages/extensions/cordis-client-runner/src/client/slot-catalog.ts b/packages/extensions/cordis-client-runner/src/client/slot-catalog.ts
+index b339379ec0..8dec0b4671 100644
+--- a/packages/extensions/cordis-client-runner/src/client/slot-catalog.ts
++++ b/packages/extensions/cordis-client-runner/src/client/slot-catalog.ts
+@@ -204,7 +204,7 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
+     ],
+     replaceRisk: 'none',
+     example: 'return {\n  inject: [\'slots\'],\n  apply(ctx) {\n    ctx.slots.inject(\'conversation.chat.assistant-actions\', () => ctx.slots.register(\n      { name: \'conversation.chat.assistant-actions\', id: \'my-entry\', order: 100, label: \'My entry\' },\n      () => React.createElement(\'div\', null, \'hello\'),\n    ))\n  },\n}',
+-    source: 'packages/client/ui-chat/src/client/contract/slots.ts:221',
++    source: 'packages/client/ui-chat/src/client/contract/slots.ts:232',
+   },
+   {
+     key: 'conversation.chat.commandview',
+@@ -249,7 +249,7 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
+     occupants: [],
+     replaceRisk: 'none',
+     example: 'return {\n  inject: [\'slots\'],\n  apply(ctx) {\n    ctx.slots.inject(\'conversation.chat.commandview\', () => ctx.slots.register(\n      { name: \'conversation.chat.commandview\', key: \'<one key the owner dispatches>\' },\n      () => React.createElement(\'div\', null, \'hello\'),\n    ))\n  },\n}',
+-    source: 'packages/client/ui-chat/src/client/contract/slots.ts:209',
++    source: 'packages/client/ui-chat/src/client/contract/slots.ts:220',
+   },
+   {
+     key: 'conversation.chat.node',
+@@ -294,7 +294,7 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
+     declaredBy: 'an entry in \'conversation.view\' (client-ui-chat), so it exists while that entry is mounted',
+     occupants: [
+       'client-ui-chat UserMessageNodeView key \'user\'',
+-      'client-ui-chat UserMessageNodeView key \'steering\'',
++      'client-ui-chat SteeringMessageNodeView key \'steering\'',
+       'client-ui-chat ContextMessageNodeView key \'context\'',
+       'client-ui-chat SystemPromptNodeView key \'system-prompt\'',
+       'client-ui-chat AssistantNodeView key \'assistant-step\'',
+@@ -313,7 +313,7 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
+     ],
+     replaceRisk: 'shadows-shipped-ui',
+     example: 'return {\n  inject: [\'slots\'],\n  apply(ctx) {\n    ctx.slots.inject(\'conversation.chat.node\', () => ctx.slots.register(\n      { name: \'conversation.chat.node\', key: \'<one key the owner dispatches>\' },\n      () => React.createElement(\'div\', null, \'hello\'),\n    ))\n  },\n}',
+-    source: 'packages/client/ui-chat/src/client/contract/slots.ts:190',
++    source: 'packages/client/ui-chat/src/client/contract/slots.ts:201',
+   },
+   {
+     key: 'conversation.chat.turnTail',
+@@ -358,7 +358,62 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
+     ],
+     replaceRisk: 'none',
+     example: 'return {\n  inject: [\'slots\'],\n  apply(ctx) {\n    ctx.slots.inject(\'conversation.chat.turnTail\', () => ctx.slots.register(\n      { name: \'conversation.chat.turnTail\', select: owner => null },\n      () => React.createElement(\'div\', null, \'hello\'),\n    ))\n  },\n}',
+-    source: 'packages/client/ui-chat/src/client/contract/slots.ts:215',
++    source: 'packages/client/ui-chat/src/client/contract/slots.ts:226',
++  },
++  {
++    key: 'conversation.chat.user-actions',
++    kind: 'list',
++    scope: 'session',
++    summary: 'Action strip attached to one user message, rendered inside that message\'s IconActions row.',
++    doc: 'Action strip attached to one user message, rendered inside that\nmessage\'s IconActions row. The chat entry owns the render site and\npasses the enclosing Turn; contributors add per-message actions\nwithout importing the conversation implementation. Entries render by\nascending `order`.',
++    registerOptions: [
++      {
++        name: 'id',
++        requirement: 'required',
++        type: 'string',
++        doc: 'Your cell key. Use an id of your own: a fresh id is added beside the shipped entries, while reusing a shipped id puts you in THAT cell and replaces it. Owners that filter by id address you by it.',
++      },
++      {
++        name: 'order',
++        requirement: 'optional',
++        type: 'number',
++        doc: 'Position among the entries, ascending (default 0).',
++      },
++      {
++        name: 'label',
++        requirement: 'optional',
++        type: 'string | (() => string)',
++        doc: 'Display text where the owner projects one (nav rows, tabs). A thunk is re-read on every projection, so localized text follows the active locale without re-registering.',
++      },
++    ],
++    ownerProps: [
++      '/**\n * Owner currency of the user-message action strip: the enclosing Turn the\n * message opens. Only turn-resolved user messages reach this slot, so a\n * registrant can anchor turn-scoped actions (e.g. workspace rollback) to the\n * message\'s own Turn.\n */\nexport interface UserActionOwnerProps {\n  /** Engine-owned enclosing Turn boundary the message belongs to. */\n  turn: TurnLocation\n}',
++    ],
++    ownerPropsReferences: [
++      'TurnLocation',
++    ],
++    standardProps: [
++      'useWorkspaces: SnapshotSelectorHook<WorkspaceSnapshot>',
++      'useSessions: UseSessions',
++      'useSessionPendingInteraction: UseSessionPendingInteraction',
++      'useWorkspaces: SnapshotSelectorHook<WorkspaceSnapshot>',
++      'useChat: UseChat',
++      'useConversation: UseConversation',
++      'useInput: SnapshotSelectorHook<InputState>',
++      'inputActions: InputActions',
++      'useSession: SessionSnapshotSelector',
++      'sessionId: SessionId',
++      'useProjection: UseProjection',
++      'useTrajectory: UseTrajectory',
++    ],
++    keyDomain: '',
++    hookContext: '',
++    slotInject: '',
++    declaredBy: 'an entry in \'conversation.chat.node\' (client-ui-chat), so it exists while that entry is mounted',
++    occupants: [],
++    replaceRisk: 'none',
++    example: 'return {\n  inject: [\'slots\'],\n  apply(ctx) {\n    ctx.slots.inject(\'conversation.chat.user-actions\', () => ctx.slots.register(\n      { name: \'conversation.chat.user-actions\', id: \'my-entry\', order: 100, label: \'My entry\' },\n      () => React.createElement(\'div\', null, \'hello\'),\n    ))\n  },\n}',
++    source: 'packages/client/ui-chat/src/client/contract/slots.ts:240',
+   },
+   {
+     key: 'conversation.composer',
+@@ -532,7 +587,7 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
+     ],
+     replaceRisk: 'shadows-shipped-ui',
+     example: 'return {\n  inject: [\'slots\'],\n  apply(ctx) {\n    ctx.slots.inject(\'conversation.details.tool\', () => ctx.slots.register(\n      { name: \'conversation.details.tool\' },\n      () => React.createElement(\'div\', null, \'hello\'),\n    ))\n  },\n}',
+-    source: 'packages/client/ui-chat/src/client/contract/slots.ts:227',
++    source: 'packages/client/ui-chat/src/client/contract/slots.ts:246',
+   },
+   {
+     key: 'conversation.hero.agentPreset',
+@@ -1010,7 +1065,7 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
+     ],
+     replaceRisk: 'shadows-shipped-ui',
+     example: 'return {\n  inject: [\'slots\'],\n  apply(ctx) {\n    ctx.slots.inject(\'conversation.message.images\', () => ctx.slots.register(\n      { name: \'conversation.message.images\' },\n      () => React.createElement(\'div\', null, \'hello\'),\n    ))\n  },\n}',
+-    source: 'packages/client/ui-chat/src/client/contract/slots.ts:203',
++    source: 'packages/client/ui-chat/src/client/contract/slots.ts:214',
+   },
+   {
+     key: 'conversation.session',
+diff --git a/packages/util/native-command/src/path-opener.ts b/packages/util/native-command/src/path-opener.ts
+index 97d2084e61..2e4140ca1a 100644
+--- a/packages/util/native-command/src/path-opener.ts
++++ b/packages/util/native-command/src/path-opener.ts
+@@ -24,6 +24,13 @@ export interface PathOpenerInternals {
+   /** Environment used for WSL markers and the desktop Linux browser convention. */
+   env?: NodeJS.ProcessEnv
+   run?: PathOpenerRunner
++  /**
++   * dshui patch: the workspace of the window the open click happened in.
++   * Attached by the dshui client bundle to the host.openPath payload and
++   * threaded down by the api controller; when present the path opens in that
++   * window's bridge, ahead of workspace-ownership routing.
++   */
++  dshuiOrigin?: string
+ }
+ 
+ /** Documents a browser renders, as opposed to ones an editor merely edits. */
+@@ -116,6 +123,138 @@ async function openWslPath(path: string, signal: AbortSignal, run: PathOpenerRun
+   await openWindowsPath(windowsPath, signal, run)
+ }
+ 
++// ── dshui patch: route "open path" gestures into the hosting VS Code ──
++// The dsh web UI opens paths with the OS default handler; a browser app has no
++// idea an IDE is hosting it. These helpers first ask the hosting VS Code (via
++// a local open bridge) to open the path — no OS external-scheme confirmation
++// popup — then fall back to the `code` CLI, then to a `vscode://file` URL.
++
++/** dshui patch: process liveness via signal 0. */
++function dshuiPidAlive(pid: number): boolean {
++  try { process.kill(pid, 0); return true } catch (error) { return error !== null && error !== undefined && (error as NodeJS.ErrnoException).code === 'EPERM' }
++}
++
++/** dshui patch: bridge lease liveness — the pid alone is insufficient because
++ * the OS can recycle it after the owning window dies. */
++function dshuiBridgeLeaseLive(entry: { lastSeen: number }): boolean {
++  return Date.now() - entry.lastSeen <= 45000
++}
++
++/** dshui patch: absolute path as a `vscode://file/` URL (fallback opener). */
++function dshuiVscodeFileUrl(path: string): string {
++  return 'vscode://file/' + path.split('/').map(segment => encodeURIComponent(segment)).join('/')
++}
++
++/** dshui patch: normalize the click origin attached by the client bundle. */
++function dshuiOriginWorkspace(origin: string): string | null {
++  if (typeof origin !== 'string' || origin === '') return null
++  let workspace = origin
++  while (workspace.length > 1 && (workspace.endsWith('/') || workspace.endsWith('\\'))) workspace = workspace.slice(0, -1)
++  return workspace === '' ? null : workspace
++}
++
++/** dshui patch: the bridge registered by the window with the exact workspace path. */
++async function dshuiBridgeForWorkspace(workspace: string): Promise<{ endpoint: string; token: string } | null> {
++  const bridgesFile = process.env.DSHUI_BRIDGES_FILE
++  if (!bridgesFile) return null
++  let fsModule: typeof import('node:fs'), raw: string
++  try {
++    fsModule = await import('node:fs')
++    raw = fsModule.readFileSync(bridgesFile, 'utf8')
++  } catch { return null }
++  let bridges: unknown
++  try { bridges = JSON.parse(raw) } catch { return null }
++  if (bridges === null || typeof bridges !== 'object') return null
++  for (const entry of Object.values(bridges as Record<string, unknown>)) {
++    if (entry === null || typeof entry !== 'object'
++      || typeof (entry as { pid?: unknown }).pid !== 'number' || !dshuiPidAlive((entry as { pid: number }).pid)
++      || typeof (entry as { id?: unknown }).id !== 'string' || (entry as { id: string }).id === ''
++      || typeof (entry as { lastSeen?: unknown }).lastSeen !== 'number' || !dshuiBridgeLeaseLive(entry as { lastSeen: number })
++      || typeof (entry as { workspace?: unknown }).workspace !== 'string' || (entry as { workspace: string }).workspace === ''
++      || typeof (entry as { endpoint?: unknown }).endpoint !== 'string' || (entry as { endpoint: string }).endpoint === ''
++      || typeof (entry as { token?: unknown }).token !== 'string' || (entry as { token: string }).token === '') continue
++    if ((entry as { workspace: string }).workspace === workspace) {
++      return { endpoint: (entry as { endpoint: string }).endpoint, token: (entry as { token: string }).token }
++    }
++  }
++  return null
++}
++
++/** dshui patch: GET one open request to a bridge endpoint. */
++async function dshuiBridgeRequest(target: { endpoint: string; token: string }, path: string, signal: AbortSignal): Promise<boolean> {
++  if (target.endpoint === '') return false
++  try {
++    let url = target.endpoint + '?path=' + encodeURIComponent(path)
++    if (target.token !== '') url += '&token=' + encodeURIComponent(target.token)
++    const response = await fetch(url, { signal })
++    return response.ok
++  } catch (error) {
++    console.warn('[dshui] open bridge request failed:', error)
++    return false
++  }
++}
++
++/** dshui patch: pick the bridge whose workspace is the longest path prefix of the opened file. */
++async function dshuiPickBridgeForPath(path: string): Promise<{ endpoint: string; token: string } | null> {
++  const bridgesFile = process.env.DSHUI_BRIDGES_FILE
++  if (!bridgesFile) return null
++  let fsModule: typeof import('node:fs'), raw: string
++  try {
++    fsModule = await import('node:fs')
++    raw = fsModule.readFileSync(bridgesFile, 'utf8')
++  } catch { return null }
++  let bridges: unknown
++  try { bridges = JSON.parse(raw) } catch { return null }
++  if (bridges === null || typeof bridges !== 'object') return null
++  let best: { workspace: string; endpoint: string; token: string } | null = null
++  for (const entry of Object.values(bridges as Record<string, unknown>)) {
++    if (entry === null || typeof entry !== 'object'
++      || typeof (entry as { pid?: unknown }).pid !== 'number' || !dshuiPidAlive((entry as { pid: number }).pid)
++      || typeof (entry as { id?: unknown }).id !== 'string' || (entry as { id: string }).id === ''
++      || typeof (entry as { lastSeen?: unknown }).lastSeen !== 'number' || !dshuiBridgeLeaseLive(entry as { lastSeen: number })
++      || typeof (entry as { workspace?: unknown }).workspace !== 'string' || (entry as { workspace: string }).workspace === ''
++      || typeof (entry as { endpoint?: unknown }).endpoint !== 'string' || (entry as { endpoint: string }).endpoint === ''
++      || typeof (entry as { token?: unknown }).token !== 'string' || (entry as { token: string }).token === '') continue
++    const ws = (entry as { workspace: string }).workspace
++    if (path === ws || path.startsWith(ws + '/')) {
++      if (best === null || ws.length > best.workspace.length) {
++        best = entry as { workspace: string; endpoint: string; token: string }
++      }
++    }
++  }
++  return best === null ? null : { endpoint: best.endpoint, token: best.token }
++}
++
++/** dshui patch: ask the hosting VS Code (via a window's local open bridge) to
++ * open a path. The click origin is authoritative; workspace routing (longest
++ * prefix, then the owner bridge) applies only when no origin was attached. */
++async function dshuiOpenViaBridge(path: string, signal: AbortSignal, origin: string | undefined): Promise<boolean> {
++  const originWs = dshuiOriginWorkspace(origin ?? '')
++  if (originWs !== null) {
++    const own = await dshuiBridgeForWorkspace(originWs)
++    if (own !== null && await dshuiBridgeRequest(own, path, signal)) return true
++  }
++  const target = await dshuiPickBridgeForPath(path)
++  if (target !== null && await dshuiBridgeRequest(target, path, signal)) return true
++  const endpoint = process.env.DSHUI_OPEN_ENDPOINT
++  const token = process.env.DSHUI_OPEN_TOKEN
++  if (endpoint !== undefined && await dshuiBridgeRequest({ endpoint, token: token ?? '' }, path, signal)) return true
++  return false
++}
++
++/** dshui patch: fall back to the `code` CLI — its socket protocol opens the
++ * path in the running VS Code without the OS external-scheme confirmation. */
++async function dshuiOpenViaCli(path: string, signal: AbortSignal): Promise<boolean> {
++  const cli = process.env.DSHUI_CODE_CLI || 'code'
++  try {
++    await runNativeCommand(cli, [path], signal)
++    return true
++  } catch (error) {
++    console.warn('[dshui] code CLI open failed, falling back to vscode://file:', error)
++    return false
++  }
++}
++
+ /** Dispatch one shell-free platform command for the requested open intent. */
+ async function openNativePathWithIntent(
+   path: string,
+@@ -132,7 +271,12 @@ async function openNativePathWithIntent(
+     && await openInBrowser(path, signal, platform, run, env)) return
+ 
+   if (platform === 'darwin') {
+-    await run('open', intent === 'text-editor' ? ['-t', path] : [path], signal)
++    // dshui patch: route the open into the hosting VS Code — bridge, then
++    // code CLI, then a vscode://file URL (browser documents such as .html
++    // still went to the browser via the BROWSER_DOCUMENTS fast path above).
++    if (await dshuiOpenViaBridge(path, signal, internals.dshuiOrigin)) return
++    if (await dshuiOpenViaCli(path, signal)) return
++    await run('open', [dshuiVscodeFileUrl(path)], signal)
+     return
+   }
+ 

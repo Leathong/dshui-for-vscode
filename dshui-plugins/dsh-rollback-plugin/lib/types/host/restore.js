@@ -110,7 +110,7 @@ export class RollbackRestore {
         const merged = await ledgerProvider.mergeChanges(sessionId, found.manifest.turn, cwd, changes, gitAvailable && found.manifest.tree !== undefined);
         changes = merged.changes;
         warnings.push(...merged.warnings);
-        const modifications = this.buildModifications(sessionId, found.manifest.turn, cwd, session.events);
+        const modifications = this.buildModifications(sessionId, found.manifest.turn, cwd, session.snapshotEvents());
         this.attachToolCalls(changes, modifications);
         const prepareId = crypto.randomUUID();
         const prepared = {

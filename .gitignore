@@ -3,7 +3,10 @@ node_modules/
 !dshui-plugins/**/node_modules/
 .pnpm-store/
 out/
+# 源码构建的 @deepseek-ai 运行时产物（.dsh-src 构建），直接写入 node_modules，不进 git。
 .dsh-src/
 .tools/
 *.vsix
 .DS_Store
+pnpm-lock.yaml
+pnpm-workspace.yaml

@@ -1,6 +1,6 @@
 export function resolveBoundary(session, messageId) {
     let assistant;
-    for (const event of session.events) {
+    for (const event of session.snapshotEvents()) {
         if (event.type !== 'assistant/message')
             continue;
         const message = event.data.message;
@@ -26,7 +26,7 @@ export function resolveBoundary(session, messageId) {
  * completed turn end before it.
  */
 export function resolveBoundaryForTurn(session, turn) {
-    const turnStart = session.events.find(event => event.type === 'turn/start' && event.data.turn === turn);
+    const turnStart = session.snapshotEvents().find(event => event.type === 'turn/start' && event.data.turn === turn);
     if (turnStart === undefined) {
         return {
             failure: {
@@ -39,8 +39,9 @@ export function resolveBoundaryForTurn(session, turn) {
     return resolveForTurn(session, turn, { turnStartSeq: turnStart.seq });
 }
 function resolveForTurn(session, targetTurn, extras) {
-    const turnStart = session.events.find(event => event.type === 'turn/start' && event.data.turn === targetTurn);
-    const anchor = findPreviousTurnEnd(session.events, turnStart?.seq ?? Number.MAX_SAFE_INTEGER);
+    const events = session.snapshotEvents();
+    const turnStart = events.find(event => event.type === 'turn/start' && event.data.turn === targetTurn);
+    const anchor = findPreviousTurnEnd(events, turnStart?.seq ?? Number.MAX_SAFE_INTEGER);
     return {
         boundary: {
             targetTurn,

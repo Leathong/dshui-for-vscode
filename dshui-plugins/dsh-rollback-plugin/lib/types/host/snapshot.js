@@ -305,6 +305,6 @@ function trimManifests(manifests, maxPerSession) {
     return result;
 }
 function turnStartSeq(session, turn) {
-    const event = session.events.find(item => item.type === 'turn/start' && item.data.turn === turn);
+    const event = session.snapshotEvents().find(item => item.type === 'turn/start' && item.data.turn === turn);
     return event?.seq;
 }

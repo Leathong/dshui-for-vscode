@@ -46,9 +46,7 @@ export declare function wholeFileHunk(before: string | null, after: string): Rol
  */
 export declare function lineDiffHunks(before: string, after: string): RollbackHunk[];
 /** Open turn/step for a session, derived from the durable log boundaries. */
-export declare function sessionTurnPosition(session: {
-    readonly events: readonly LedgerEventLike[];
-}): {
+export declare function sessionTurnPosition(events: readonly LedgerEventLike[]): {
     turn: number;
     step: number;
     seq: number;

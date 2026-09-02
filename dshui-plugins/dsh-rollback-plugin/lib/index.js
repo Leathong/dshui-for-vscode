@@ -858,7 +858,7 @@ function trimManifests(manifests, maxPerSession) {
 	return result;
 }
 function turnStartSeq(session, turn) {
-	return session.events.find((item) => item.type === "turn/start" && item.data.turn === turn)?.seq;
+	return session.snapshotEvents().find((item) => item.type === "turn/start" && item.data.turn === turn)?.seq;
 }
 function acceptsPath() {
 	return path.join(changeLedgerRoot(), "v1", "accepts.json");
@@ -1192,11 +1192,11 @@ function countLines(text) {
 	return text.split("\n").length;
 }
 /** Open turn/step for a session, derived from the durable log boundaries. */
-function sessionTurnPosition(session) {
+function sessionTurnPosition(events) {
 	let turn = 0;
 	let step = 0;
 	let seq = -1;
-	for (const event of session.events) {
+	for (const event of events) {
 		seq = event.seq;
 		if (event.type === "turn/start") turn = event.data.turn;
 		if (event.type === "step/start") step = event.data.step;
@@ -1270,8 +1270,9 @@ var ChangeLedger = class {
 		else list.pop();
 		if (list.length === 0) this.pending.delete(key);
 		const session = actor?.agent?.session;
-		const position = session === void 0 ? void 0 : this.positionForCall(session, selected.modificationId);
-		const fallback = session === void 0 ? void 0 : sessionTurnPosition(session);
+		const sessionEvents = session === void 0 ? void 0 : session.snapshotEvents();
+		const position = sessionEvents === void 0 ? void 0 : this.positionForCall(sessionEvents, selected.modificationId);
+		const fallback = sessionEvents === void 0 ? void 0 : sessionTurnPosition(sessionEvents);
 		const turn = position?.turn ?? fallback?.turn ?? 0;
 		const step = position?.step ?? fallback?.step ?? 0;
 		const seq = position?.seq ?? fallback?.seq ?? -1;
@@ -1519,8 +1520,8 @@ var ChangeLedger = class {
 		list.push(pending);
 		this.pending.set(key, list);
 	}
-	positionForCall(session, callId) {
-		for (const event of [...session.events].reverse()) {
+	positionForCall(events, callId) {
+		for (const event of [...events].reverse()) {
 			if (event.type !== "tool/call") continue;
 			const data = event.data;
 			if (data.callId === callId) return {
@@ -1568,7 +1569,7 @@ function fail(code, message, fields = {}) {
 //#region lib/types/host/boundary.js
 function resolveBoundary(session, messageId) {
 	let assistant;
-	for (const event of session.events) {
+	for (const event of session.snapshotEvents()) {
 		if (event.type !== "assistant/message") continue;
 		if (event.data.message.id === messageId) assistant = event;
 	}
@@ -1587,7 +1588,7 @@ function resolveBoundary(session, messageId) {
 * completed turn end before it.
 */
 function resolveBoundaryForTurn(session, turn) {
-	const turnStart = session.events.find((event) => event.type === "turn/start" && event.data.turn === turn);
+	const turnStart = session.snapshotEvents().find((event) => event.type === "turn/start" && event.data.turn === turn);
 	if (turnStart === void 0) return { failure: {
 		code: "turn-not-found",
 		message: `turn ${turn} has no turn/start in session "${session.id}"`,
@@ -1596,8 +1597,9 @@ function resolveBoundaryForTurn(session, turn) {
 	return resolveForTurn(session, turn, { turnStartSeq: turnStart.seq });
 }
 function resolveForTurn(session, targetTurn, extras) {
-	const turnStart = session.events.find((event) => event.type === "turn/start" && event.data.turn === targetTurn);
-	const anchor = findPreviousTurnEnd(session.events, turnStart?.seq ?? Number.MAX_SAFE_INTEGER);
+	const events = session.snapshotEvents();
+	const turnStart = events.find((event) => event.type === "turn/start" && event.data.turn === targetTurn);
+	const anchor = findPreviousTurnEnd(events, turnStart?.seq ?? Number.MAX_SAFE_INTEGER);
 	return { boundary: {
 		targetTurn,
 		...anchor === void 0 ? {} : { forkAtSeq: anchor.seq },
@@ -1991,7 +1993,7 @@ var RollbackRestore = class {
 		const merged = await new LedgerProvider(this.ctx, this.ledger).mergeChanges(sessionId, found.manifest.turn, cwd, changes, gitAvailable && found.manifest.tree !== void 0);
 		changes = merged.changes;
 		warnings.push(...merged.warnings);
-		const modifications = this.buildModifications(sessionId, found.manifest.turn, cwd, session.events);
+		const modifications = this.buildModifications(sessionId, found.manifest.turn, cwd, session.snapshotEvents());
 		this.attachToolCalls(changes, modifications);
 		const prepareId = crypto.randomUUID();
 		const prepared = {
@@ -2814,7 +2816,7 @@ var SessionChangeManager = class {
 		}
 		changes = [...byPath.values()];
 		if (!gitAvailable) warnings.push("workspace is not inside a git work tree; only tool write/edit modifications captured by the ledger can be restored");
-		const modifications = buildModificationsFromRecords(cwd, session.events, this.ledger.list(sessionId), (record) => this.ledger.laterModifications(sessionId, record.path, record));
+		const modifications = buildModificationsFromRecords(cwd, session.snapshotEvents(), this.ledger.list(sessionId), (record) => this.ledger.laterModifications(sessionId, record.path, record));
 		this.attachToolCalls(changes, modifications);
 		for (const change of changes) {
 			const record = this.accepts.fileRecord(sessionId, change.path);
@@ -3223,7 +3225,7 @@ var SessionChangeManager = class {
 		const ids = /* @__PURE__ */ new Set();
 		const abs = path.resolve(cwd, rel);
 		for (const record of this.ledger.recordsForPath(session.id, abs)) ids.add(record.modificationId);
-		for (const event of session.events) {
+		for (const event of session.snapshotEvents()) {
 			if (event.type !== "tool/call") continue;
 			const data = event.data;
 			if (data.callId === void 0 || data.name !== "write" && data.name !== "edit") continue;
@@ -3294,8 +3296,8 @@ var SessionChangeManager = class {
 * their real start is the first turn/start at or after the seed boundary.
 */
 function sessionStartTurn(session) {
-	const seedLength = session.header.seedLength ?? 0;
-	for (const event of session.events) if (event.type === "turn/start" && event.seq >= seedLength) return event.data.turn;
+	const seedLength = session.inheritedEventCount ?? 0;
+	for (const event of session.snapshotEvents()) if (event.type === "turn/start" && event.seq >= seedLength) return event.data.turn;
 	return 1;
 }
 function baselineInfo(manifest, startTurn) {

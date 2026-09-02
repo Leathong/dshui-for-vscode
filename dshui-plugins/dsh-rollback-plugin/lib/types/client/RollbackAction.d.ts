@@ -1,5 +1,6 @@
 import type { ReactElement } from 'react';
-import type { SessionId, TurnLocation } from '@deepseek-ai/dsh-client-runtime/client';
+import type { SessionId } from '@deepseek-ai/dsh-session/types';
+import type { TurnLocation } from '@deepseek-ai/dsh-client-ui-conversation/client';
 import type { OpenAtResult, RollbackExecuteRequest, RollbackExecuteResult, RollbackPrepareResult } from '../shared/types.ts';
 import type { RollbackLocaleKey } from './locales.ts';
 /** Rollback anchor: a finalized assistant message or a turn number. */

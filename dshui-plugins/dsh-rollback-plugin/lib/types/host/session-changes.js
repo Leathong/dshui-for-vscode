@@ -143,7 +143,7 @@ export class SessionChangeManager {
         if (!gitAvailable) {
             warnings.push('workspace is not inside a git work tree; only tool write/edit modifications captured by the ledger can be restored');
         }
-        const modifications = buildModificationsFromRecords(cwd, session.events, this.ledger.list(sessionId), record => this.ledger.laterModifications(sessionId, record.path, record));
+        const modifications = buildModificationsFromRecords(cwd, session.snapshotEvents(), this.ledger.list(sessionId), record => this.ledger.laterModifications(sessionId, record.path, record));
         this.attachToolCalls(changes, modifications);
         // Reading a whole file only to hash it is the most expensive per-change
         // step, so fingerprint only files that actually have an accept record.
@@ -656,7 +656,7 @@ export class SessionChangeManager {
         const abs = path.resolve(cwd, rel);
         for (const record of this.ledger.recordsForPath(session.id, abs))
             ids.add(record.modificationId);
-        for (const event of session.events) {
+        for (const event of session.snapshotEvents()) {
             if (event.type !== 'tool/call')
                 continue;
             const data = event.data;
@@ -748,8 +748,8 @@ export class SessionChangeManager {
  * their real start is the first turn/start at or after the seed boundary.
  */
 export function sessionStartTurn(session) {
-    const seedLength = session.header.seedLength ?? 0;
-    for (const event of session.events) {
+    const seedLength = session.inheritedEventCount ?? 0;
+    for (const event of session.snapshotEvents()) {
         if (event.type === 'turn/start' && event.seq >= seedLength)
             return event.data.turn;
     }

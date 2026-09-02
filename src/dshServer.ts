@@ -38,14 +38,89 @@ export interface DshServerOptions {
   sharedBackend?: boolean
 }
 
-const URL_LINE = /dsh web:\s+http:\/\/127\.0\.0\.1:(\d+)/
+/**
+ * The `dsh web:` readiness line. Since dsh 0.1.2 the root URL carries a
+ * process launch token (`/?token=...`) that the browser exchanges for a signed
+ * cookie; the embedded webview must load that token URL or the index 401s.
+ * Capture the full 127.0.0.1 authority URL (with its token) and derive both
+ * the bound port and the token from it.
+ */
+const URL_LINE = /dsh web:\s+(http:\/\/127\.0\.0\.1:\d+[^\s)]*)/
+
+/** Read the bound port and the process launch token from the readiness URL. */
+interface BootUrl {
+  port: number
+  token: string
+}
+
+/** Short delay between probe retries (waiting for a just-started server). */
+function sleepMs(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+/** Single probe attempt: is a dshui server with a parseable graph on the port? */
+function probeDshuiServerOnce(port: number, timeoutMs: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const req = http.get({ host: '127.0.0.1', port, path: '/', timeout: timeoutMs }, (res) => {
+      res.setEncoding('utf8')
+      let body = ''
+      res.on('data', (chunk: string) => { body += chunk })
+      res.on('end', () => {
+        if (res.statusCode === 200) {
+          resolve(body.includes('__DSHUI_WORKSPACE__') && body.includes('"batches":['))
+          return
+        }
+        // Since dsh 0.1.2 the index is behind browser-token auth: a token-less
+        // request to `/` answers 401 with this exact body. A dsh web server IS
+        // on the port (it just needs the launch token to serve the index), so a
+        // raw probe must treat this as "server present" too — otherwise the
+        // second window cannot detect the first window's server and spawns a
+        // competing child (EADDRINUSE). alpha.4 servers that demand auth always
+        // carry a valid graph, so this does not re-open the stale-server hole.
+        if (res.statusCode === 401 && body.includes('dsh web authentication required')) {
+          resolve(true)
+          return
+        }
+        resolve(false)
+      })
+    })
+    req.on('timeout', () => { req.destroy(); resolve(false) })
+    req.on('error', () => { resolve(false) })
+  })
+}
 
 /**
  * True when a dshui-managed dsh web server is already serving on the port:
  * the index page carries the injected `__DSHUI_WORKSPACE__` marker, so a
- * random non-dsh process occupying the port is not mistaken for one.
+ * random non-dsh process occupying the port is not mistaken for one. The
+ * served `__DSH_BOOT__` boot manifest is also validated (its `batches` must be
+ * an array) so the probe rejects an incompatible/stale dsh server (e.g. one
+ * left running by an older rc.2 session on the shared port) whose graph the
+ * current client-modules parser cannot consume — otherwise the extension would
+ * attach to it and the SPA would fail with "boot manifest batches must be an
+ * array".
+ *
+ * The probe retries briefly so a server that is only just finishing boot
+ * (e.g. the owning window started it a moment earlier in a multi-window race)
+ * is detected instead of being mistaken for "no server", which would make the
+ * second window spawn a competing child and fail with EADDRINUSE.
  */
-export function probeDshuiServer(port: number, timeoutMs = 2500): Promise<boolean> {
+export async function probeDshuiServer(port: number, timeoutMs = 1500, attempts = 4): Promise<boolean> {
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    if (await probeDshuiServerOnce(port, timeoutMs)) return true
+    if (attempt < attempts - 1) await sleepMs(350)
+  }
+  return false
+}
+
+/**
+ * True when the port serves a dshui-managed index page (carries the injected
+ * `__DSHUI_WORKSPACE__` marker), regardless of whether its client graph is
+ * current. Used to identify a stale/incompatible dsh server on a shared port
+ * so the extension can reclaim it (kill and re-spawn) instead of attaching to
+ * a server whose boot manifest the current client-modules cannot parse.
+ */
+export function probeDshuiMarker(port: number, timeoutMs = 2500): Promise<boolean> {
   return new Promise((resolve) => {
     const req = http.get({ host: '127.0.0.1', port, path: '/', timeout: timeoutMs }, (res) => {
       if (res.statusCode !== 200) {
@@ -67,7 +142,7 @@ export function probeDshuiServer(port: number, timeoutMs = 2500): Promise<boolea
 const MAX_RESTARTS = 2
 
 /** Wait for a line matching the URL pattern on the child's stdout. */
-function waitForUrl(child: ChildProcess, timeoutMs: number): Promise<number> {
+function waitForUrl(child: ChildProcess, timeoutMs: number): Promise<BootUrl> {
   return new Promise((resolve, reject) => {
     let buffer = ''
     const timer = setTimeout(() => {
@@ -78,9 +153,11 @@ function waitForUrl(child: ChildProcess, timeoutMs: number): Promise<number> {
       buffer += chunk.toString('utf8')
       const match = URL_LINE.exec(buffer)
       if (match === null) return
-      const port = Number(match[1])
+      const url = new URL(match[1])
+      const port = Number(url.port)
+      const token = url.searchParams.get('token') ?? ''
       cleanup()
-      resolve(port)
+      resolve({ port, token })
     }
     const onExit = (code: number | null): void => {
       cleanup()
@@ -104,6 +181,8 @@ export class DshServer {
   private readonly options: DshServerOptions
   private onData: ((line: string) => void) | null = null
   private startDiagnostics = ''
+  /** The dsh launch token for the bound server (empty when attached via probe). */
+  private launchToken = ''
 
   constructor(options: DshServerOptions) {
     this.options = options
@@ -129,6 +208,11 @@ export class DshServer {
 
   get port(): number | undefined {
     return this.boundPort
+  }
+
+  /** The dsh launch token the server prints on its readiness URL. */
+  get launchTokenValue(): string {
+    return this.launchToken
   }
 
   /** The port requested at construction (0 means OS-assigned). */
@@ -213,8 +297,9 @@ export class DshServer {
       if (this.onData !== null) this.onData(chunk.toString('utf8'))
     })
 
-    return waitForUrl(child, 60_000).then((port) => {
-      this.boundPort = port
+    return waitForUrl(child, 60_000).then((boot) => {
+      this.boundPort = boot.port
+      this.launchToken = boot.token
       child.on('exit', (code, signal) => {
         this.child = null
         this.boundPort = undefined
@@ -231,7 +316,7 @@ export class DshServer {
           })
         }
       })
-      return port
+      return boot.port
     }).catch(async (error) => {
       if (this.child !== null && this.child.exitCode === null) {
         // Never bound and still alive: kill before any retry/adoption.

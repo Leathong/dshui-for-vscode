@@ -462,7 +462,7 @@ window.__ModuleLoader__.load({
 				const change = current.changes.find((item) => item.path === path);
 				const payload = {
 					type: "dshui:reviewModifications",
-					sessionId: props.sessionId,
+					sessionId: props.session.sessionId,
 					listId: current.listId,
 					path,
 					...change === void 0 ? {} : { change }

@@ -48,6 +48,8 @@ export interface ServerRegistry {
   owner: number
   /** Extension hosts currently using the server (owner included). */
   users: ServerUser[]
+  /** The dsh launch token the server prints on its boot URL (for browser auth). */
+  token?: string
 }
 
 function isServerUserShape(user: unknown): user is ServerUser {
@@ -184,7 +186,10 @@ export function readRegistry(dshHome: string): ServerRegistry | null {
       typeof parsed.port !== 'number' || typeof parsed.owner !== 'number'
       || !Array.isArray(parsed.users) || !parsed.users.every(isServerUserShape)
     ) return null
-    return { port: parsed.port, owner: parsed.owner, users: parsed.users }
+    return {
+      port: parsed.port, owner: parsed.owner, users: parsed.users,
+      ...typeof parsed.token === 'string' && parsed.token !== '' ? { token: parsed.token } : {},
+    }
   } catch {
     return null
   }
@@ -208,10 +213,12 @@ function writeRegistry(dshHome: string, registry: ServerRegistry): void {
  * @param dshHome - the dsh home the shared server runs under.
  * @param port - the rendezvous port.
  * @param owner - true when this window spawned the server.
+ * @param token - the dsh launch token, when this window is the owner and knows it.
  */
-export async function registerServerUser(dshHome: string, port: number, owner: boolean): Promise<void> {
+export async function registerServerUser(dshHome: string, port: number, owner: boolean, token?: string): Promise<void> {
   await withRegistryLock(dshHome, () => {
     const existing = readRegistry(dshHome)
+    const resolvedToken = typeof token === 'string' && token !== '' ? token : existing?.token
     // 采纳服务器但注册表尚不存在（owner 窗口还没登记，或服务器由旧版本
     // 窗口启动）：创建注册表并登记自己——绝不能静默跳过，否则 host 插件
     // 会把本窗口误判为不存在而退出共享服务器（见文件头注释的竞态）。
@@ -226,6 +233,7 @@ export async function registerServerUser(dshHome: string, port: number, owner: b
       port,
       owner: owner ? process.pid : (existing?.owner ?? process.pid),
       users,
+      ...resolvedToken !== undefined ? { token: resolvedToken } : {},
     })
   })
 }
