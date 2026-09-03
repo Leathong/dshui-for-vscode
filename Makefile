@@ -5,6 +5,9 @@
 #   make package    只重新打包 vsix（内部先跑 vscode:prepublish：compile + copy:clients + sync:dsh）
 #   make install    打包并覆盖安装
 #   make compile    只编译 TypeScript 到 out/
+#   make dsh-build  （推荐首次）从 dsh 源码构建 .dsh-src（clone+切基提交+套补丁+install+build）
+#   make dsh-apply-patch  （子步骤）只准备 .dsh-src 检出并套补丁；RESET=1 可重置到基提交重套
+#   make dsh-gen-patch （漂移后）重新导出 patches/dshui-bundles.patch
 #   make sync-dsh   （可选）从 .dsh-src 构建产物同步 @deepseek-ai/* 到 node_modules
 #   make sync       快速同步运行产物到已安装副本（改 src/*.ts / dshui-plugins/ 后免打包）
 #   make login      登录 VS Code 市场（发布前一次性操作，或导出 VSCE_PAT 代替）
@@ -18,7 +21,8 @@
 #
 # 依赖说明：扩展的 @deepseek-ai/* 运行时不再从 npm 下载，而是由 .dsh-src 源码构建产物
 # 填充（scripts/sync-dsh.mjs）。打包（vsce 的 vscode:prepublish）会自动跑 sync:dsh；
-# 手动 npm install 后 postinstall 也会跑一次，故开发机需先 clone 并构建 .dsh-src。
+# 手动 npm install 后 postinstall 也会跑一次，故开发机需先 clone 并构建 .dsh-src
+# （可直接 make dsh-build 一键完成；仅同步已构建产物用 make sync-dsh）。
 
 # 以下均从 package.json 动态读取，改 publisher/name/version 后无需改 Makefile。
 NAME      := $(shell node -p "require('./package.json').name")
@@ -51,13 +55,84 @@ AUTH_FLAG := $(if $(AZURE),--azure-credential,$(if $(VSCE_PAT),--pat '$(VSCE_PAT
 GH_TAG    ?= v$(VERSION)
 GH_REPO   ?=
 
-.PHONY: all deploy package install compile sync-dsh sync clean help \
-        login verify-pat publish publish-vsix publish-ovsx release unpublish
+.PHONY: all deploy package install compile dsh-build dsh-apply-patch dsh-gen-patch sync-dsh \
+        sync clean help login verify-pat publish publish-vsix publish-ovsx release unpublish
 
 all: deploy
 
 compile:
 	npm run compile
+
+# ---- dsh 源码构建 ----
+# .dsh-src 是 deepseek-harness 的上游源码检出（不入库），扩展的 @deepseek-ai/* 运行时由它
+# 源码构建产物填充（见 scripts/sync-dsh.mjs 与 patches/README.md）。以下变量均可覆盖。
+# 注意：值后不要跟内联注释（make 会把 # 前的空格算进值里），注释一律放上一行。
+# DSH_SRC  — 上游源码检出目录
+DSH_SRC ?= .dsh-src
+# DSH_REPO  — 上游仓库
+DSH_REPO ?= https://github.com/deepseek-ai/deepseek-harness.git
+# DSH_BASE  — 锁定基提交（来自 patches/README.md，不能漂移，漂移会导致补丁无法套用）
+DSH_BASE ?= 4e84901e6471b79ec0338099867ebb4606d12bb5
+# DSH_PATCH — dshui 未归档改动（client bundle + host 运行时）
+DSH_PATCH := patches/dshui-bundles.patch
+# DSH_PNPM — 包管理器，需要 pnpm 11.7.0、Node ^22.19 || >=24
+DSH_PNPM ?= pnpm
+
+# 从 dsh 源码全新构建：clone/切基提交/套补丁 → pnpm install → build host+client →
+# copy-clients（客户端 bundle 拷入 dshui-plugins/）→ sync-dsh（@deepseek-ai/* 拷入 node_modules）。
+# 之后即可 make package / make deploy 打包安装。
+dsh-build:
+	cd $(DSH_SRC) && $(DSH_PNPM) install
+	cd $(DSH_SRC) && $(DSH_PNPM) run build:lib:host
+	cd $(DSH_SRC) && $(DSH_PNPM) run build:lib:client
+	node scripts/copy-clients.mjs
+	npm run sync:dsh
+	@echo ""
+	@echo "dsh 源码构建完成。现在可 make package（打包 vsix）或 make deploy（打包并安装）。"
+
+# 准备 .dsh-src 检出并切到锁定基提交、套用补丁。
+# 默认：若已存在则复用且不重置（避免破坏本地改动）；新检出或 RESET=1 时重置到基提交并重套补丁。
+dsh-apply-patch:
+	@NEED_SETUP=""; \
+	if [ ! -d "$(DSH_SRC)/.git" ]; then \
+		echo "clone $(DSH_REPO) -> $(DSH_SRC) ..."; \
+		git clone $(DSH_REPO) $(DSH_SRC); \
+		NEED_SETUP=1; \
+	fi; \
+	if [ -n "$$NEED_SETUP" ] || [ -n "$(RESET)" ]; then \
+		echo "切换到基提交 $(DSH_BASE) ..."; \
+		cd $(DSH_SRC) && git fetch origin $(DSH_BASE) && git checkout FETCH_HEAD && \
+		if git apply --reverse --check ../$(DSH_PATCH) 2>/dev/null; then \
+			echo "补丁已套用，跳过"; \
+		elif git apply --check ../$(DSH_PATCH) 2>/dev/null; then \
+			git apply ../$(DSH_PATCH) && echo "补丁已套用"; \
+		else \
+			echo "错误：补丁无法套用（基提交已漂移？请参照 patches/README.md 重基）"; \
+			exit 1; \
+		fi; \
+	else \
+		echo "复用已有 $(DSH_SRC)（未重置）；若需重置到基提交并重套补丁：make dsh-apply-patch RESET=1"; \
+	fi
+
+# 重做（重新导出）patch：直接相对基提交 $(DSH_BASE) 导出 .dsh-src 之上的改动并覆盖 patches/dshui-bundles.patch。
+# 由于「从基提交导出」，已提交或未提交的改动都能导出，无需先重置回基提交，也不用改动必须未提交。
+# 适用：上游基提交漂移后，按 README「跟随 dsh 版本升级」手动逐个重套补丁，需要把改动固化回补丁文件。
+# 前置：.dsh-src 检出在锁定基提交之上（相对 $(DSH_BASE) 存在改动；HEAD 可领先基提交）。
+dsh-gen-patch:
+	@test -d "$(DSH_SRC)/.git" || (echo "错误：未找到 $(DSH_SRC)，请先 make dsh-apply-patch" && exit 1)
+	@if [ -z "$$(cd $(DSH_SRC) && git diff --stat $(DSH_BASE))" ]; then \
+		echo "错误：$(DSH_SRC) 相对基提交 $(DSH_BASE) 没有改动，无法重新导出。"; \
+		echo "（请确认 .dsh-src 检出在基提交之上，且已套上 dshui 改动）"; \
+		exit 1; \
+	fi
+	@{ \
+		echo "备份现有 $(DSH_PATCH) -> $(DSH_PATCH).bak ..."; \
+		cp $(DSH_PATCH) $(DSH_PATCH).bak; \
+		echo "导出 $(DSH_PATCH)（相对基提交 $(DSH_BASE)）..."; \
+		cd $(DSH_SRC) && git diff $(DSH_BASE) > "../$(DSH_PATCH)"; \
+	}; \
+	echo "已重新导出 $(DSH_PATCH)：$$(cd $(DSH_SRC) && git diff --stat $(DSH_BASE) | tail -1)"; \
+	echo "提示：旧补丁备份在 $(DSH_PATCH).bak；可运行 make dsh-apply-patch RESET=1 验证新补丁能干净套用，确认后删除备份。"
 
 # 从 .dsh-src 构建产物同步 @deepseek-ai/* 到 node_modules（源码编译，非 npm）。
 # 注意目标名用 sync-dsh（冒号在 make 里是保留字）；npm script 名仍是 sync:dsh。
@@ -151,6 +226,9 @@ help:
 	@echo "  make package    只重新打包 vsix"
 	@echo "  make install    打包并覆盖安装"
 	@echo "  make compile    只编译 TypeScript"
+	@echo "  make dsh-build  从 dsh 源码构建 .dsh-src（clone+切基提交+套补丁+install+build）"
+	@echo "  make dsh-apply-patch  （子步骤）准备 .dsh-src 检出并套补丁；RESET=1 重置到基提交重套"
+	@echo "  make dsh-gen-patch   （漂移后）从基提交重新导出 patches/dshui-bundles.patch"
 	@echo "  make sync-dsh   从 .dsh-src 源码构建产物同步 @deepseek-ai/* 到 node_modules"
 	@echo "  make sync       快速同步运行产物到已安装副本（免打包）"
 	@echo "  make login      登录 VS Code 市场（发布前一次性操作，或导出 VSCE_PAT）"
