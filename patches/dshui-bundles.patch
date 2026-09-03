@@ -1,3 +1,88 @@
+diff --git a/packages/api/session-controller/src/index.ts b/packages/api/session-controller/src/index.ts
+index 759c6b7f89..8944e12006 100644
+--- a/packages/api/session-controller/src/index.ts
++++ b/packages/api/session-controller/src/index.ts
+@@ -3,7 +3,7 @@
+ import { Context } from '@deepseek-ai/cordis'
+ import z from '@deepseek-ai/schemastery'
+ import { errorChain } from '@deepseek-ai/dsh-llm'
+-import { canOpenNativePath, openNativePath } from '@deepseek-ai/dsh-native-command'
++import { canOpenNativePath, openNativePath, type PathOpenerInternals } from '@deepseek-ai/dsh-native-command'
+ import type { SessionId } from '@deepseek-ai/dsh-session'
+ import type { SessionInspection } from '@deepseek-ai/dsh-session-persistence'
+ import type { SessionObservation } from '@deepseek-ai/dsh-session-query'
+@@ -104,7 +104,7 @@ export class SessionController extends TypertRemoteService {
+   private readonly controlState: SessionControlController
+   private readonly history: SessionHistoryController
+   private readonly listState: ApiSessionList
+-  private readonly openPath: (path: string, signal: AbortSignal) => Promise<void>
++  private readonly openPath: (path: string, signal: AbortSignal, internals?: PathOpenerInternals) => Promise<void>
+   private readonly canOpenPath: () => boolean
+   private readonly promotions = new Set<Promise<void>>()
+ 
+@@ -285,7 +285,11 @@ export class SessionController extends TypertRemoteService {
+     }
+     signal.throwIfAborted()
+     try {
+-      await this.openPath(request.path, signal)
++      // dshui patch: thread the click origin down to the opener internals so
++      // the bridge router prefers the window the click happened in over
++      // workspace longest-prefix ownership.
++      const dshuiOrigin = request.dshuiOrigin
++      await this.openPath(request.path, signal, dshuiOrigin === undefined ? {} : { dshuiOrigin })
+       return { opened: true }
+     } catch (error: unknown) {
+       if (signal.aborted) throw new RemoteError('gateway/cancelled', 'path open was aborted', {})
+diff --git a/packages/api/session-controller/src/types.ts b/packages/api/session-controller/src/types.ts
+index 2e2a0d7c46..35e983bda3 100644
+--- a/packages/api/session-controller/src/types.ts
++++ b/packages/api/session-controller/src/types.ts
+@@ -351,6 +351,12 @@ export interface SessionCancelValue {
+ export interface SessionOpenWorkspacePathRequest {
+   /** Path after best-effort Session workspace resolution, in Host filesystem syntax. */
+   readonly path: string
++  /**
++   * dshui patch: workspace of the window the open click happened in. When
++   * present, the Host opens the path in that window's bridge ahead of
++   * workspace-ownership routing.
++   */
++  readonly dshuiOrigin?: string
+ }
+ 
+ /** Confirmation that the Host handed a workspace path to its native opener. */
+diff --git a/packages/api/session-controller/tests/session-open-workspace-path.host.spec.ts b/packages/api/session-controller/tests/session-open-workspace-path.host.spec.ts
+index ee199ddcdd..7aae8e4ca3 100644
+--- a/packages/api/session-controller/tests/session-open-workspace-path.host.spec.ts
++++ b/packages/api/session-controller/tests/session-open-workspace-path.host.spec.ts
+@@ -60,10 +60,27 @@ describe('session/openWorkspacePath', () => {
+ 
+     await expect(remote.openWorkspacePath({ path: '/workspace/project/src/a.ts' }, signal))
+       .resolves.toEqual({ ok: true, value: { opened: true } })
+-    expect(openPath).toHaveBeenCalledWith('/workspace/project/src/a.ts', signal)
++    expect(openPath).toHaveBeenCalledWith('/workspace/project/src/a.ts', signal, {})
+     expect(ctx.agents.list()).toEqual([])
+   })
+ 
++  it('threads the dshui click origin into the opener internals', async () => {
++    const ctx = await context()
++    const openPath = vi.fn((_path: string, _signal: AbortSignal) => Promise.resolve())
++    const remote = createSessionTestRemote(ctx, {
++      defaultModelSelection: () => ({ provider: 'p', model: 'm' }),
++      cwd: '/default',
++      openPath,
++    })
++    const signal = new AbortController().signal
++
++    await expect(remote.openWorkspacePath({
++      path: '/workspace-b/src/a.ts',
++      dshuiOrigin: '/workspace-a',
++    }, signal)).resolves.toEqual({ ok: true, value: { opened: true } })
++    expect(openPath).toHaveBeenCalledWith('/workspace-b/src/a.ts', signal, { dshuiOrigin: '/workspace-a' })
++  })
++
+   it('preserves relative and absolute Host-resolvable paths', async () => {
+     const ctx = await context()
+     const openPath = vi.fn((_path: string, _signal: AbortSignal) => Promise.resolve())
 diff --git a/packages/client/connection/src/browser-auth.ts b/packages/client/connection/src/browser-auth.ts
 index 10353d9a06..a2ca442c05 100644
 --- a/packages/client/connection/src/browser-auth.ts
@@ -40,6 +125,52 @@ index d6d8bad550..da88a458a0 100644
    throw new Error(`tsdown: no packages/*/*/package.json declares the name ${id}`)
  }
  
+diff --git a/packages/client/ui-chat/src/client/apply.ts b/packages/client/ui-chat/src/client/apply.ts
+index 0c7d87f344..21b9c15a36 100644
+--- a/packages/client/ui-chat/src/client/apply.ts
++++ b/packages/client/ui-chat/src/client/apply.ts
+@@ -33,6 +33,28 @@ import { TranscriptViewPolicy } from './transcript-view.ts'
+ import { CHAT_SETTINGS_NAMESPACE, type ChatSettings } from '../chat-settings.ts'
+ import { useTurnDataValue } from './chat/use-turn-data.ts'
+ 
++/**
++ * dshui patch: the VS Code workspace of the window the open click happens in,
++ * published by the dshui host plugin as `window.__DSHUI_WORKSPACE__` (with a
++ * fallback to the boot URL's `dshui_workspace` query parameter). Attached to
++ * `openWorkspacePath` as `dshuiOrigin` so the Host opens the file in this
++ * window even when the path's longest-prefix owner is another window.
++ * @returns the scope path, or undefined when neither source is set.
++ */
++function dshuiClickOrigin(): string | undefined {
++  if (typeof window === 'undefined') return undefined
++  const global = (window as typeof window & { __DSHUI_WORKSPACE__?: unknown }).__DSHUI_WORKSPACE__
++  if (typeof global === 'string' && global !== '') return global
++  const param = new URLSearchParams(window.location.search).get('dshui_workspace')
++  if (param === null || param === '') return undefined
++  try {
++    const decoded = decodeURIComponent(param)
++    return decoded === '' ? undefined : decoded
++  } catch {
++    return param
++  }
++}
++
+ const CHAT_NODE_INJECT: ChatNodeTurnDataInjected = {
+   hooks: {
+     turnData: (_standard, data) => function useTurnData(key) {
+@@ -121,8 +143,12 @@ export function apply(ctx: Context): void {
+           fileMentions: (owner: TurnTailOwnerProps) => ctx.get('chatFileMentions')?.forClosing(owner),
+           openFile: async (path) => {
+             const cwd = ctx.sessions.list.getSnapshot().byId[sessionId]?.cwd
++            // dshui patch: attach the click origin so the Host opens the file
++            // in this window even when another window owns the path prefix.
++            const dshuiOrigin = dshuiClickOrigin()
+             const result = await ctx.remote.session.openWorkspacePath({
+               path: resolveWorkspacePath(cwd, path),
++              ...(dshuiOrigin === undefined ? {} : { dshuiOrigin }),
+             })
+             if (!result.ok) throw new Error(`path open failed: ${result.error.message}`)
+           },
 diff --git a/packages/client/ui-chat/src/client/chat/ChatView.tsx b/packages/client/ui-chat/src/client/chat/ChatView.tsx
 index 403eecd96f..273f105ac5 100644
 --- a/packages/client/ui-chat/src/client/chat/ChatView.tsx
@@ -369,6 +500,53 @@ index 16daf32b2b..c8ab164ece 100644
      /**
       * Whole details-panel body for the selected Tool call. The component receives
       * the running or settled block and optional workspace root. A registration
+diff --git a/packages/client/ui-chat/tests/apply-inject.client.spec.tsx b/packages/client/ui-chat/tests/apply-inject.client.spec.tsx
+index fa7cb20093..98e226b45f 100644
+--- a/packages/client/ui-chat/tests/apply-inject.client.spec.tsx
++++ b/packages/client/ui-chat/tests/apply-inject.client.spec.tsx
+@@ -137,6 +137,42 @@ describe('Chat inject API', () => {
+     await b.runtime.dispose()
+   })
+ 
++  it('attaches the dshui window workspace as the open click origin', async () => {
++    const view = window as typeof window & { __DSHUI_WORKSPACE__?: unknown }
++    view.__DSHUI_WORKSPACE__ = '/ws/window-a'
++    try {
++      const b = await bench()
++      const { injected } = b.chatViewApi(ROOT)
++      await injected.openFile('src/a.ts')
++      expect(b.openWorkspacePath).toHaveBeenCalledWith({
++        path: '/proj/src/a.ts',
++        dshuiOrigin: '/ws/window-a',
++      })
++      await b.runtime.dispose()
++    } finally {
++      delete view.__DSHUI_WORKSPACE__
++    }
++  })
++
++  it('falls back to the dshui_workspace boot query for the open click origin', async () => {
++    const restore = window.location.href
++    const url = new URL(window.location.href)
++    url.search = `?dshui_workspace=${encodeURIComponent('/ws/window b')}`
++    window.history.replaceState({}, '', url)
++    try {
++      const b = await bench()
++      const { injected } = b.chatViewApi(ROOT)
++      await injected.openFile('src/a.ts')
++      expect(b.openWorkspacePath).toHaveBeenCalledWith({
++        path: '/proj/src/a.ts',
++        dshuiOrigin: '/ws/window b',
++      })
++      await b.runtime.dispose()
++    } finally {
++      window.history.replaceState({}, '', restore)
++    }
++  })
++
+   it('fails loud when a Chat View inject resolves no Session', async () => {
+     const b = await bench()
+     const entry = b.runtime.slots.entries('conversation.view')[0]!
 diff --git a/packages/client/ui-chat/tests/chat-branch-tails.client.spec.tsx b/packages/client/ui-chat/tests/chat-branch-tails.client.spec.tsx
 index 7bcd9373b2..195faa2fa7 100644
 --- a/packages/client/ui-chat/tests/chat-branch-tails.client.spec.tsx
