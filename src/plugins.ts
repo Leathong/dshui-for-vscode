@@ -21,6 +21,7 @@ const PLUGIN_NAMES = [
   'dshui-client-ui-conversation',
   'dsh-rollback-plugin',
   'dsh-whitelist-sandbox',
+  'dsh-workspace-scope',
   // IM 机器人插件（随扩展分发，含自带运行时依赖 node_modules）。
   '@xmanrui/dsh-im',
 ] as const

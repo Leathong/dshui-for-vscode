@@ -1,0 +1,14 @@
+# dsh-workspace-scope — DSH Bundle patch.
+#
+# 按工作区（工程）启停 Skill 与 Host 全局 MCP：新会话在 agent scope 中覆盖被排除
+# Skill 的模型调用策略，并限制对应 MCP 工具。配置存于各工作区的 .dsh/scope.json，
+# 只影响该工作区的新建会话。
+#
+# 随扩展分发形态：扩展根 patch.yml 声明相同行（insert dsh-workspace-scope）。
+# 本文件是独立 bundle-patch，用于通过 profile/bundle patch 层挂载时生效。
+# Applied with:  make stage（stage 到 dshui_for_vscode 源码仓库）或
+#                dsh plugin --profile web add .
+
+- insert:
+    - id: dsh-workspace-scope
+      name: "dsh-workspace-scope"

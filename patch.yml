@@ -39,6 +39,11 @@
     - id: dsh-rollback-plugin
       name: dsh-rollback-plugin
 
+    # Per-workspace Skill / Host-global MCP enablement (dsh-workspace-scope).
+    # Configured per workspace via .dsh/scope.json, so this row carries no config.
+    - id: dsh-workspace-scope
+      name: dsh-workspace-scope
+
     # IM bot bridge (Feishu/WeChat/DingTalk/WeCom/QQ/Slack/Telegram/Discord/
     # WhatsApp), third-party plugin shipped with the extension.
     # Source: https://github.com/xmanrui/dsh-im (MIT)
