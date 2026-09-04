@@ -4,6 +4,43 @@ import * as path from "node:path";
 import * as os from "node:os";
 import { spawn } from "node:child_process";
 import * as crypto from "node:crypto";
+//#region lib/types/host/attribution.js
+/**
+* Depth cap for the parent-lineage walk. Subagent delegation is bounded by
+* the runtime's recursion budget; the cap only guards against corrupt or
+* cyclic lineage metadata looping forever.
+*/
+const MAX_ATTRIBUTION_DEPTH = 16;
+/**
+* True when the session was created as a subagent child. This is the coarse
+* durable classification stamped at creation (`SessionHeader.origin`), not a
+* runtime ownership probe, so it survives restart and resume.
+*/
+function isSubagentSession(session) {
+	return session.header?.origin === "subagent";
+}
+/**
+* The session a modification is attributed to. Subagent sessions are folded
+* into their main (top-level) session by walking the durable `parentSession`
+* lineage, so every write/edit a subagent performs shows up in the main
+* agent's modification list and turn coordinates instead of a separate,
+* mostly invisible subagent session list. Sessions without subagent origin
+* (main sessions, forks) are their own attribution target; a subagent whose
+* parent chain is not live falls back to itself, preserving pre-fold
+* behaviour for orphan sessions.
+*/
+function attributionSession(ctx, session) {
+	let current = session;
+	for (let depth = 0; depth < MAX_ATTRIBUTION_DEPTH && isSubagentSession(current); depth += 1) {
+		const parentId = current.header?.parentSession;
+		if (parentId === void 0) return current;
+		const parent = ctx.sessions?.get(parentId);
+		if (parent === void 0 || parent.id === current.id) return current;
+		current = parent;
+	}
+	return current;
+}
+//#endregion
 //#region lib/types/host/providers/git.js
 const HEX_RE = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/;
 const RUNNING_OPS = [
@@ -1470,7 +1507,7 @@ var ChangeLedger = class {
 		if (index >= 0) list.splice(index, 1);
 		else list.pop();
 		if (list.length === 0) this.pending.delete(key);
-		const session = actor?.agent?.session;
+		const session = this.ctx.sessions?.get(selected.sessionId) ?? selected.session;
 		const sessionEvents = session === void 0 ? void 0 : session.snapshotEvents();
 		const position = sessionEvents === void 0 ? void 0 : this.positionForCall(sessionEvents, selected.modificationId);
 		const fallback = sessionEvents === void 0 ? void 0 : sessionTurnPosition(sessionEvents);
@@ -1689,7 +1726,9 @@ var ChangeLedger = class {
 	async captureBefore(toolName, target, actor) {
 		const filePath = this.ctx.fs.processPath(target);
 		const modificationId = actor?.callId;
-		if (modificationId === void 0 || actor?.agent?.session === void 0) return;
+		const agentSession = actor?.agent?.session;
+		if (actor === void 0 || modificationId === void 0 || agentSession === void 0) return;
+		const session = attributionSession(this.ctx, agentSession);
 		let info;
 		let beforeContent;
 		let beforeBinary = false;
@@ -1709,7 +1748,8 @@ var ChangeLedger = class {
 			modificationId,
 			toolName,
 			path: filePath,
-			sessionId: actor.agent.session.id,
+			sessionId: session.id,
+			session,
 			...actor.arguments === void 0 ? {} : { actorArguments: actor.arguments },
 			beforeExisted: info !== void 0,
 			...info?.version === void 0 ? {} : { beforeVersion: info.version },
@@ -4123,7 +4163,7 @@ function apply(ctx, options = {}) {
 	if (typert !== void 0) ctx.effect(() => typert.register(ROLLBACK_HOST_TYPERT), "rollback: typert host contribution");
 	else host.logger.warn("rollback: typert service unavailable; Remote methods may use the SRC fallback");
 	ctx.on("agent/pre-step", async (payload, next) => {
-		if (payload.step === 1 && service.config.snapshotOnPreStep) try {
+		if (payload.step === 1 && service.config.snapshotOnPreStep && !isSubagentSession(payload.agent.session)) try {
 			await service.snapshots.capture(payload.agent.session, payload.turn);
 		} catch (error) {
 			host.logger.warn("rollback snapshot skipped:", error);

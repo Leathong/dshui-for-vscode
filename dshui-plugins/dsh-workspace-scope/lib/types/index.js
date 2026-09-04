@@ -163,6 +163,13 @@ export function apply(ctx) {
         const denied = new Set(deniedSkills(cfg, snapshot.skills.map((skill) => skill.name)));
         if (denied.size === 0)
             return undefined;
+        // Resolve through ctx.get(): the agent scope's fiber ancestry never
+        // injected "skills", so property access cannot reach the service. A
+        // missing service fails the step closed rather than running unmasked.
+        const scopedSkills = agent.ctx.get("skills");
+        if (scopedSkills === undefined) {
+            throw new Error("dsh-workspace-scope: skills service is unavailable in the agent scope");
+        }
         const disposers = [];
         try {
             for (const summary of snapshot.skills) {
@@ -172,7 +179,7 @@ export function apply(ctx) {
                 signal.throwIfAborted();
                 if (definition === undefined || definition.invocation?.modelInvocable === false)
                     continue;
-                disposers.push(agent.ctx.skills.register({
+                disposers.push(scopedSkills.register({
                     ...definition,
                     invocation: {
                         ...definition.invocation,

@@ -1,5 +1,6 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { attributionSession } from "./attribution.js";
 import { changeLedgerRoot, writeJsonFileAtomic } from "./snapshot.js";
 function jsonSafe(value) {
     try {
@@ -288,7 +289,11 @@ export class ChangeLedger {
             list.pop();
         if (list.length === 0)
             this.pending.delete(key);
-        const session = actor?.agent?.session;
+        // Turn/step/seq are read from the ATTRIBUTION session's log: for a
+        // subagent tool call the callId is absent from the main session's log, so
+        // `positionForCall` misses and the record falls back to the main
+        // session's currently open turn — exactly the desired attribution.
+        const session = this.ctx.sessions?.get(selected.sessionId) ?? selected.session;
         const sessionEvents = session === undefined ? undefined : session.snapshotEvents();
         const position = sessionEvents === undefined ? undefined : this.positionForCall(sessionEvents, selected.modificationId);
         const fallback = sessionEvents === undefined ? undefined : sessionTurnPosition(sessionEvents);
@@ -541,8 +546,13 @@ export class ChangeLedger {
     async captureBefore(toolName, target, actor) {
         const filePath = this.ctx.fs.processPath(target);
         const modificationId = actor?.callId;
-        if (modificationId === undefined || actor?.agent?.session === undefined)
+        const agentSession = actor?.agent?.session;
+        if (actor === undefined || modificationId === undefined || agentSession === undefined)
             return;
+        // Subagent modifications are attributed to the main (root) session: the
+        // subagent itself stays out of the modification lists, and its changes
+        // become restorable from the main session it serves.
+        const session = attributionSession(this.ctx, agentSession);
         let info;
         let beforeContent;
         let beforeBinary = false;
@@ -569,7 +579,8 @@ export class ChangeLedger {
             modificationId,
             toolName,
             path: filePath,
-            sessionId: actor.agent.session.id,
+            sessionId: session.id,
+            session,
             ...(actor.arguments === undefined ? {} : { actorArguments: actor.arguments }),
             beforeExisted: info !== undefined,
             ...(info?.version === undefined ? {} : { beforeVersion: info.version }),

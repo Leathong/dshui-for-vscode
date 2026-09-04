@@ -140,6 +140,8 @@ function apply(ctx) {
 		if (!snapshot.complete) throw new Error("dsh-workspace-scope: skill catalog is incomplete");
 		const denied = new Set(deniedSkills(cfg, snapshot.skills.map((skill) => skill.name)));
 		if (denied.size === 0) return void 0;
+		const scopedSkills = agent.ctx.get("skills");
+		if (scopedSkills === void 0) throw new Error("dsh-workspace-scope: skills service is unavailable in the agent scope");
 		const disposers = [];
 		try {
 			for (const summary of snapshot.skills) {
@@ -147,7 +149,7 @@ function apply(ctx) {
 				const definition = await skills.get(summary.name, view);
 				signal.throwIfAborted();
 				if (definition === void 0 || definition.invocation?.modelInvocable === false) continue;
-				disposers.push(agent.ctx.skills.register({
+				disposers.push(scopedSkills.register({
 					...definition,
 					invocation: {
 						...definition.invocation,

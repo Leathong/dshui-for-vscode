@@ -21,7 +21,7 @@ window.__ModuleLoader__.load({
 			}
 			return to;
 		};
-		var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__getProtoOf(mod)) : {}, __copyProps(isNodeMode || !mod || !mod.__esModule ? __defProp(target, "default", {
+		var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__getProtoOf(mod)) : {}, __copyProps(isNodeMode || !mod || !mod.__esModule || !__hasOwnProp.call(mod, "default") ? __defProp(target, "default", {
 			value: mod,
 			enumerable: true
 		}) : target, mod));
@@ -397,8 +397,8 @@ window.__ModuleLoader__.load({
 				if (draft === null) return;
 				applyDraft({
 					...draft,
-					skills: new Set([...draft.skills, ...skills.map((s) => s.name)]),
-					mcps: new Set([...draft.mcps, ...mcps.map((m) => m.server)])
+					skills: /* @__PURE__ */ new Set([...draft.skills, ...skills.map((s) => s.name)]),
+					mcps: /* @__PURE__ */ new Set([...draft.mcps, ...mcps.map((m) => m.server)])
 				});
 			};
 			const allDisabled = () => {

@@ -1,3 +1,4 @@
+import { isSubagentSession } from "./attribution.js";
 import { RollbackService } from "./service.js";
 import { ROLLBACK_HOST_TYPERT } from "./typert.js";
 export const name = 'rollback';
@@ -16,7 +17,12 @@ export function apply(ctx, options = {}) {
         host.logger.warn('rollback: typert service unavailable; Remote methods may use the SRC fallback');
     }
     ctx.on('agent/pre-step', async (payload, next) => {
-        if (payload.step === 1 && service.config.snapshotOnPreStep) {
+        // Subagent sessions are excluded from tracking: their modifications are
+        // attributed to the main session (see attribution.ts), whose own pre-step
+        // snapshot already covers the whole turn the subagent runs in. Capturing
+        // per-subagent snapshots would only pollute the workspace timeline with
+        // manifests no modification list ever queries.
+        if (payload.step === 1 && service.config.snapshotOnPreStep && !isSubagentSession(payload.agent.session)) {
             try {
                 await service.snapshots.capture(payload.agent.session, payload.turn);
             }
