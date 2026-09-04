@@ -6,224 +6,9 @@ window.__ModuleLoader__.load({
 		Object.defineProperty(exports, Symbol.toStringTag, { value: "Module" });
 		let _deepseek_ai_cordis = require("@deepseek-ai/cordis");
 		let _deepseek_ai_dsh_client_store = require("@deepseek-ai/dsh-client-store");
-		let react_jsx_runtime = require("react/jsx-runtime");
 		let react = require("react");
 		let _deepseek_ai_dsh_client_ui_primitives = require("@deepseek-ai/dsh-client-ui-primitives");
-		//#region lib/types/client/navigation.js
-		/** Workspace archive and directory UI capability. */
-		/** Structured directory failure exposed to directory UI consumers. */
-		var DirectoryBrowseError = class extends Error {
-			rpcError;
-			name = "DirectoryBrowseError";
-			/** @param rpcError - Host directory business failure. */
-			constructor(rpcError) {
-				super(`directory browse failed: ${rpcError.code}: ${rpcError.message}`);
-				this.rpcError = rpcError;
-			}
-		};
-		/** Implements Workspace archive and directory UI operations. */
-		var UiWorkspaceService = class extends _deepseek_ai_cordis.Service {
-			directoryPicker;
-			workspaces;
-			sessions;
-			connecting = /* @__PURE__ */ new Map();
-			/**
-			* @param ctx - Client root Context.
-			* @param directoryPicker - the directory-picking Remote namespace.
-			* @param workspaces - pure Workspace Controller.
-			* @param sessions - pure Session Controller.
-			*/
-			constructor(ctx, directoryPicker, workspaces, sessions) {
-				super(ctx, "uiWorkspace");
-				this.directoryPicker = directoryPicker;
-				this.workspaces = workspaces;
-				this.sessions = sessions;
-				ctx.effect(() => this.watchNavigation(), "ui-workspace: Workspace navigation policy");
-			}
-			async connectWorkspace(workspaceId) {
-				const workspace = this.workspaces.list.getSnapshot().items.find((item) => item.workspaceId === workspaceId);
-				if (workspace === void 0) throw new Error(`uiWorkspace.connectWorkspace: unknown workspace ${workspaceId}`);
-				const inflight = this.connecting.get(workspaceId);
-				if (inflight !== void 0) return inflight;
-				const archived = this.workspaces.list.getSnapshot().archivedSessionIds;
-				const sessions = this.sessions.list.getSnapshot();
-				for (const id of sessions.ids) {
-					const summary = sessions.byId[id];
-					if (summary !== void 0 && summary.blank && summary.cwd === workspace.path && workspace.sessionIds.includes(summary.id) && !archived.includes(summary.id)) return summary.id;
-				}
-				const attempt = this.sessions.create({ workspaceId }).finally(() => {
-					this.connecting.delete(workspaceId);
-				});
-				this.connecting.set(workspaceId, attempt);
-				return attempt;
-			}
-			startSession(workspaceId) {
-				const workspace = this.workspaces.list.getSnapshot();
-				const sessions = this.sessions.list.getSnapshot();
-				const current = sessions.current;
-				const currentWorkspaceId = current === void 0 ? void 0 : workspace.items.find((item) => item.sessionIds.includes(current))?.workspaceId;
-				const recent = workspace.phase === "ready" && sessions.phase === "ready" ? recentWorkspace(workspace.items, sessions.byId) : void 0;
-				const target = workspaceId ?? currentWorkspaceId ?? recent;
-				if (target === void 0) {
-					this.sessions.clear();
-					return;
-				}
-				this.connectWorkspace(target).then((sessionId) => {
-					this.sessions.open(sessionId);
-				}, (reason) => {
-					console.warn("new session failed:", reason);
-				});
-			}
-			async archiveSession(sessionId) {
-				await this.workspaces.archiveSession(sessionId);
-			}
-			async pickDirectory() {
-				const result = await this.directoryPicker.pick();
-				if (!result.ok) throw new Error(`directory picker failed: ${result.error.message}`);
-				return result.value;
-			}
-			async listDirectory(path, signal) {
-				const result = await this.directoryPicker.list(path, signal);
-				if (!result.ok) throw new DirectoryBrowseError(result.error);
-				return result.value;
-			}
-			async createDirectory(path, name) {
-				const result = await this.directoryPicker.createDirectory(path, name);
-				if (!result.ok) throw new DirectoryBrowseError(result.error);
-				return result.value;
-			}
-			watchNavigation() {
-				let initial = "waiting";
-				let disposed = false;
-				const reconcile = () => {
-					if (disposed) return;
-					if (this.clearArchivedCurrent()) return;
-					if (initial !== "waiting") return;
-					const workspace = this.workspaces.list.getSnapshot();
-					const sessions = this.sessions.list.getSnapshot();
-					if (workspace.phase !== "ready" || sessions.phase !== "ready") return;
-					if (sessions.current !== void 0) {
-						initial = "done";
-						return;
-					}
-					const target = recentWorkspace(workspace.items, sessions.byId);
-					if (target === void 0) {
-						initial = "done";
-						return;
-					}
-					initial = "connecting";
-					this.connectWorkspace(target).then((sessionId) => {
-						if (disposed) return;
-						if (this.sessions.list.getSnapshot().current === void 0) this.sessions.open(sessionId);
-						initial = "done";
-					}, (reason) => {
-						if (disposed) return;
-						initial = "waiting";
-						console.warn("initial workspace selection failed:", reason);
-					});
-				};
-				const disposeWorkspaces = this.workspaces.list.subscribe(reconcile);
-				const disposeSessions = this.sessions.list.subscribe(reconcile);
-				reconcile();
-				return () => {
-					disposed = true;
-					disposeSessions();
-					disposeWorkspaces();
-				};
-			}
-			/** @returns true when an archived current selection was cleared. */
-			clearArchivedCurrent() {
-				const current = this.sessions.list.getSnapshot().current;
-				if (current === void 0 || !this.workspaces.list.getSnapshot().archivedSessionIds.includes(current)) return false;
-				this.sessions.clear();
-				return true;
-			}
-		};
-		/** Stable tie-breaking follows Host Workspace order. */
-		function recentWorkspace(workspaces, sessions) {
-			let selected;
-			let selectedTime = Number.NEGATIVE_INFINITY;
-			for (const workspace of workspaces) {
-				let latest = Number.NEGATIVE_INFINITY;
-				for (const sessionId of workspace.sessionIds) {
-					const session = sessions[sessionId];
-					if (session !== void 0) latest = Math.max(latest, session.updatedAt);
-				}
-				if (latest === Number.NEGATIVE_INFINITY) latest = Date.parse(workspace.createdAt);
-				if (selected === void 0 || latest > selectedTime) {
-					selected = workspace.workspaceId;
-					selectedTime = latest;
-				}
-			}
-			return selected;
-		}
-		//#endregion
-		//#region lib/types/client/stores.js
-		/**
-		* The workspace browser's viewing store: the session-list grouping mode,
-		* persisted across reloads. Module level exports the factory only (a
-		* module-level handle would pin the store identity across plugin reloads);
-		* register() receives the factory and the browser derives its PropsStore
-		* share from the return type.
-		*/
-		/** Browser-local order account for the hierarchy-free flat Session list. */
-		const FLAT_SESSION_ORDER_KEY = "__flat_session_order__";
-		/**
-		* Create the workspace browser viewing store handle.
-		* @returns the store handle (spec + type + identity + factory in one).
-		*/
-		function createWorkspaceViewStore() {
-			return (0, _deepseek_ai_dsh_client_store.defineStore)({
-				init: () => ({
-					groupBy: "workspace",
-					orderBy: "updated",
-					groupExpansion: {},
-					sessionOrderByAccount: {},
-					sessionUpdatedAtByAccount: {}
-				}),
-				persist: "dsh.workspace.view.v5",
-				actions: {
-					setGroupBy: (d, mode) => {
-						d.groupBy = mode;
-					},
-					setOrderBy: (d, mode) => {
-						d.orderBy = mode;
-					},
-					setGroupExpanded: (d, key, expanded) => {
-						d.groupExpansion[key] = expanded;
-					},
-					retainAccountKeys: (d, workspaceKeys) => {
-						const retained = new Set(workspaceKeys);
-						d.groupExpansion = Object.fromEntries(Object.entries(d.groupExpansion).filter(([key]) => retained.has(key)));
-						d.sessionOrderByAccount = Object.fromEntries(Object.entries(d.sessionOrderByAccount).filter(([key]) => retained.has(key)));
-						d.sessionUpdatedAtByAccount = Object.fromEntries(Object.entries(d.sessionUpdatedAtByAccount).filter(([key]) => retained.has(key)));
-					},
-					syncSessionOrderAccount: (d, accountKey, order, updatedAt) => {
-						d.sessionOrderByAccount[accountKey] = order;
-						d.sessionUpdatedAtByAccount[accountKey] = updatedAt;
-					},
-					setSessionOrder: (d, accountKey, order) => {
-						d.sessionOrderByAccount[accountKey] = order;
-					}
-				}
-			});
-		}
-		//#endregion
-		//#region ../../../node_modules/.pnpm/clsx@2.1.1/node_modules/clsx/dist/clsx.mjs
-		function r(e) {
-			var t, f, n = "";
-			if ("string" == typeof e || "number" == typeof e) n += e;
-			else if ("object" == typeof e) if (Array.isArray(e)) {
-				var o = e.length;
-				for (t = 0; t < o; t++) e[t] && (f = r(e[t])) && (n && (n += " "), n += f);
-			} else for (f in e) e[f] && (n && (n += " "), n += f);
-			return n;
-		}
-		function clsx() {
-			for (var e, t, f = 0, n = "", o = arguments.length; f < o; f++) (e = arguments[f]) && (t = r(e)) && (n && (n += " "), n += t);
-			return n;
-		}
-		//#endregion
+		let react_jsx_runtime = require("react/jsx-runtime");
 		//#region ../../util/workspace-path/src/index.ts
 		/**
 		* Browser-safe Workspace path and display helpers.
@@ -260,8 +45,7 @@ window.__ModuleLoader__.load({
 			return trimmed.slice(separator + 1);
 		}
 		//#endregion
-		//#region lib/types/client/subagent-lineage.js
-		/** UI Workspace-owned projection of descendant counts from Session summaries. */
+		//#region src/client/subagent-lineage.ts
 		/**
 		* Index uninterrupted subagent descendants under each ancestor.
 		* @param summaries - Session summaries keyed by id.
@@ -298,6 +82,7 @@ window.__ModuleLoader__.load({
 		* @returns the scope path, or an empty string when neither source is set.
 		*/
 		function scopedWorkspacePath() {
+			if (typeof window === "undefined") return "";
 			const global = window.__DSHUI_WORKSPACE__;
 			if (typeof global === "string" && global !== "") return global;
 			const param = new URLSearchParams(window.location.search).get("dshui_workspace");
@@ -561,6 +346,247 @@ window.__ModuleLoader__.load({
 			};
 		}
 		//#endregion
+		//#region src/client/navigation.ts
+		/** Workspace archive and directory UI capability. */
+		/** Structured directory failure exposed to directory UI consumers. */
+		var DirectoryBrowseError = class extends Error {
+			rpcError;
+			name = "DirectoryBrowseError";
+			/** @param rpcError - Host directory business failure. */
+			constructor(rpcError) {
+				super(`directory browse failed: ${rpcError.code}: ${rpcError.message}`);
+				this.rpcError = rpcError;
+			}
+		};
+		/** Implements Workspace archive and directory UI operations. */
+		var UiWorkspaceService = class extends _deepseek_ai_cordis.Service {
+			directoryPicker;
+			workspaces;
+			sessions;
+			connecting = /* @__PURE__ */ new Map();
+			/**
+			* @param ctx - Client root Context.
+			* @param directoryPicker - the directory-picking Remote namespace.
+			* @param workspaces - pure Workspace Controller.
+			* @param sessions - pure Session Controller.
+			*/
+			constructor(ctx, directoryPicker, workspaces, sessions) {
+				super(ctx, "uiWorkspace");
+				this.directoryPicker = directoryPicker;
+				this.workspaces = workspaces;
+				this.sessions = sessions;
+				ctx.effect(() => this.watchNavigation(), "ui-workspace: Workspace navigation policy");
+			}
+			async connectWorkspace(workspaceId) {
+				const workspace = this.workspaces.list.getSnapshot().items.find((item) => item.workspaceId === workspaceId);
+				if (workspace === void 0) throw new Error(`uiWorkspace.connectWorkspace: unknown workspace ${workspaceId}`);
+				const inflight = this.connecting.get(workspaceId);
+				if (inflight !== void 0) return inflight;
+				const archived = this.workspaces.list.getSnapshot().archivedSessionIds;
+				const sessions = this.sessions.list.getSnapshot();
+				for (const id of sessions.ids) {
+					const summary = sessions.byId[id];
+					if (summary !== void 0 && summary.blank && summary.cwd === workspace.path && workspace.sessionIds.includes(summary.id) && !archived.includes(summary.id)) return summary.id;
+				}
+				const attempt = this.sessions.create({ workspaceId }).finally(() => {
+					this.connecting.delete(workspaceId);
+				});
+				this.connecting.set(workspaceId, attempt);
+				return attempt;
+			}
+			startSession(workspaceId) {
+				const workspace = this.workspaces.list.getSnapshot();
+				const sessions = this.sessions.list.getSnapshot();
+				const current = sessions.current;
+				const currentWorkspaceId = current === void 0 ? void 0 : workspace.items.find((item) => item.sessionIds.includes(current))?.workspaceId;
+				const recent = workspace.phase === "ready" && sessions.phase === "ready" ? recentWorkspace(workspace.items, sessions.byId) : void 0;
+				const scoped = scopedWorkspaceId(workspace.items);
+				const target = workspaceId ?? (scoped !== void 0 ? scoped : currentWorkspaceId ?? recent);
+				if (target === void 0) {
+					this.sessions.clear();
+					return;
+				}
+				this.connectWorkspace(target).then((sessionId) => {
+					this.sessions.open(sessionId);
+				}, (reason) => {
+					console.warn("new session failed:", reason);
+				});
+			}
+			async archiveSession(sessionId) {
+				await this.workspaces.archiveSession(sessionId);
+			}
+			async pickDirectory() {
+				const result = await this.directoryPicker.pick();
+				if (!result.ok) throw new Error(`directory picker failed: ${result.error.message}`);
+				return result.value;
+			}
+			async listDirectory(path, signal) {
+				const result = await this.directoryPicker.list(path, signal);
+				if (!result.ok) throw new DirectoryBrowseError(result.error);
+				return result.value;
+			}
+			async createDirectory(path, name) {
+				const result = await this.directoryPicker.createDirectory(path, name);
+				if (!result.ok) throw new DirectoryBrowseError(result.error);
+				return result.value;
+			}
+			watchNavigation() {
+				let initial = "waiting";
+				let disposed = false;
+				const attempt = (target) => {
+					this.connectWorkspace(target).then((sessionId) => {
+						if (disposed) return;
+						if (this.sessions.list.getSnapshot().current === void 0) this.sessions.open(sessionId);
+						initial = "done";
+					}, (reason) => {
+						if (disposed) return;
+						initial = "waiting";
+						console.warn("initial workspace selection failed:", reason);
+					});
+				};
+				const reconcile = () => {
+					if (disposed) return;
+					if (this.clearArchivedCurrent()) {
+						initial = "waiting";
+						return;
+					}
+					const workspace = this.workspaces.list.getSnapshot();
+					const sessions = this.sessions.list.getSnapshot();
+					if (workspace.phase !== "ready" || sessions.phase !== "ready") return;
+					if (sessions.current !== void 0) {
+						initial = "done";
+						return;
+					}
+					const scope = scopedWorkspacePath();
+					if (scope !== "") {
+						if (initial === "connecting") return;
+						const scopedTarget = workspace.items.find((item) => item.path === scope)?.workspaceId;
+						if (scopedTarget === void 0) return;
+						initial = "connecting";
+						attempt(scopedTarget);
+						return;
+					}
+					if (initial !== "waiting") return;
+					const target = recentWorkspace(workspace.items, sessions.byId);
+					if (target === void 0) {
+						initial = "done";
+						return;
+					}
+					initial = "connecting";
+					attempt(target);
+				};
+				const disposeWorkspaces = this.workspaces.list.subscribe(reconcile);
+				const disposeSessions = this.sessions.list.subscribe(reconcile);
+				reconcile();
+				return () => {
+					disposed = true;
+					disposeSessions();
+					disposeWorkspaces();
+				};
+			}
+			/** @returns true when an archived current selection was cleared. */
+			clearArchivedCurrent() {
+				const current = this.sessions.list.getSnapshot().current;
+				if (current === void 0 || !this.workspaces.list.getSnapshot().archivedSessionIds.includes(current)) return false;
+				this.sessions.clear();
+				return true;
+			}
+		};
+		/** Stable tie-breaking follows Host Workspace order. */
+		function recentWorkspace(workspaces, sessions) {
+			let selected;
+			let selectedTime = Number.NEGATIVE_INFINITY;
+			for (const workspace of workspaces) {
+				let latest = Number.NEGATIVE_INFINITY;
+				for (const sessionId of workspace.sessionIds) {
+					const session = sessions[sessionId];
+					if (session !== void 0) latest = Math.max(latest, session.updatedAt);
+				}
+				if (latest === Number.NEGATIVE_INFINITY) latest = Date.parse(workspace.createdAt);
+				if (selected === void 0 || latest > selectedTime) {
+					selected = workspace.workspaceId;
+					selectedTime = latest;
+				}
+			}
+			return selected;
+		}
+		/**
+		* The Workspace id matching the dshui boot scope (see {@link scopedWorkspacePath}).
+		* @param workspaces - current Workspace list.
+		* @returns the scoped Workspace id, or undefined when no scope is set or its row is not yet listed.
+		*/
+		function scopedWorkspaceId(workspaces) {
+			const scope = scopedWorkspacePath();
+			if (scope === "") return void 0;
+			return workspaces.find((workspace) => workspace.path === scope)?.workspaceId;
+		}
+		//#endregion
+		//#region src/client/stores.ts
+		/**
+		* The workspace browser's viewing store: the session-list grouping mode,
+		* persisted across reloads. Module level exports the factory only (a
+		* module-level handle would pin the store identity across plugin reloads);
+		* register() receives the factory and the browser derives its PropsStore
+		* share from the return type.
+		*/
+		/** Browser-local order account for the hierarchy-free flat Session list. */
+		const FLAT_SESSION_ORDER_KEY = "__flat_session_order__";
+		/**
+		* Create the workspace browser viewing store handle.
+		* @returns the store handle (spec + type + identity + factory in one).
+		*/
+		function createWorkspaceViewStore() {
+			return (0, _deepseek_ai_dsh_client_store.defineStore)({
+				init: () => ({
+					groupBy: "workspace",
+					orderBy: "updated",
+					groupExpansion: {},
+					sessionOrderByAccount: {},
+					sessionUpdatedAtByAccount: {}
+				}),
+				persist: "dsh.workspace.view.v5",
+				actions: {
+					setGroupBy: (d, mode) => {
+						d.groupBy = mode;
+					},
+					setOrderBy: (d, mode) => {
+						d.orderBy = mode;
+					},
+					setGroupExpanded: (d, key, expanded) => {
+						d.groupExpansion[key] = expanded;
+					},
+					retainAccountKeys: (d, workspaceKeys) => {
+						const retained = new Set(workspaceKeys);
+						d.groupExpansion = Object.fromEntries(Object.entries(d.groupExpansion).filter(([key]) => retained.has(key)));
+						d.sessionOrderByAccount = Object.fromEntries(Object.entries(d.sessionOrderByAccount).filter(([key]) => retained.has(key)));
+						d.sessionUpdatedAtByAccount = Object.fromEntries(Object.entries(d.sessionUpdatedAtByAccount).filter(([key]) => retained.has(key)));
+					},
+					syncSessionOrderAccount: (d, accountKey, order, updatedAt) => {
+						d.sessionOrderByAccount[accountKey] = order;
+						d.sessionUpdatedAtByAccount[accountKey] = updatedAt;
+					},
+					setSessionOrder: (d, accountKey, order) => {
+						d.sessionOrderByAccount[accountKey] = order;
+					}
+				}
+			});
+		}
+		//#endregion
+		//#region ../../../node_modules/.pnpm/clsx@2.1.1/node_modules/clsx/dist/clsx.mjs
+		function r(e) {
+			var t, f, n = "";
+			if ("string" == typeof e || "number" == typeof e) n += e;
+			else if ("object" == typeof e) if (Array.isArray(e)) {
+				var o = e.length;
+				for (t = 0; t < o; t++) e[t] && (f = r(e[t])) && (n && (n += " "), n += f);
+			} else for (f in e) e[f] && (n && (n += " "), n += f);
+			return n;
+		}
+		function clsx() {
+			for (var e, t, f = 0, n = "", o = arguments.length; f < o; f++) (e = arguments[f]) && (t = r(e)) && (n && (n += " "), n += t);
+			return n;
+		}
+		//#endregion
 		//#region \0dsh-css:/Volumes/Development/LLM/dsh-plugin/vscode/dshui_for_vscode/.dsh-src/packages/client/ui-workspace/src/client/rows/Rows.module.css.mjs
 		const css$2 = ".JKg95G_projectRow,.JKg95G_sessionRow{cursor:pointer;user-select:none;color:var(--dsw-alias-label-primary);border-radius:8px;align-items:center;gap:6px;padding:0 8px;display:flex}.JKg95G_projectRow:hover,.JKg95G_sessionRow:hover,.JKg95G_sessionRow.JKg95G_selected{background:var(--dsw-alias-interactive-bg-hover)}.JKg95G_searchResultRow{box-sizing:border-box;cursor:pointer;text-align:left;width:100%;min-height:48px;color:var(--dsw-alias-label-primary);background:0 0;border:none;border-radius:8px;flex-direction:column;align-items:stretch;padding:4px 8px;display:flex}.JKg95G_searchResultRow:hover,.JKg95G_searchResultRow.JKg95G_selected{background:var(--dsw-alias-interactive-bg-hover)}.JKg95G_searchResultHeading{align-items:center;min-width:0;display:flex}.JKg95G_searchResultTitle{text-overflow:ellipsis;white-space:nowrap;flex:0 auto;min-width:0;margin-left:4px;font-size:14px;line-height:20px;overflow:hidden}.JKg95G_searchResultMeta{align-items:center;gap:6px;min-width:0;margin-left:20px;display:flex}.JKg95G_searchResultWorkspace,.JKg95G_searchResultSnippet{text-overflow:ellipsis;white-space:nowrap;font-size:12px;line-height:17px;overflow:hidden}.JKg95G_searchResultWorkspace{max-width:40%;color:var(--dsw-alias-label-tertiary);flex:none}.JKg95G_searchResultSnippet{min-width:0;color:var(--dsw-alias-label-secondary);flex:1}.JKg95G_projectRow{box-sizing:border-box;align-items:center;height:34px}.JKg95G_projectRow .JKg95G_rowActions{height:20px}.JKg95G_sessionRow{height:32px;animation:JKg95G_row-in .15s var(--ds-ease-in-out);gap:0}.JKg95G_sessionRow .JKg95G_title{margin:0 6px 0 4px}.JKg95G_flatSessionRowWithoutStatus .JKg95G_title{margin-left:0}@keyframes JKg95G_row-in{0%{opacity:0}}.JKg95G_slot{width:16px;height:20px;color:var(--dsw-alias-label-tertiary);flex:none;justify-content:center;align-items:center;display:inline-flex}.JKg95G_visuallyHidden{clip:rect(0 0 0 0);white-space:nowrap;width:1px;height:1px;position:absolute;overflow:hidden}.JKg95G_folderActive{color:var(--dsw-alias-state-business-primary)}.JKg95G_projectRow .JKg95G_chevron{display:none}.JKg95G_projectRow:hover .JKg95G_chevron{display:inline-flex}.JKg95G_projectRow:hover .JKg95G_folder{display:none}.JKg95G_arrow{transition:transform .15s var(--ds-ease-in-out)}.JKg95G_arrowOpen{transform:rotate(90deg)}.JKg95G_projectText{flex-direction:column;flex:1;gap:2px;min-width:0;display:flex}.JKg95G_title{text-overflow:ellipsis;white-space:nowrap;min-width:0;font-size:14px;line-height:20px;overflow:hidden}.JKg95G_renameInput{border:.5px solid var(--dsw-alias-border-l4);background:var(--dsw-alias-button-elevated-fill);min-width:0;color:inherit;border-radius:4px;outline:none;padding:0 2px;font-size:14px;line-height:20px}.JKg95G_sessionRow .JKg95G_title{flex:1}.JKg95G_meta{text-overflow:ellipsis;white-space:nowrap;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:20px;overflow:hidden}.JKg95G_time{color:var(--dsw-alias-label-tertiary);flex:none;font-size:12px;line-height:20px}.JKg95G_scheduleIndicator{width:16px;height:20px;color:var(--dsw-alias-label-tertiary);flex:none;justify-content:center;align-items:center;margin-right:6px;display:inline-flex}.JKg95G_searchScheduleIndicator{margin-left:4px;margin-right:0}.JKg95G_dot{flex:none}.JKg95G_rowActions{flex:none;align-items:center;gap:12px;display:none}.JKg95G_projectRow:hover .JKg95G_rowActions,.JKg95G_sessionRow:hover .JKg95G_rowActions,.JKg95G_projectRow.JKg95G_menuOpen .JKg95G_rowActions,.JKg95G_sessionRow.JKg95G_menuOpen .JKg95G_rowActions{display:inline-flex}.JKg95G_sessionRow:hover .JKg95G_time,.JKg95G_sessionRow.JKg95G_menuOpen .JKg95G_time{display:none}.JKg95G_projectRow.JKg95G_menuOpen,.JKg95G_sessionRow.JKg95G_menuOpen{background:var(--dsw-alias-interactive-bg-hover)}.JKg95G_sessionRow.JKg95G_dropBefore,.JKg95G_sessionRow.JKg95G_dropAfter{position:relative}.JKg95G_sessionRow.JKg95G_dropBefore:before,.JKg95G_sessionRow.JKg95G_dropAfter:after{content:\"\";z-index:1;background:linear-gradient(55deg, transparent calc(50% - 1px), var(--dsw-alias-state-business-primary) calc(50% - 1px) calc(50% + 1px), transparent calc(50% + 1px)) 0 0 / 5px 7px no-repeat, linear-gradient(125deg, transparent calc(50% - 1px), var(--dsw-alias-state-business-primary) calc(50% - 1px) calc(50% + 1px), transparent calc(50% + 1px)) 0 5px / 5px 7px no-repeat, linear-gradient(var(--dsw-alias-state-business-primary) 0 0) 4px 5px / calc(100% - 4px) 2px no-repeat;pointer-events:none;height:12px;position:absolute;left:0;right:4px}.JKg95G_sessionRow.JKg95G_dropBefore:before{top:-7px}.JKg95G_sessionRow.JKg95G_dropAfter:after{bottom:-7px}.JKg95G_hoverContent{flex-direction:column;gap:8px;display:flex}.JKg95G_hoverTitle{color:#fff;overflow-wrap:break-word;font-size:14px;line-height:20px}.JKg95G_hoverPath{color:#cfd3d6;word-break:break-all;font-size:12px;line-height:16px}.JKg95G_hoverTime{color:#cfd3d6;font-size:12px;line-height:16px}.JKg95G_hoverStatus{color:#adb2b8;align-items:center;gap:8px;font-size:12px;line-height:20px;display:flex}.JKg95G_iconButton{cursor:pointer;width:16px;height:16px;color:var(--dsw-alias-label-tertiary);background:0 0;border:none;border-radius:4px;flex:none;justify-content:center;align-items:center;padding:0;display:inline-flex}.JKg95G_iconButton:hover{color:var(--dsw-alias-label-primary)}.JKg95G_chevron{color:var(--dsw-alias-label-caption)}@media (prefers-reduced-motion:reduce){.JKg95G_sessionRow,.JKg95G_arrow{transition:none;animation:none}}";
 		const tagId$2 = "dshui-client-ui-workspace/Rows.module.css";
@@ -610,7 +636,7 @@ window.__ModuleLoader__.load({
 			"visuallyHidden": "JKg95G_visuallyHidden"
 		};
 		//#endregion
-		//#region lib/types/client/rows/Rows.js
+		//#region src/client/rows/Rows.tsx
 		/**
 		* Workspace browser tree row components (figma Cell set 14:3080): pure presentational —
 		* all data and callbacks arrive via props. Hover swaps (folder->chevron,
@@ -648,18 +674,18 @@ window.__ModuleLoader__.load({
 		}
 		/** Hover-card body: workspace title, display directory path, absolute creation time. */
 		function WorkspaceHoverContent({ label, cwd, createdAt, t }) {
-			return (0, react_jsx_runtime.jsxs)("div", {
+			return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 				className: Rows_module_css_default.hoverContent,
 				children: [
-					(0, react_jsx_runtime.jsx)("div", {
+					/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
 						className: Rows_module_css_default.hoverTitle,
 						children: label
 					}),
-					(0, react_jsx_runtime.jsx)("div", {
+					/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
 						className: Rows_module_css_default.hoverPath,
 						children: cwd
 					}),
-					(0, react_jsx_runtime.jsx)("div", {
+					/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
 						className: Rows_module_css_default.hoverTime,
 						children: createdLabel(createdAt, t)
 					})
@@ -692,14 +718,14 @@ window.__ModuleLoader__.load({
 			const workspaceMenuItems = [{
 				id: "rename",
 				label: t("rename"),
-				icon: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconEditOutline16, {})
+				icon: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconEditOutline16, {})
 			}, {
 				id: "delete",
 				label: t("delete.workspace"),
-				icon: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconTrashOutline16, {}),
+				icon: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconTrashOutline16, {}),
 				danger: true
 			}];
-			const ownRow = (0, react_jsx_runtime.jsxs)("div", {
+			const ownRow = /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 				className: clsx(Rows_module_css_default.projectRow, menuOpen && Rows_module_css_default.menuOpen),
 				role: "treeitem",
 				"aria-expanded": row.expanded,
@@ -712,24 +738,24 @@ window.__ModuleLoader__.load({
 				},
 				onDragEnd: drag?.end,
 				children: [
-					(0, react_jsx_runtime.jsx)("span", {
+					/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
 						className: clsx(Rows_module_css_default.slot, Rows_module_css_default.folder, active && Rows_module_css_default.folderActive),
-						children: row.expanded ? (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconFolderOpen16, {}) : (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconFolderClose16, {})
+						children: row.expanded ? /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconFolderOpen16, {}) : /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconFolderClose16, {})
 					}),
-					(0, react_jsx_runtime.jsx)("span", {
+					/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
 						className: clsx(Rows_module_css_default.slot, Rows_module_css_default.chevron),
-						children: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconTriangleRightFill14, { className: clsx(Rows_module_css_default.arrow, row.expanded && Rows_module_css_default.arrowOpen) })
+						children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconTriangleRightFill14, { className: clsx(Rows_module_css_default.arrow, row.expanded && Rows_module_css_default.arrowOpen) })
 					}),
-					(0, react_jsx_runtime.jsx)("span", {
+					/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
 						className: Rows_module_css_default.projectText,
-						children: (0, react_jsx_runtime.jsx)("span", {
+						children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
 							className: Rows_module_css_default.title,
 							children: label
 						})
 					}),
-					(0, react_jsx_runtime.jsxs)("span", {
+					/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("span", {
 						className: Rows_module_css_default.rowActions,
-						children: [actions !== void 0 && (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Menu, {
+						children: [actions !== void 0 && /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Menu, {
 							open: menuOpen,
 							onClose: () => {
 								setMenuOpen(false);
@@ -744,7 +770,7 @@ window.__ModuleLoader__.load({
 							},
 							portal: true,
 							closeOnPointerLeave: true,
-							anchor: (0, react_jsx_runtime.jsx)("button", {
+							anchor: /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
 								type: "button",
 								className: Rows_module_css_default.iconButton,
 								"aria-label": t("actions.workspace.aria", { name: label }),
@@ -752,9 +778,9 @@ window.__ModuleLoader__.load({
 									e.stopPropagation();
 									setMenuOpen((v) => !v);
 								},
-								children: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconEllipsisOutline16, {})
+								children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconEllipsisOutline16, {})
 							})
-						}), (0, react_jsx_runtime.jsx)("button", {
+						}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
 							type: "button",
 							className: Rows_module_css_default.iconButton,
 							"aria-label": t("actions.newSession.aria", { name: label }),
@@ -762,15 +788,15 @@ window.__ModuleLoader__.load({
 								e.stopPropagation();
 								onCreate();
 							},
-							children: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconPlusOutline16, {})
+							children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconPlusOutline16, {})
 						})]
 					})
 				]
 			});
 			if (row.createdAt === void 0) return ownRow;
-			return (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.HoverCard, {
+			return /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.HoverCard, {
 				anchor: ownRow,
-				content: (0, react_jsx_runtime.jsx)(WorkspaceHoverContent, {
+				content: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(WorkspaceHoverContent, {
 					label: row.label,
 					cwd: row.cwd === void 0 ? void 0 : abbreviateHomePath(row.cwd, home),
 					createdAt: row.createdAt,
@@ -839,7 +865,7 @@ window.__ModuleLoader__.load({
 		}
 		/** Primary status dot plus every status's screen-reader label, shared by the search and session rows. */
 		function SessionStatusDots({ statuses }) {
-			return (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [(0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.StateDot, { state: statuses[0].state }), statuses.map((status) => (0, react_jsx_runtime.jsx)("span", {
+			return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.StateDot, { state: statuses[0].state }), statuses.map((status) => /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
 				className: Rows_module_css_default.visuallyHidden,
 				children: status.label
 			}, status.label))] });
@@ -847,31 +873,31 @@ window.__ModuleLoader__.load({
 		/** Non-interactive active-Schedule marker; the enclosing row remains the only action. */
 		function ActiveScheduleIndicator({ t, search = false }) {
 			const label = t("schedule.active");
-			return (0, react_jsx_runtime.jsx)("span", {
+			return /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
 				className: clsx(Rows_module_css_default.scheduleIndicator, search && Rows_module_css_default.searchScheduleIndicator),
 				role: "img",
 				"aria-label": label,
 				title: label,
-				children: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconAlarmClockOutline16, {})
+				children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconAlarmClockOutline16, {})
 			});
 		}
 		/** Hover-card body: full title, relative time, and every relevant live status. */
 		function SessionHoverContent({ node, now, t }) {
 			const statuses = sessionStatuses(node, t);
-			return (0, react_jsx_runtime.jsxs)("div", {
+			return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 				className: Rows_module_css_default.hoverContent,
 				children: [
-					(0, react_jsx_runtime.jsx)("div", {
+					/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
 						className: Rows_module_css_default.hoverTitle,
 						children: displayTitle(node, t)
 					}),
-					!node.blank && (0, react_jsx_runtime.jsx)("div", {
+					!node.blank && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
 						className: Rows_module_css_default.hoverTime,
 						children: hoverTimeLabel(node.updatedAt, now, t)
 					}),
-					statuses.map((status) => (0, react_jsx_runtime.jsxs)("div", {
+					statuses.map((status) => /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 						className: Rows_module_css_default.hoverStatus,
-						children: [(0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.StateDot, { state: status.state }), (0, react_jsx_runtime.jsx)("span", { children: status.label })]
+						children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.StateDot, { state: status.state }), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", { children: status.label })]
 					}, status.label))
 				]
 			});
@@ -890,7 +916,7 @@ window.__ModuleLoader__.load({
 			const selected = result.id === currentId;
 			const statuses = sessionStatuses(result, t);
 			const primaryStatus = statuses[0];
-			return (0, react_jsx_runtime.jsxs)("button", {
+			return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("button", {
 				type: "button",
 				className: clsx(Rows_module_css_default.searchResultRow, selected && Rows_module_css_default.selected),
 				role: "treeitem",
@@ -898,28 +924,28 @@ window.__ModuleLoader__.load({
 				onClick: () => {
 					onOpen(result.id);
 				},
-				children: [(0, react_jsx_runtime.jsxs)("span", {
+				children: [/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("span", {
 					className: Rows_module_css_default.searchResultHeading,
 					children: [
-						(0, react_jsx_runtime.jsx)("span", {
+						/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
 							className: Rows_module_css_default.slot,
-							children: (primaryStatus.state !== "done" || result.completed) && (0, react_jsx_runtime.jsx)(SessionStatusDots, { statuses })
+							children: (primaryStatus.state !== "done" || result.completed) && /* @__PURE__ */ (0, react_jsx_runtime.jsx)(SessionStatusDots, { statuses })
 						}),
-						(0, react_jsx_runtime.jsx)("span", {
+						/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
 							className: Rows_module_css_default.searchResultTitle,
 							children: result.title
 						}),
-						result.hasActiveSchedule && (0, react_jsx_runtime.jsx)(ActiveScheduleIndicator, {
+						result.hasActiveSchedule && /* @__PURE__ */ (0, react_jsx_runtime.jsx)(ActiveScheduleIndicator, {
 							t,
 							search: true
 						})
 					]
-				}), (0, react_jsx_runtime.jsxs)("span", {
+				}), /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("span", {
 					className: Rows_module_css_default.searchResultMeta,
-					children: [(0, react_jsx_runtime.jsx)("span", {
+					children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
 						className: Rows_module_css_default.searchResultWorkspace,
 						children: result.workspace || t("group.ungrouped")
-					}), result.snippet !== void 0 && (0, react_jsx_runtime.jsx)("span", {
+					}), result.snippet !== void 0 && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
 						className: Rows_module_css_default.searchResultSnippet,
 						children: result.snippet
 					})]
@@ -952,22 +978,22 @@ window.__ModuleLoader__.load({
 				{
 					id: "rename",
 					label: t("rename"),
-					icon: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconEditOutline16, {})
+					icon: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconEditOutline16, {})
 				},
 				{
 					id: "fork",
 					label: t("menu.fork"),
-					icon: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconBranchOutline16, {})
+					icon: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconBranchOutline16, {})
 				},
 				{
 					id: "delete",
 					label: t("menu.deleteSession"),
-					icon: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconTrashOutline16, {}),
+					icon: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconTrashOutline16, {}),
 					danger: true
 				}
 			];
-			return (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.HoverCard, {
-				anchor: (0, react_jsx_runtime.jsxs)("div", {
+			return /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.HoverCard, {
+				anchor: /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 					className: clsx(Rows_module_css_default.sessionRow, selected && Rows_module_css_default.selected, menuOpen && Rows_module_css_default.menuOpen, flat && !showStatus && Rows_module_css_default.flatSessionRowWithoutStatus, drag?.marker === "before" && Rows_module_css_default.dropBefore, drag?.marker === "after" && Rows_module_css_default.dropAfter),
 					role: "treeitem",
 					"aria-selected": selected,
@@ -993,22 +1019,22 @@ window.__ModuleLoader__.load({
 						drag.drop(rowHalf(e));
 					},
 					children: [
-						(!flat || showStatus) && (0, react_jsx_runtime.jsx)("span", {
+						(!flat || showStatus) && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
 							className: Rows_module_css_default.slot,
-							children: showStatus && (0, react_jsx_runtime.jsx)(SessionStatusDots, { statuses })
+							children: showStatus && /* @__PURE__ */ (0, react_jsx_runtime.jsx)(SessionStatusDots, { statuses })
 						}),
-						(0, react_jsx_runtime.jsx)("span", {
+						/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
 							className: Rows_module_css_default.title,
 							children: title
 						}),
-						row.hasActiveSchedule && (0, react_jsx_runtime.jsx)(ActiveScheduleIndicator, { t }),
-						!row.blank && (0, react_jsx_runtime.jsx)("span", {
+						row.hasActiveSchedule && /* @__PURE__ */ (0, react_jsx_runtime.jsx)(ActiveScheduleIndicator, { t }),
+						!row.blank && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
 							className: Rows_module_css_default.time,
 							children: timeLabel(row.updatedAt, now, t)
 						}),
-						!row.blank && (0, react_jsx_runtime.jsx)("span", {
+						!row.blank && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
 							className: Rows_module_css_default.rowActions,
-							children: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Menu, {
+							children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Menu, {
 								open: menuOpen,
 								onClose: () => {
 									setMenuOpen(false);
@@ -1022,7 +1048,7 @@ window.__ModuleLoader__.load({
 								},
 								portal: true,
 								closeOnPointerLeave: true,
-								anchor: (0, react_jsx_runtime.jsx)("button", {
+								anchor: /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
 									type: "button",
 									className: Rows_module_css_default.iconButton,
 									"aria-label": t("actions.session.aria", { name: title }),
@@ -1030,13 +1056,13 @@ window.__ModuleLoader__.load({
 										e.stopPropagation();
 										setMenuOpen((v) => !v);
 									},
-									children: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconEllipsisOutline16, {})
+									children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconEllipsisOutline16, {})
 								})
 							})
 						})
 					]
 				}),
-				content: (0, react_jsx_runtime.jsx)(SessionHoverContent, {
+				content: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(SessionHoverContent, {
 					node,
 					now,
 					t
@@ -1064,7 +1090,7 @@ window.__ModuleLoader__.load({
 			"modalError": "AoNIzG_modalError"
 		};
 		//#endregion
-		//#region lib/types/client/WorkspacePicker.js
+		//#region src/client/WorkspacePicker.tsx
 		const ADD_WORKSPACE = "::add-workspace";
 		/**
 		* Render the pick menu plus the adoption error dialog.
@@ -1087,14 +1113,14 @@ window.__ModuleLoader__.load({
 			const addEntries = flowAvailable ? [{
 				id: ADD_WORKSPACE,
 				label: t("menu.addWorkspace"),
-				icon: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconPlusOutline16, { size: 16 }),
+				icon: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconPlusOutline16, { size: 16 }),
 				disabled: flowBusy
 			}] : [];
 			const pinAdd = !addOnly && workspaces.length > 0;
 			const items = pinAdd ? workspaces.map((workspace) => ({
 				id: workspace.workspaceId,
 				label: workspace.title,
-				icon: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconFolderClose16, { size: 16 }),
+				icon: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconFolderClose16, { size: 16 }),
 				disabled: flowBusy
 			})) : addEntries;
 			const menuIsEmpty = items.length === 0;
@@ -1153,8 +1179,8 @@ window.__ModuleLoader__.load({
 				}
 				onPick(id);
 			};
-			return (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [
-				(0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Menu, {
+			return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [
+				/* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Menu, {
 					open: open && !addIsTheOnlyEntry && !menuIsEmpty,
 					anchor: null,
 					items,
@@ -1166,30 +1192,30 @@ window.__ModuleLoader__.load({
 					portal: true,
 					getAnchorRect
 				}),
-				open && !addIsTheOnlyEntry && !menuIsEmpty && workspaceSnapshot.phase === "pending" && (0, react_jsx_runtime.jsx)("div", {
+				open && !addIsTheOnlyEntry && !menuIsEmpty && workspaceSnapshot.phase === "pending" && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
 					className: WorkspacePicker_module_css_default.menuStatus,
 					role: "status",
 					children: t("picker.loading")
 				}),
 				renderDirectoryFlow(flowOwner),
-				(0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Modal, {
+				/* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Modal, {
 					open: errorOpen,
 					onClose: closeModal,
 					closeLabel: t("close"),
 					title: t("folderError.title"),
-					footer: (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [(0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Button, {
+					footer: /* @__PURE__ */ (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Button, {
 						variant: "outline",
 						className: WorkspacePicker_module_css_default.modalAction,
 						onClick: closeModal,
 						children: t("cancel")
-					}), (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Button, {
+					}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Button, {
 						variant: "primary",
 						className: WorkspacePicker_module_css_default.modalAction,
 						disabled: !flowAvailable,
 						onClick: openDirectoryFlow,
 						children: t("folderError.retry")
 					})] }),
-					children: (0, react_jsx_runtime.jsx)("div", {
+					children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
 						className: WorkspacePicker_module_css_default.modalError,
 						role: "alert",
 						children: modalError
@@ -1204,7 +1230,7 @@ window.__ModuleLoader__.load({
 		* @returns the flow element.
 		*/
 		function WorkspacePicker({ open, anchorRef, useWorkspaces, selectedId, onPick, onClose, createWorkspace, useDirectoryFlow, renderSlot, t }) {
-			return (0, react_jsx_runtime.jsx)(WorkspacePickFlow, {
+			return /* @__PURE__ */ (0, react_jsx_runtime.jsx)(WorkspacePickFlow, {
 				t,
 				open,
 				anchorRef,
@@ -1267,7 +1293,7 @@ window.__ModuleLoader__.load({
 			"workspaceDropBefore": "_3IzFYa_workspaceDropBefore"
 		};
 		//#endregion
-		//#region lib/types/client/rows/WorkspaceBrowser.js
+		//#region src/client/rows/WorkspaceBrowser.tsx
 		/**
 		* The workspace/session browsing region filling the sidebar shell's
 		* `sidebar.workspaces` hole: section header (title + view options + add
@@ -1396,7 +1422,7 @@ window.__ModuleLoader__.load({
 		/** Grouping and ordering menu; own open state so it resets with the wide chrome. */
 		function ViewOptionsMenu({ groupBy, orderBy, onGroupPick, onOrderPick, t }) {
 			const [open, setOpen] = (0, react.useState)(false);
-			return (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Menu, {
+			return /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Menu, {
 				open,
 				onClose: () => {
 					setOpen(false);
@@ -1442,18 +1468,18 @@ window.__ModuleLoader__.load({
 				align: "end",
 				dense: true,
 				portal: true,
-				anchor: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Tooltip, {
+				anchor: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Tooltip, {
 					label: t("viewOptions.label"),
 					side: "bottom",
 					delayMs: 500,
-					children: (0, react_jsx_runtime.jsx)("button", {
+					children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
 						type: "button",
 						className: clsx(WorkspaceBrowser_module_css_default.iconButton, WorkspaceBrowser_module_css_default.wide),
 						"aria-label": t("viewOptions.label"),
 						onClick: () => {
 							setOpen((v) => !v);
 						},
-						children: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconPersonalizationOutline16, {})
+						children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconPersonalizationOutline16, {})
 					})
 				})
 			});
@@ -1609,18 +1635,18 @@ window.__ModuleLoader__.load({
 				});
 			};
 			const workspaceDropAtListStart = groups[0]?.workspaceId !== void 0 && workspaceDrag?.over?.id === groups[0].workspaceId && workspaceDrag.over.half === "before";
-			return (0, react_jsx_runtime.jsxs)("div", {
+			return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 				className: clsx(WorkspaceBrowser_module_css_default.treeBody, WorkspaceBrowser_module_css_default.wide),
 				children: [
-					workspaceDropAtListStart && (0, react_jsx_runtime.jsx)("span", {
+					workspaceDropAtListStart && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
 						className: WorkspaceBrowser_module_css_default.listTopDropIndicator,
 						"aria-hidden": "true"
 					}),
-					(0, react_jsx_runtime.jsxs)("div", {
+					/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 						className: clsx(WorkspaceBrowser_module_css_default.list, workspaceDropAtListStart && WorkspaceBrowser_module_css_default.listTopDropActive),
 						role: "tree",
 						"aria-label": t("section.sessions"),
-						children: [groups.length === 0 && (0, react_jsx_runtime.jsx)("div", {
+						children: [groups.length === 0 && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
 							className: WorkspaceBrowser_module_css_default.empty,
 							children: t("empty.none")
 						}), groups.map((group) => {
@@ -1658,7 +1684,7 @@ window.__ModuleLoader__.load({
 									half
 								});
 							};
-							return (0, react_jsx_runtime.jsxs)("div", {
+							return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 								className: clsx(WorkspaceBrowser_module_css_default.groupSection, workspaceMarker === "before" && WorkspaceBrowser_module_css_default.workspaceDropBefore, workspaceMarker === "after" && WorkspaceBrowser_module_css_default.workspaceDropAfter),
 								onDragOver: workspaceDrag === null || hoverWorkspace === void 0 ? void 0 : (e) => {
 									e.preventDefault();
@@ -1670,7 +1696,7 @@ window.__ModuleLoader__.load({
 									dropWorkspace(workspaceGroupHalf(e));
 								},
 								children: [
-									(0, react_jsx_runtime.jsx)(ProjectRowItem, {
+									/* @__PURE__ */ (0, react_jsx_runtime.jsx)(ProjectRowItem, {
 										group,
 										home,
 										t,
@@ -1698,7 +1724,7 @@ window.__ModuleLoader__.load({
 									}),
 									(sessionsExpanded ? group.sessions : collapsed.rows).map((node) => {
 										const sameGroupDrag = drag !== null && drag.accountKey === group.key;
-										return (0, react_jsx_runtime.jsx)(SessionNodeItem, {
+										return /* @__PURE__ */ (0, react_jsx_runtime.jsx)(SessionNodeItem, {
 											node,
 											currentId: current,
 											now,
@@ -1744,7 +1770,7 @@ window.__ModuleLoader__.load({
 											t
 										}, node.id);
 									}),
-									collapsed.hiddenCount > 0 && (0, react_jsx_runtime.jsx)("button", {
+									collapsed.hiddenCount > 0 && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
 										type: "button",
 										className: WorkspaceBrowser_module_css_default.sessionOverflowButton,
 										"aria-expanded": sessionsExpanded,
@@ -1757,7 +1783,7 @@ window.__ModuleLoader__.load({
 							}, group.key);
 						})]
 					}),
-					(0, react_jsx_runtime.jsx)("span", { className: WorkspaceBrowser_module_css_default.fade })
+					/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", { className: WorkspaceBrowser_module_css_default.fade })
 				]
 			});
 		}
@@ -1828,18 +1854,18 @@ window.__ModuleLoader__.load({
 				setSessionOrder(FLAT_SESSION_ORDER_KEY, nextOrder.map((id) => id));
 			};
 			const now = Date.now();
-			return (0, react_jsx_runtime.jsxs)("div", {
+			return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 				className: clsx(WorkspaceBrowser_module_css_default.treeBody, WorkspaceBrowser_module_css_default.wide),
-				children: [(0, react_jsx_runtime.jsxs)("div", {
+				children: [/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 					className: clsx(WorkspaceBrowser_module_css_default.list, WorkspaceBrowser_module_css_default.flatList),
 					role: "tree",
 					"aria-label": t("section.sessions"),
-					children: [rows.length === 0 && (0, react_jsx_runtime.jsx)("div", {
+					children: [rows.length === 0 && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
 						className: WorkspaceBrowser_module_css_default.empty,
 						children: t("empty.none")
 					}), rows.map((node) => {
 						const active = drag !== null;
-						return (0, react_jsx_runtime.jsx)(SessionNodeItem, {
+						return /* @__PURE__ */ (0, react_jsx_runtime.jsx)(SessionNodeItem, {
 							node,
 							currentId: list.current,
 							now,
@@ -1883,7 +1909,7 @@ window.__ModuleLoader__.load({
 							t
 						}, node.id);
 					})]
-				}), (0, react_jsx_runtime.jsx)("span", { className: WorkspaceBrowser_module_css_default.fade })]
+				}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", { className: WorkspaceBrowser_module_css_default.fade })]
 			});
 		}
 		/** Flat search body: local metadata matches plus the current Host result page. */
@@ -1909,42 +1935,42 @@ window.__ModuleLoader__.load({
 			]);
 			const pending = currentRemote.status === "loading";
 			const failed = currentRemote.status === "error";
-			return (0, react_jsx_runtime.jsxs)("div", {
+			return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 				className: clsx(WorkspaceBrowser_module_css_default.treeBody, WorkspaceBrowser_module_css_default.wide),
-				children: [(0, react_jsx_runtime.jsxs)("div", {
+				children: [/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 					className: WorkspaceBrowser_module_css_default.list,
 					children: [
-						(0, react_jsx_runtime.jsx)("div", {
+						/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
 							className: WorkspaceBrowser_module_css_default.searchTree,
 							role: "tree",
 							"aria-label": t("search.results.aria"),
-							children: results.items.map((result) => (0, react_jsx_runtime.jsx)(SearchResultItem, {
+							children: results.items.map((result) => /* @__PURE__ */ (0, react_jsx_runtime.jsx)(SearchResultItem, {
 								result,
 								currentId: list.current,
 								onOpen: open,
 								t
 							}, result.id))
 						}),
-						pending && (0, react_jsx_runtime.jsx)("div", {
+						pending && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
 							className: WorkspaceBrowser_module_css_default.searchStatus,
 							role: "status",
 							children: t("search.pending")
 						}),
-						failed && (0, react_jsx_runtime.jsx)("div", {
+						failed && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
 							className: WorkspaceBrowser_module_css_default.searchWarning,
 							role: "status",
 							children: t("search.unavailable")
 						}),
-						!pending && results.items.length === 0 && (0, react_jsx_runtime.jsx)("div", {
+						!pending && results.items.length === 0 && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
 							className: WorkspaceBrowser_module_css_default.empty,
 							children: t("search.noMatches")
 						}),
-						results.hasMore && (0, react_jsx_runtime.jsx)("div", {
+						results.hasMore && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
 							className: WorkspaceBrowser_module_css_default.searchStatus,
 							children: t("search.hasMore", { n: resultLimit })
 						})
 					]
-				}), (0, react_jsx_runtime.jsx)("span", { className: WorkspaceBrowser_module_css_default.fade })]
+				}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", { className: WorkspaceBrowser_module_css_default.fade })]
 			});
 		}
 		/**
@@ -2187,19 +2213,19 @@ window.__ModuleLoader__.load({
 					setDeleteError(reason instanceof Error ? reason.message : String(reason));
 				});
 			};
-			return (0, react_jsx_runtime.jsxs)("div", {
+			return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 				className: clsx(WorkspaceBrowser_module_css_default.root, !wide && WorkspaceBrowser_module_css_default.rail),
 				children: [
-					(0, react_jsx_runtime.jsxs)("div", {
+					/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 						className: WorkspaceBrowser_module_css_default.sectionHeader,
 						children: [
-							wide && (0, react_jsx_runtime.jsx)("span", {
+							wide && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
 								className: clsx(WorkspaceBrowser_module_css_default.sectionLabel, WorkspaceBrowser_module_css_default.wide, searchExpanded && WorkspaceBrowser_module_css_default.sectionLabelHidden),
 								children: groupBy === "flat" ? t("section.sessions") : t("section.workspaces")
 							}),
-							wide && (0, react_jsx_runtime.jsx)("div", {
+							wide && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
 								className: clsx(WorkspaceBrowser_module_css_default.searchSlot, searchExpanded && WorkspaceBrowser_module_css_default.searchSlotExpanded),
-								children: (0, react_jsx_runtime.jsxs)("div", {
+								children: /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 									ref: searchRoot,
 									className: clsx(WorkspaceBrowser_module_css_default.search, searchExpanded && WorkspaceBrowser_module_css_default.searchExpanded),
 									onClick: () => {
@@ -2208,12 +2234,12 @@ window.__ModuleLoader__.load({
 										searchInput.current?.focus();
 									},
 									children: [
-										(0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Tooltip, {
+										/* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Tooltip, {
 											label: t("search"),
 											side: "bottom",
 											delayMs: 500,
 											disabled: searchExpanded,
-											children: (0, react_jsx_runtime.jsx)("button", {
+											children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
 												type: "button",
 												className: WorkspaceBrowser_module_css_default.searchButton,
 												"aria-label": t("search.sessions.aria"),
@@ -2222,10 +2248,10 @@ window.__ModuleLoader__.load({
 													setWsPickerOpen(false);
 													setSearchExpanded(true);
 												},
-												children: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconSearchOutline16, { size: searchExpanded ? 11 : 14 })
+												children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconSearchOutline16, { size: searchExpanded ? 11 : 14 })
 											})
 										}),
-										(0, react_jsx_runtime.jsx)("input", {
+										/* @__PURE__ */ (0, react_jsx_runtime.jsx)("input", {
 											ref: searchInput,
 											className: WorkspaceBrowser_module_css_default.searchInput,
 											type: "text",
@@ -2242,7 +2268,7 @@ window.__ModuleLoader__.load({
 												setSearchExpanded(false);
 											}
 										}),
-										searchExpanded && (0, react_jsx_runtime.jsx)("button", {
+										searchExpanded && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
 											type: "button",
 											className: WorkspaceBrowser_module_css_default.clearButton,
 											"aria-label": t("search.clear"),
@@ -2251,14 +2277,14 @@ window.__ModuleLoader__.load({
 												setQuery("");
 												setSearchExpanded(false);
 											},
-											children: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconCloseFill14, {})
+											children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconCloseFill14, {})
 										})
 									]
 								})
 							}),
-							(0, react_jsx_runtime.jsxs)("div", {
+							/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 								className: clsx(WorkspaceBrowser_module_css_default.headerActions, wide && searchExpanded && WorkspaceBrowser_module_css_default.headerActionsHidden),
-								children: [wide && (0, react_jsx_runtime.jsx)(ViewOptionsMenu, {
+								children: [wide && /* @__PURE__ */ (0, react_jsx_runtime.jsx)(ViewOptionsMenu, {
 									groupBy,
 									orderBy,
 									onGroupPick: (mode) => {
@@ -2268,11 +2294,11 @@ window.__ModuleLoader__.load({
 										actions.setOrderBy(mode);
 									},
 									t
-								}), directoryFlowAvailable && (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Tooltip, {
+								}), directoryFlowAvailable && /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Tooltip, {
 									label: t("workspace.add"),
 									side: "bottom",
 									delayMs: 500,
-									children: (0, react_jsx_runtime.jsx)("button", {
+									children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
 										ref: wsPlusRef,
 										type: "button",
 										className: WorkspaceBrowser_module_css_default.iconButton,
@@ -2280,11 +2306,11 @@ window.__ModuleLoader__.load({
 										onClick: () => {
 											setWsPickerOpen((v) => !v);
 										},
-										children: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconProjectAddOutline16, { size: wide ? 16 : 18 })
+										children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconProjectAddOutline16, { size: wide ? 16 : 18 })
 									})
 								})]
 							}),
-							(0, react_jsx_runtime.jsx)(WorkspacePickFlow, {
+							/* @__PURE__ */ (0, react_jsx_runtime.jsx)(WorkspacePickFlow, {
 								t,
 								open: wsPickerOpen,
 								anchorRef: wsPlusRef,
@@ -2304,11 +2330,11 @@ window.__ModuleLoader__.load({
 							})
 						]
 					}),
-					!wide && (0, react_jsx_runtime.jsx)("div", {
+					!wide && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
 						className: WorkspaceBrowser_module_css_default.search,
-						children: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Tooltip, {
+						children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Tooltip, {
 							label: t("search"),
-							children: (0, react_jsx_runtime.jsx)("button", {
+							children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
 								type: "button",
 								className: WorkspaceBrowser_module_css_default.searchButton,
 								"aria-label": t("search.sessions.aria"),
@@ -2317,13 +2343,13 @@ window.__ModuleLoader__.load({
 									setSearchOnExpand(true);
 									expandSidebar();
 								},
-								children: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconSearchOutline16, { size: 18 })
+								children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconSearchOutline16, { size: 18 })
 							})
 						})
 					}),
-					(0, react_jsx_runtime.jsx)("div", {
+					/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
 						className: WorkspaceBrowser_module_css_default.listArea,
-						children: wide && (normalizedQuery !== "" ? (0, react_jsx_runtime.jsx)(SearchResults, {
+						children: wide && (normalizedQuery !== "" ? /* @__PURE__ */ (0, react_jsx_runtime.jsx)(SearchResults, {
 							useSessions,
 							useSessionPendingInteraction,
 							open,
@@ -2335,7 +2361,7 @@ window.__ModuleLoader__.load({
 							remote: remoteSearch,
 							resultLimit: searchResultLimit,
 							t
-						}) : groupBy === "flat" ? (0, react_jsx_runtime.jsx)(FlatList, {
+						}) : groupBy === "flat" ? /* @__PURE__ */ (0, react_jsx_runtime.jsx)(FlatList, {
 							useSessions,
 							useSessionPendingInteraction,
 							open,
@@ -2351,7 +2377,7 @@ window.__ModuleLoader__.load({
 							syncSessionOrderAccount: actions.syncSessionOrderAccount,
 							setSessionOrder: actions.setSessionOrder,
 							t
-						}) : (0, react_jsx_runtime.jsx)(SessionTree, {
+						}) : /* @__PURE__ */ (0, react_jsx_runtime.jsx)(SessionTree, {
 							useSessions,
 							useSessionPendingInteraction,
 							onSessionRename,
@@ -2391,24 +2417,24 @@ window.__ModuleLoader__.load({
 							}
 						}))
 					}),
-					(0, react_jsx_runtime.jsxs)(_deepseek_ai_dsh_client_ui_primitives.Modal, {
+					/* @__PURE__ */ (0, react_jsx_runtime.jsxs)(_deepseek_ai_dsh_client_ui_primitives.Modal, {
 						open: renameTarget !== null,
 						onClose: closeRename,
 						closeLabel: t("close"),
 						title: t("rename.workspace.title"),
-						footer: (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [(0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Button, {
+						footer: /* @__PURE__ */ (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Button, {
 							variant: "outline",
 							disabled: renaming,
 							onClick: closeRename,
 							children: t("cancel")
-						}), (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Button, {
+						}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Button, {
 							variant: "primary",
 							disabled: renameBlocked,
 							onClick: confirmRename,
 							children: t("rename")
 						})] }),
 						children: [
-							(0, react_jsx_runtime.jsx)("input", {
+							/* @__PURE__ */ (0, react_jsx_runtime.jsx)("input", {
 								className: WorkspaceBrowser_module_css_default.renameInput,
 								value: renameDraft,
 								"aria-label": t("field.workspaceName"),
@@ -2434,35 +2460,35 @@ window.__ModuleLoader__.load({
 									}
 								}
 							}),
-							renameDuplicate && (0, react_jsx_runtime.jsx)("div", {
+							renameDuplicate && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
 								className: WorkspaceBrowser_module_css_default.renameError,
 								role: "alert",
 								children: t("conflict.named", { name: renameTrimmed })
 							}),
-							renameError !== null && (0, react_jsx_runtime.jsx)("div", {
+							renameError !== null && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
 								className: WorkspaceBrowser_module_css_default.renameError,
 								role: "alert",
 								children: renameError
 							})
 						]
 					}),
-					(0, react_jsx_runtime.jsxs)(_deepseek_ai_dsh_client_ui_primitives.Modal, {
+					/* @__PURE__ */ (0, react_jsx_runtime.jsxs)(_deepseek_ai_dsh_client_ui_primitives.Modal, {
 						open: sessionRenameTarget !== null,
 						onClose: closeSessionRename,
 						closeLabel: t("close"),
 						title: t("rename.session.title"),
-						footer: (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [(0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Button, {
+						footer: /* @__PURE__ */ (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Button, {
 							variant: "outline",
 							disabled: sessionRenaming,
 							onClick: closeSessionRename,
 							children: t("cancel")
-						}), (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Button, {
+						}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Button, {
 							variant: "primary",
 							disabled: sessionRenameBlocked,
 							onClick: confirmSessionRename,
 							children: t("rename")
 						})] }),
-						children: [(0, react_jsx_runtime.jsx)("input", {
+						children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("input", {
 							className: WorkspaceBrowser_module_css_default.renameInput,
 							value: sessionRenameDraft,
 							"aria-label": t("field.sessionName"),
@@ -2487,35 +2513,35 @@ window.__ModuleLoader__.load({
 									confirmSessionRename();
 								}
 							}
-						}), sessionRenameError !== null && (0, react_jsx_runtime.jsx)("div", {
+						}), sessionRenameError !== null && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
 							className: WorkspaceBrowser_module_css_default.renameError,
 							role: "alert",
 							children: sessionRenameError
 						})]
 					}),
-					(0, react_jsx_runtime.jsxs)(_deepseek_ai_dsh_client_ui_primitives.Modal, {
+					/* @__PURE__ */ (0, react_jsx_runtime.jsxs)(_deepseek_ai_dsh_client_ui_primitives.Modal, {
 						open: deleteTarget !== null,
 						onClose: closeDelete,
 						closeLabel: t("close"),
 						title: t("delete.workspace"),
 						...deleteTarget === null ? {} : { description: t("delete.desc", { name: deleteTarget.title }) },
-						footer: (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [(0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Button, {
+						footer: /* @__PURE__ */ (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Button, {
 							variant: "outline",
 							disabled: deleting,
 							onClick: closeDelete,
 							children: t("cancel")
-						}), (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Button, {
+						}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Button, {
 							variant: "outline",
 							className: WorkspaceBrowser_module_css_default.deleteAction,
 							disabled: deleting,
 							onClick: confirmDelete,
 							children: t("delete.workspace")
 						})] }),
-						children: [deleting && (0, react_jsx_runtime.jsx)("div", {
+						children: [deleting && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
 							className: WorkspaceBrowser_module_css_default.deleteStatus,
 							role: "status",
 							children: t("delete.pending")
-						}), deleteError !== null && (0, react_jsx_runtime.jsx)("div", {
+						}), deleteError !== null && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
 							className: WorkspaceBrowser_module_css_default.renameError,
 							role: "alert",
 							children: deleteError
@@ -2525,7 +2551,7 @@ window.__ModuleLoader__.load({
 			});
 		}
 		//#endregion
-		//#region lib/types/client/locales.js
+		//#region src/client/locales.ts
 		/**
 		* `workspace` namespace dictionaries: the browsing region (section header,
 		* search, tree rows, dialogs) and the pick/add flow. Runtime failure
@@ -2664,7 +2690,7 @@ window.__ModuleLoader__.load({
 			"time.ago": "{t} ago"
 		};
 		//#endregion
-		//#region lib/types/client/index.js
+		//#region src/client/index.ts
 		/** Dictionary namespace owned by this plugin. */
 		const NS = "workspace";
 		/**

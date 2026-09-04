@@ -290,7 +290,9 @@ VS Code 侧边栏视图（webview）
   空白）。
 - **启动恢复上次会话**：固定端口复用同一 origin，客户端将当前会话写入 localStorage
   （`dsh.sessions.current`），下次启动原生恢复——打开的就是上次最后使用的会话；无历史会话时退回
-  空白新会话。固定端口被占用时直接报错并提示修改 `dshui.server.port`，不再退回随机端口。
+  空白新会话。存储与初始定位都按工作区隔离（`dshui_workspace` scope）：新打开一个从无历史会话的
+  文件夹，默认落在**该文件夹自己的工作区**的新会话，而不会串到上一个窗口的工作区。固定端口被占用
+  时直接报错并提示修改 `dshui.server.port`，不再退回随机端口。
 - **插件装载**：激活时把随扩展分发的五个插件装入 `$DSH_HOME/profiles/node_modules`（同时装入
   扩展自身 `node_modules` 作为 loader 回退），并经 `--patch` 覆盖层接入（见 `patch.yml`）：
   - `dshui-host-ensure-workspace`——host 插件：启动时把工作目录注册为 Workspace，并向页面注入

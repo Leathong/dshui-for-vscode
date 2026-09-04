@@ -1092,6 +1092,124 @@ index af0f535b68..dd5837c658 100644
    'sessions.count.one': '{n} session',
    'sessions.count.other': '{n} sessions',
    'actions.workspace.aria': 'Workspace actions for {name}',
+diff --git a/packages/client/ui-workspace/src/client/navigation.ts b/packages/client/ui-workspace/src/client/navigation.ts
+index a460afe23a..b237986ee1 100644
+--- a/packages/client/ui-workspace/src/client/navigation.ts
++++ b/packages/client/ui-workspace/src/client/navigation.ts
+@@ -10,6 +10,7 @@ import type {
+   IWorkspaces, WorkspaceId, WorkspaceView,
+ } from '@deepseek-ai/dsh-api-workspace-controller/client'
+ import type { SessionId } from '@deepseek-ai/dsh-session/types'
++import { scopedWorkspacePath } from './tree.ts'
+ 
+ /** Workspace archive and directory operations consumed by Client UI domains. */
+ export interface UiWorkspace {
+@@ -121,7 +122,11 @@ class UiWorkspaceService extends Service implements UiWorkspace {
+     const recent = workspace.phase === 'ready' && sessions.phase === 'ready'
+       ? recentWorkspace(workspace.items, sessions.byId)
+       : undefined
+-    const target = workspaceId ?? currentWorkspaceId ?? recent
++    // dshui patch: an explicit workspaceId (the scoped sidebar's own New Session
++    // row) still wins; without one, the boot workspace scope owns the flow, so a
++    // fresh window never inherits the recency winner from another folder.
++    const scoped = scopedWorkspaceId(workspace.items)
++    const target = workspaceId ?? (scoped !== undefined ? scoped : currentWorkspaceId ?? recent)
+     if (target === undefined) {
+       this.sessions.clear()
+       return
+@@ -157,10 +162,28 @@ class UiWorkspaceService extends Service implements UiWorkspace {
+   private watchNavigation(): () => void {
+     let initial: 'waiting' | 'connecting' | 'done' = 'waiting'
+     let disposed = false
++    const attempt = (target: WorkspaceId): void => {
++      void this.connectWorkspace(target).then(
++        (sessionId) => {
++          if (disposed) return
++          if (this.sessions.list.getSnapshot().current === undefined) {
++            this.sessions.open(sessionId)
++          }
++          initial = 'done'
++        },
++        (reason: unknown) => {
++          if (disposed) return
++          initial = 'waiting'
++          console.warn('initial workspace selection failed:', reason)
++        },
++      )
++    }
+     const reconcile = (): void => {
+       if (disposed) return
+-      if (this.clearArchivedCurrent()) return
+-      if (initial !== 'waiting') return
++      if (this.clearArchivedCurrent()) {
++        initial = 'waiting'
++        return
++      }
+       const workspace = this.workspaces.list.getSnapshot()
+       const sessions = this.sessions.list.getSnapshot()
+       if (workspace.phase !== 'ready' || sessions.phase !== 'ready') return
+@@ -168,26 +191,31 @@ class UiWorkspaceService extends Service implements UiWorkspace {
+         initial = 'done'
+         return
+       }
++      // dshui patch: the boot workspace scope (the VS Code folder this window
++      // opened) owns the initial selection. Its Workspace row usually arrives
++      // AFTER the first list baseline — the shared-backend host registers a
++      // fresh folder's workspace asynchronously — so a settle-before-register
++      // ordering would otherwise hand the recency winner (the previous window's
++      // workspace) to this brand-new window. Pin to the scoped workspace: wait
++      // for its row while it is absent, and re-open the mount once it lands.
++      const scope = scopedWorkspacePath()
++      if (scope !== '') {
++        if (initial === 'connecting') return
++        const scopedTarget = workspace.items
++          .find(item => item.path === scope)?.workspaceId
++        if (scopedTarget === undefined) return
++        initial = 'connecting'
++        attempt(scopedTarget)
++        return
++      }
++      if (initial !== 'waiting') return
+       const target = recentWorkspace(workspace.items, sessions.byId)
+       if (target === undefined) {
+         initial = 'done'
+         return
+       }
+       initial = 'connecting'
+-      void this.connectWorkspace(target).then(
+-        (sessionId) => {
+-          if (disposed) return
+-          if (this.sessions.list.getSnapshot().current === undefined) {
+-            this.sessions.open(sessionId)
+-          }
+-          initial = 'done'
+-        },
+-        (reason: unknown) => {
+-          if (disposed) return
+-          initial = 'waiting'
+-          console.warn('initial workspace selection failed:', reason)
+-        },
+-      )
++      attempt(target)
+     }
+     const disposeWorkspaces = this.workspaces.list.subscribe(reconcile)
+     const disposeSessions = this.sessions.list.subscribe(reconcile)
+@@ -232,4 +260,15 @@ function recentWorkspace(
+   return selected
+ }
+ 
++/**
++ * The Workspace id matching the dshui boot scope (see {@link scopedWorkspacePath}).
++ * @param workspaces - current Workspace list.
++ * @returns the scoped Workspace id, or undefined when no scope is set or its row is not yet listed.
++ */
++function scopedWorkspaceId(workspaces: readonly WorkspaceView[]): WorkspaceId | undefined {
++  const scope = scopedWorkspacePath()
++  if (scope === '') return undefined
++  return workspaces.find(workspace => workspace.path === scope)?.workspaceId
++}
++
+ export { UiWorkspaceService }
 diff --git a/packages/client/ui-workspace/src/client/rows/Rows.tsx b/packages/client/ui-workspace/src/client/rows/Rows.tsx
 index 0f917100ff..651ace70cf 100644
 --- a/packages/client/ui-workspace/src/client/rows/Rows.tsx
@@ -1381,10 +1499,10 @@ index 9d9dd376e4..991d5af649 100644
                  open={open}
                  insertWorkspaceBefore={insertWorkspaceBefore}
 diff --git a/packages/client/ui-workspace/src/client/tree.ts b/packages/client/ui-workspace/src/client/tree.ts
-index ec921306f9..d1f00dd7dd 100644
+index ec921306f9..a22b604ad4 100644
 --- a/packages/client/ui-workspace/src/client/tree.ts
 +++ b/packages/client/ui-workspace/src/client/tree.ts
-@@ -20,6 +20,28 @@ import {
+@@ -20,6 +20,31 @@ import {
  /** Group key for Sessions outside every Workspace. */
  export const UNGROUPED_KEY = ''
  
@@ -1397,6 +1515,9 @@ index ec921306f9..d1f00dd7dd 100644
 + * @returns the scope path, or an empty string when neither source is set.
 + */
 +export function scopedWorkspacePath(): string {
++  // Guard: navigation resolves this helper too, and its specs run without a
++  // `window` (Node environment).
++  if (typeof window === 'undefined') return ''
 +  const view = window as typeof window & { __DSHUI_WORKSPACE__?: unknown }
 +  const global = view.__DSHUI_WORKSPACE__
 +  if (typeof global === 'string' && global !== '') return global
@@ -1413,7 +1534,7 @@ index ec921306f9..d1f00dd7dd 100644
  /** Pending interaction kinds with dedicated Workspace-row presentation. */
  export type SessionPendingInteractionStatus = 'approval' | 'plan-review' | 'question'
  type SessionPendingInteractions = ReadonlyMap<SessionId, SessionPendingInteractionBase>
-@@ -125,12 +147,23 @@ function byRecency(a: SessionSummary, b: SessionSummary): number {
+@@ -125,12 +150,23 @@ function byRecency(a: SessionSummary, b: SessionSummary): number {
  /**
   * Ordinary sessions are visible; among blank sessions, only the current one
   * is visible. Subagent children use their parent header catalog; archived
@@ -1440,7 +1561,7 @@ index ec921306f9..d1f00dd7dd 100644
      && (!session.blank || session.id === current)
  }
  
-@@ -194,16 +227,20 @@ function groupByWorkspace(
+@@ -194,16 +230,20 @@ function groupByWorkspace(
    workspaces: readonly WorkspaceView[],
    archived: ReadonlySet<SessionId>,
    ungroupedOrder: readonly string[] | undefined,
@@ -1462,7 +1583,7 @@ index ec921306f9..d1f00dd7dd 100644
        members.push(summary)
      }
      groups.push(buildGroup(
-@@ -214,7 +251,8 @@ function groupByWorkspace(
+@@ -214,7 +254,8 @@ function groupByWorkspace(
    const stray = list.ids
      .map(id => list.byId[id])
      .filter((s): s is SessionSummary =>
@@ -1472,7 +1593,7 @@ index ec921306f9..d1f00dd7dd 100644
    if (stray.length > 0) {
      groups.push(buildGroup(
        UNGROUPED_KEY,
-@@ -273,6 +311,8 @@ function sessionNode(
+@@ -273,6 +314,8 @@ function sessionNode(
   * @param archivedSessionIds - registry-global archive set.
   * @param pendingInteractions - pending UI interactions by Session.
   * @param view - local expansion arrays.
@@ -1481,7 +1602,7 @@ index ec921306f9..d1f00dd7dd 100644
   * @returns group sections in render order.
   */
  export function deriveGroups(
-@@ -281,8 +321,11 @@ export function deriveGroups(
+@@ -281,8 +324,11 @@ export function deriveGroups(
    archivedSessionIds: readonly SessionId[],
    pendingInteractions: SessionPendingInteractions,
    view: TreeView,
@@ -1493,7 +1614,7 @@ index ec921306f9..d1f00dd7dd 100644
    const expandedGroups = new Set(view.expandedGroups)
    const descendants = indexSubagentDescendants(list.byId)
    const currentGroup = list.current === undefined
-@@ -290,7 +333,7 @@ export function deriveGroups(
+@@ -290,7 +336,7 @@ export function deriveGroups(
      : (workspaces.find(w => w.sessionIds.includes(list.current as SessionId))?.workspaceId as string | undefined)
          ?? UNGROUPED_KEY
    const groups: GroupNode[] = []
@@ -1502,7 +1623,7 @@ index ec921306f9..d1f00dd7dd 100644
      const expanded = expandedGroups.has(g.key)
      groups.push({
        key: g.key,
-@@ -317,19 +360,25 @@ export function deriveGroups(
+@@ -317,19 +363,25 @@ export function deriveGroups(
   * @param list - sessions list snapshot.
   * @param archivedSessionIds - registry-global archive set.
   * @param pendingInteractions - pending UI interactions by Session.
@@ -1529,7 +1650,7 @@ index ec921306f9..d1f00dd7dd 100644
      rows.push(s)
    }
    rows.sort(byRecency)
-@@ -347,6 +396,8 @@ export function deriveFlat(
+@@ -347,6 +399,8 @@ export function deriveFlat(
   * @param pendingInteractions - pending UI interactions by Session.
   * @param content - ranked Host content-search page.
   * @param limit - protocol-owned maximum merged row count.
@@ -1538,7 +1659,7 @@ index ec921306f9..d1f00dd7dd 100644
   * @returns bounded deduplicated flat rows and a refine-query hint bit.
   */
  export function deriveSearchResults(
-@@ -357,10 +408,13 @@ export function deriveSearchResults(
+@@ -357,10 +411,13 @@ export function deriveSearchResults(
    pendingInteractions: SessionPendingInteractions,
    content: { items: readonly SessionSearchResultItem[]; hasMore: boolean },
    limit: number,
@@ -1552,7 +1673,7 @@ index ec921306f9..d1f00dd7dd 100644
    const descendants = indexSubagentDescendants(list.byId)
  
    const workspaceBySession = new Map<SessionId, string>()
-@@ -381,7 +435,8 @@ export function deriveSearchResults(
+@@ -381,7 +438,8 @@ export function deriveSearchResults(
      const summary = list.byId[id]
      // Blank placeholders never match a query (their canonical title displays
      // localized, so matching it would tie search to one language).
@@ -1562,7 +1683,7 @@ index ec921306f9..d1f00dd7dd 100644
      if (
        sessionTitle(summary).toLowerCase().includes(q)
        || labelOf(summary).toLowerCase().includes(q)
-@@ -401,7 +456,8 @@ export function deriveSearchResults(
+@@ -401,7 +459,8 @@ export function deriveSearchResults(
    for (const summary of local) include(summary)
    for (const item of content.items) {
      const summary = list.byId[item.sessionId]
@@ -1846,6 +1967,115 @@ index 8ee31d37c9..111db0ccc2 100644
        expect(screen.getByText('alpha-s')).toBeTruthy()
      } finally {
        warn.mockRestore()
+diff --git a/packages/client/ui-workspace/tests/workspaces-service.client.spec.ts b/packages/client/ui-workspace/tests/workspaces-service.client.spec.ts
+index 393619bbb7..72cf140a67 100644
+--- a/packages/client/ui-workspace/tests/workspaces-service.client.spec.ts
++++ b/packages/client/ui-workspace/tests/workspaces-service.client.spec.ts
+@@ -17,8 +17,17 @@ const wid = (id: string): WorkspaceId => id as WorkspaceId
+ 
+ afterEach(() => {
+   vi.restoreAllMocks()
++  vi.unstubAllGlobals()
+ })
+ 
++/** Install the dshui boot-scope global the specs under test resolve through {@link scopedWorkspacePath}. */
++function stubScope(path: string | undefined): void {
++  vi.stubGlobal('window', {
++    location: { search: '' },
++    ...(path === undefined ? {} : { __DSHUI_WORKSPACE__: path }),
++  })
++}
++
+ function workspace(
+   id: string,
+   sessionIds: readonly SessionId[] = [],
+@@ -325,6 +334,86 @@ describe('UiWorkspaceService', () => {
+     expect(b.sessions.create).toHaveBeenCalledWith({ workspaceId: wid('newest') })
+   })
+ 
++  it('pins initial selection to the scoped Workspace once its late row lands', async () => {
++    stubScope('/w/scoped')
++    const b = bench()
++    b.sessions.create.mockResolvedValue(sid('initial'))
++
++    // The other folder is the recency winner, but it is NOT this window's scope:
++    // a fresh window must not inherit it. The scoped row is still absent (the
++    // shared-backend host registers the new folder asynchronously), so the mount
++    // waits instead of settling on the recency fallback.
++    const other = workspace('other', [], '2026-01-02T00:00:00.000Z')
++    b.workspaces.list.set(workspaceState([other]))
++    b.sessions.list.set(sessionState())
++    expect(b.sessions.create).not.toHaveBeenCalled()
++
++    // The scoped row arrives after the baselines; the mount re-opens and targets it.
++    b.workspaces.list.set(workspaceState([other, workspace('scoped', [], '2026-01-01T00:00:00.000Z')]))
++    await vi.waitFor(() => {
++      expect(b.sessions.open).toHaveBeenCalledWith(sid('initial'))
++    })
++    expect(b.sessions.create).toHaveBeenCalledWith({ workspaceId: wid('scoped') })
++    expect(b.sessions.create).not.toHaveBeenCalledWith({ workspaceId: wid('other') })
++  })
++
++  it('selects the scoped Workspace immediately when its row is already listed', async () => {
++    stubScope('/w/scoped')
++    const b = bench()
++    b.sessions.create.mockResolvedValue(sid('initial'))
++
++    b.workspaces.list.set(workspaceState([
++      workspace('other', [], '2026-01-02T00:00:00.000Z'),
++      workspace('scoped', [], '2026-01-01T00:00:00.000Z'),
++    ]))
++    b.sessions.list.set(sessionState())
++
++    await vi.waitFor(() => {
++      expect(b.sessions.open).toHaveBeenCalledWith(sid('initial'))
++    })
++    expect(b.sessions.create).toHaveBeenCalledWith({ workspaceId: wid('scoped') })
++    expect(b.sessions.create).not.toHaveBeenCalledWith({ workspaceId: wid('other') })
++  })
++
++  it('routes startSession to the scoped Workspace over the recency winner', async () => {
++    stubScope('/w/scoped')
++    const b = bench()
++    b.sessions.create.mockImplementation(async options => sid(`opened-${String(options?.workspaceId)}`))
++    b.workspaces.list.set(workspaceState([
++      workspace('other', [], '2026-01-02T00:00:00.000Z'),
++      workspace('scoped', [], '2026-01-01T00:00:00.000Z'),
++    ]))
++    b.sessions.list.set(sessionState())
++
++    b.uiWorkspace.startSession()
++    await vi.waitFor(() => {
++      expect(b.sessions.open).toHaveBeenLastCalledWith(sid('opened-scoped'))
++    })
++
++    // An explicit workspaceId still wins over the scope.
++    b.uiWorkspace.startSession(wid('other'))
++    await vi.waitFor(() => {
++      expect(b.sessions.open).toHaveBeenLastCalledWith(sid('opened-other'))
++    })
++  })
++
++  it('keeps the recency fallback when no dshui scope is set', async () => {
++    stubScope(undefined)
++    const b = bench()
++    b.sessions.create.mockResolvedValue(sid('initial'))
++
++    b.workspaces.list.set(workspaceState([
++      workspace('other', [], '2026-01-02T00:00:00.000Z'),
++      workspace('scoped', [], '2026-01-01T00:00:00.000Z'),
++    ]))
++    b.sessions.list.set(sessionState())
++
++    await vi.waitFor(() => {
++      expect(b.sessions.open).toHaveBeenCalledWith(sid('initial'))
++    })
++    expect(b.sessions.create).toHaveBeenCalledWith({ workspaceId: wid('other') })
++  })
++
+   it('retries failed initial selection and never overwrites a later selection', async () => {
+     const warning = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+     const b = bench()
 diff --git a/packages/client/ui-workspace/tsdown.config.ts b/packages/client/ui-workspace/tsdown.config.ts
 index c4bb255e57..b1838e5da4 100644
 --- a/packages/client/ui-workspace/tsdown.config.ts
