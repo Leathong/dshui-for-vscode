@@ -2207,6 +2207,330 @@ index b339379ec0..8dec0b4671 100644
    },
    {
      key: 'conversation.session',
+diff --git a/packages/mcp/mcp-client/README.md b/packages/mcp/mcp-client/README.md
+index f4979b6a2c..cc9869579a 100644
+--- a/packages/mcp/mcp-client/README.md
++++ b/packages/mcp/mcp-client/README.md
+@@ -60,6 +60,7 @@ Add one entry per server; nothing else is required. After the harness starts, th
+ | `url` / `headers` | — | streamable-http: endpoint URL and extra request headers |
+ | `toolCallTimeoutMs` | `60,000` | Timeout per `tools/call` invocation |
+ | `failOnStartupError` | `false` | Reject plugin activation when the initial connection or tool synchronization fails |
++| `startup` | `eager` | When to connect: `eager` waits for the initial connection + tool discovery before activation returns; `lazy` returns immediately and connects/registers tools in the background, so a slow remote server (e.g. one behind OAuth) never blocks startup |
+ | `reconnect.enabled` | `true` | Reconnect automatically after a lost connection |
+ | `reconnect.initialDelayMs` | `500` | First reconnect delay; doubles per consecutive failed attempt |
+ | `reconnect.maxDelayMs` | `30,000` | Backoff ceiling; also the uptime after which the attempt budget resets |
+@@ -67,7 +68,7 @@ Add one entry per server; nothing else is required. After the harness starts, th
+ 
+ The generated [configuration catalog](../../../docs/config-catalog.md#deepseek-aidsh-mcp-client) is the exhaustive source for every accepted field.
+ 
+-After startup, the server's tools appear as `mcp__<serverName>__<tool>` — try a prompt that uses one. If the initial connection fails, the harness still starts but no tools from that server appear, and an error is logged; set `failOnStartupError: true` to make a startup failure abort the harness instead.
++With `startup: eager` (the default) the tools are available before the harness starts its first turn; with `startup: lazy` they appear as soon as the connection settles, and a slow server cannot delay the harness startup. After startup, the server's tools appear as `mcp__<serverName>__<tool>` — try a prompt that uses one. If the initial connection fails, the harness still starts but no tools from that server appear, and an error is logged; set `failOnStartupError: true` to make a startup failure abort the harness instead.
+ 
+ ### Tool naming and coexistence
+ 
+@@ -86,7 +87,7 @@ Images are supported when the current model accepts image input and the harness
+ 
+ ### Startup, updates, and reconnection
+ 
+-The server's tools appear before the harness starts its first turn. When the server changes its tool list, the model's tool set updates automatically; if the update fails, the previous tool set keeps working.
++The server's tools appear before the harness starts its first turn when `startup` is `eager` (the default); with `startup: lazy` they appear once the connection settles, and a slow server cannot block harness startup. When the server changes its tool list, the model's tool set updates automatically; if the update fails, the previous tool set keeps working.
+ 
+ When a server connection drops — for example a local server process crashes — the plugin reconnects automatically with delays that double from 500 ms up to 30 s and then refreshes the tool set; reconnect progress is visible in the logs. During an outage the last known tools stay listed but calls to them fail until the server recovers. After ten consecutive failed attempts the server's tools are removed and reconnection stops until you reload the configuration or restart the harness; a server that stays connected for a while resets that counter. Set `reconnect.enabled: false` to disable automatic reconnection — tools then stay listed but fail until you reload. Editing the configuration entry reloads the server connection in place, and unchanged names stay unchanged.
+ 
+@@ -120,7 +121,7 @@ This section explains the design decisions behind the bridge and points at the c
+ 
+ ### Lifecycle and sync
+ 
+-`apply` resolves the reconnect policy, reserves the `serverName` inside the current registration scope, starts the supervisor, and awaits the initial connection plus discovery. Independent Agent scopes may reuse the same namespace because their tools and transports are isolated; a duplicate inside one scope fails at load. The supervisor serializes every sync — initial, notification, and reconnect — through one queue so two syncs can never interleave their dispose-previous/register-next swap. Disposal cancels pending reconnects, closes the live client, waits for the in-flight attempt and queued syncs to quiesce, and unregisters the current generation. The [auto-reconnect Agent Note](../../../.agents/notes/implemented/feature/2026-08-06-mcp-client-auto-reconnect.md) owns the reconnect decision.
++`apply` resolves the reconnect policy, reserves the `serverName` inside the current registration scope, and starts the supervisor. In the default `eager` mode it then awaits the initial connection plus discovery; in `lazy` mode it returns immediately and the supervisor connects and registers tools in the background. Independent Agent scopes may reuse the same namespace because their tools and transports are isolated; a duplicate inside one scope fails at load. The supervisor serializes every sync — initial, notification, and reconnect — through one queue so two syncs can never interleave their dispose-previous/register-next swap. Disposal cancels pending reconnects, closes the live client, waits for the in-flight attempt and queued syncs to quiesce, and unregisters the current generation. The [auto-reconnect Agent Note](../../../.agents/notes/implemented/feature/2026-08-06-mcp-client-auto-reconnect.md) owns the reconnect decision.
+ 
+ The supervisor listens for `notifications/tools/list_changed` and queues a re-sync; a fetch-phase failure keeps the previous generation registered, while a registration conflict rolls back the attempted generation. Each outage shares one attempt budget: after `maxAttempts` consecutive failures the tools are unregistered and reconnection stops, and a connection that stays up past `maxDelayMs` resets the budget.
+ 
+@@ -189,7 +190,7 @@ Append-only; newly visible content follows the reusable request prefix and does
+ These limits describe what you cannot do with this plugin and when it needs operational attention. They are current package constraints, not a comparison with other MCP clients or a task backlog.
+ 
+ - **Tools are the only bridged MCP capability** — Resources and Prompts have no harness consumer mechanism and are deferred.
+-- **Startup and discovery timeouts are inherited from the MCP SDK** — the plugin exposes no connection or discovery timeout; each `initialize` and paginated `tools/list` request uses the SDK's 60-second request default, so an unresponsive server or cursor chain can delay both activation and teardown while the initial synchronization settles.
++- **Startup and discovery timeouts are inherited from the MCP SDK** — the plugin exposes no connection or discovery timeout; each `initialize` and paginated `tools/list` request uses the SDK's 60-second request default, so an unresponsive server or cursor chain can delay teardown while the initial synchronization settles. Set `startup: lazy` to keep a slow server from delaying harness activation.
+ - **Reconnect triggers on transport close** — a crashed stdio child fires it; Streamable HTTP failures surface per request through the SDK transport's own recovery, so an unreachable HTTP server is retried per call rather than respawned by the supervisor.
+ - **Image is the only durable rich-result bridge** — PNG, JPEG, WebP, and GIF enter Native context after exact capability proof. Audio and embedded-resource payloads remain execution-local with explicit diagnostics, while resource links preserve only their name and URI as text.
+ - **Unsupported MCP output schemas are not enforced** — `structuredContent` falls back to `JsonValue` when the advertised schema uses vocabulary outside the harness subset.
+diff --git a/packages/mcp/mcp-client/README.zh.md b/packages/mcp/mcp-client/README.zh.md
+index e18e05a2a7..6cfe03b75a 100644
+--- a/packages/mcp/mcp-client/README.zh.md
++++ b/packages/mcp/mcp-client/README.zh.md
+@@ -60,6 +60,7 @@ kind: "package-reference"
+ | `url` / `headers` | — | streamable-http：端点 URL 与额外请求标头 |
+ | `toolCallTimeoutMs` | `60,000` | 每次 `tools/call` 调用的超时 |
+ | `failOnStartupError` | `false` | 初始连接或工具同步失败时拒绝插件激活 |
++| `startup` | `eager` | 何时连接：`eager` 在激活返回前等待初始连接与工具发现完成；`lazy` 立即返回并在后台连接与注册工具，因此慢速远程服务器（例如需 OAuth 的）不会拖住启动 |
+ | `reconnect.enabled` | `true` | 连接丢失后自动重新连接 |
+ | `reconnect.initialDelayMs` | `500` | 首次重连延迟；每次连续失败尝试翻倍 |
+ | `reconnect.maxDelayMs` | `30,000` | 退避上限；同时是重置尝试预算所需的正常运行时长 |
+@@ -67,7 +68,7 @@ kind: "package-reference"
+ 
+ 生成的[配置目录](../../../docs/config-catalog.zh.md#deepseek-aidsh-mcp-client)是每个受支持字段及其 JSDoc 的穷尽式真源。
+ 
+-启动后，服务器的工具会以 `mcp__<serverName>__<tool>` 形式出现——试着用一条提示词调用其中一个。如果初始连接失败，harness 仍会启动，但该服务器的工具不会出现，并会记录一条错误；设置 `failOnStartupError: true` 可让启动失败改为中止 harness。
++默认 `startup: eager` 时工具会在 harness 开始首个轮次之前可用；`startup: lazy` 时工具在连接就绪后即可用，且慢速服务器不会拖住 harness 启动。启动后，服务器的工具会以 `mcp__<serverName>__<tool>` 形式出现——试着用一条提示词调用其中一个。如果初始连接失败，harness 仍会启动，但该服务器的工具不会出现，并会记录一条错误；设置 `failOnStartupError: true` 可让启动失败改为中止 harness。
+ 
+ ### 工具命名与共存
+ 
+@@ -120,7 +121,7 @@ kind: "package-reference"
+ 
+ ### 生命周期与同步
+ 
+-`apply` 解析重连策略、在当前注册作用域内预留 `serverName`、启动监督器，并等待初始连接加发现完成。独立 Agent 作用域可以复用相同 namespace，因为其工具与传输彼此隔离；同一作用域内重复会在加载时失败。监督器把所有同步——初始、通知与重连——串行到同一条队列，因此两次同步绝不会交错执行各自的先 dispose 后注册交换。dispose 会取消待执行的重连、关闭活动客户端、等待进行中的尝试与排队同步完全停稳，然后注销当前世代。[自动重连 Agent Note](../../../.agents/notes/implemented/feature/2026-08-06-mcp-client-auto-reconnect.zh.md) 拥有重连决策。
++`apply` 解析重连策略、在当前注册作用域内预留 `serverName`、启动监督器。默认 `eager` 模式下随后等待初始连接加发现完成；`lazy` 模式下立即返回，由监督器在后台连接并注册工具。独立 Agent 作用域可以复用相同 namespace，因为其工具与传输彼此隔离；同一作用域内重复会在加载时失败。监督器把所有同步——初始、通知与重连——串行到同一条队列，因此两次同步绝不会交错执行各自的先 dispose 后注册交换。dispose 会取消待执行的重连、关闭活动客户端、等待进行中的尝试与排队同步完全停稳，然后注销当前世代。[自动重连 Agent Note](../../../.agents/notes/implemented/feature/2026-08-06-mcp-client-auto-reconnect.zh.md) 拥有重连决策。
+ 
+ 监督器监听 `notifications/tools/list_changed` 并排队一次重新同步；获取阶段失败时保留上一世代注册，注册冲突则回滚本次尝试的世代。每次中断共享一个尝试预算：连续失败达到 `maxAttempts` 次后工具被注销、重连停止；连接存活超过 `maxDelayMs` 会重置预算。
+ 
+@@ -189,7 +190,7 @@ kind: "package-reference"
+ 这些限制说明你无法用本插件做什么、以及何时需要运维注意。它们是当前包约束，不是与其他 MCP 客户端的对比，也不是任务积压。
+ 
+ - **只桥接 MCP 的工具能力**——Resources 与 Prompts 没有 harness 消费机制，暂缓实现。
+-- **启动与发现超时继承自 MCP SDK**——插件不暴露连接或发现超时；每次 `initialize` 与分页 `tools/list` 请求都使用 SDK 默认的 60 秒请求超时，因此无响应的服务器或 cursor chain 在初始同步完成期间可能同时延迟激活与 teardown。
++- **启动与发现超时继承自 MCP SDK**——插件不暴露连接或发现超时；每次 `initialize` 与分页 `tools/list` 请求都使用 SDK 默认的 60 秒请求超时，因此无响应的服务器或 cursor chain 在初始同步完成期间可能延迟 teardown。设置 `startup: lazy` 可让慢速服务器不拖住 harness 激活。
+ - **重连在传输关闭时触发**——崩溃的 stdio 子进程会触发重连；Streamable HTTP 失败按请求经 SDK 传输自身的恢复机制暴露，因此不可达的 HTTP 服务器会按调用重试，而非由 supervisor 重新 spawn。
+ - **图片是唯一的持久丰富结果桥接**——PNG、JPEG、WebP 与 GIF 在确切能力得到证明后进入 Native 上下文。音频与嵌入资源载荷仍只存在于执行局部并带明确诊断，资源链接只以文本保留名称与 URI。
+ - **不强制执行不受支持的 MCP 输出 schema**——已声明 schema 使用 harness 子集之外的词汇时，`structuredContent` 回退为 `JsonValue`。
+diff --git a/packages/mcp/mcp-client/src/index.ts b/packages/mcp/mcp-client/src/index.ts
+index 59ef928751..deff561427 100644
+--- a/packages/mcp/mcp-client/src/index.ts
++++ b/packages/mcp/mcp-client/src/index.ts
+@@ -68,6 +68,18 @@ export interface StdioConfig {
+   toolCallTimeoutMs: number
+   /** Fail plugin activation when the initial connection or tool synchronization fails. */
+   failOnStartupError: boolean
++  /**
++   * When to connect and publish tools relative to plugin activation.
++   * - `eager` (default): activation blocks until the initial connection and tool
++   *   discovery settle, so the tools are available before the harness's first
++   *   turn; a failure surfaces when `failOnStartupError` is true.
++   * - `lazy`: activation returns immediately and the supervisor connects and
++   *   registers tools in the background; startup and configuration reloads
++   *   never wait on a slow remote server (for example one behind OAuth).
++   *   `failOnStartupError` is ineffective in this mode because activation has
++   *   already returned before the connection settles.
++   */
++  startup: 'eager' | 'lazy'
+   /** Automatic reconnect policy after a lost connection; omission uses the defaults. */
+   reconnect?: ReconnectConfig
+ }
+@@ -90,6 +102,18 @@ export interface StreamableHttpConfig {
+   toolCallTimeoutMs: number
+   /** Fail plugin activation when the initial connection or tool synchronization fails. */
+   failOnStartupError: boolean
++  /**
++   * When to connect and publish tools relative to plugin activation.
++   * - `eager` (default): activation blocks until the initial connection and tool
++   *   discovery settle, so the tools are available before the harness's first
++   *   turn; a failure surfaces when `failOnStartupError` is true.
++   * - `lazy`: activation returns immediately and the supervisor connects and
++   *   registers tools in the background; startup and configuration reloads
++   *   never wait on a slow remote server (for example one behind OAuth).
++   *   `failOnStartupError` is ineffective in this mode because activation has
++   *   already returned before the connection settles.
++   */
++  startup: 'eager' | 'lazy'
+   /** Automatic reconnect policy after a lost connection; omission uses the defaults. */
+   reconnect?: ReconnectConfig
+ }
+@@ -97,10 +121,10 @@ export interface StreamableHttpConfig {
+ /** Configuration for one stdio or Streamable HTTP MCP server. */
+ export type Config = StdioConfig | StreamableHttpConfig
+ 
+-type StdioConfigInput = Omit<StdioConfig, 'args' | 'env' | 'cwd' | 'toolCallTimeoutMs' | 'failOnStartupError'>
+-  & Partial<Pick<StdioConfig, 'args' | 'env' | 'cwd' | 'toolCallTimeoutMs' | 'failOnStartupError'>>
+-type StreamableHttpConfigInput = Omit<StreamableHttpConfig, 'headers' | 'toolCallTimeoutMs' | 'failOnStartupError'>
+-  & Partial<Pick<StreamableHttpConfig, 'headers' | 'toolCallTimeoutMs' | 'failOnStartupError'>>
++type StdioConfigInput = Omit<StdioConfig, 'args' | 'env' | 'cwd' | 'toolCallTimeoutMs' | 'failOnStartupError' | 'startup'>
++  & Partial<Pick<StdioConfig, 'args' | 'env' | 'cwd' | 'toolCallTimeoutMs' | 'failOnStartupError' | 'startup'>>
++type StreamableHttpConfigInput = Omit<StreamableHttpConfig, 'headers' | 'toolCallTimeoutMs' | 'failOnStartupError' | 'startup'>
++  & Partial<Pick<StreamableHttpConfig, 'headers' | 'toolCallTimeoutMs' | 'failOnStartupError' | 'startup'>>
+ type ConfigInput = StdioConfigInput | StreamableHttpConfigInput
+ 
+ const Reconnect: z<ReconnectConfig> = z.object({
+@@ -120,6 +144,7 @@ export const Config = z.union([
+     cwd: z.string().default(''),
+     toolCallTimeoutMs: z.number().default(DEFAULT_TOOL_CALL_TIMEOUT_MS),
+     failOnStartupError: z.boolean().default(false),
++    startup: z.union(['eager', 'lazy'] as const).default('eager'),
+     reconnect: Reconnect,
+   }),
+   z.object({
+@@ -129,6 +154,7 @@ export const Config = z.union([
+     headers: z.dict(String).default({}),
+     toolCallTimeoutMs: z.number().default(DEFAULT_TOOL_CALL_TIMEOUT_MS),
+     failOnStartupError: z.boolean().default(false),
++    startup: z.union(['eager', 'lazy'] as const).default('eager'),
+     reconnect: Reconnect,
+   }),
+ ]) as unknown as z<ConfigInput, Config>
+@@ -176,13 +202,19 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
+     return () => connection.dispose()
+   }, 'mcp-client.connection')
+ 
+-  // Block plugin activation on the initial connection + tool discovery so
+-  // Cordis consumers observe the tools immediately after the fiber activates.
+-  // When failOnStartupError is true, a failed initial attempt rejects the
+-  // fiber (Cordis rolls it back); otherwise the error is logged and the
+-  // supervisor enters its reconnect loop.
+-  const outcome = await connection.ready
+-  if (outcome.error !== undefined && config.failOnStartupError) {
+-    throw new Error(`mcp-client(${config.serverName}): initial connection or tool synchronization failed`, { cause: outcome.error })
++  // Eager mode blocks plugin activation on the initial connection + tool
++  // discovery so Cordis consumers observe the tools immediately after the
++  // fiber activates. When failOnStartupError is true, a failed initial attempt
++  // rejects the fiber (Cordis rolls it back); otherwise the error is logged
++  // and the supervisor enters its reconnect loop.
++  // Lazy mode returns here immediately: the supervisor keeps connecting and
++  // registering tools in the background, so a slow remote server never delays
++  // activation (and thus the whole boot). failOnStartupError cannot reject a
++  // fiber that has already returned in this mode.
++  if (config.startup === 'eager') {
++    const outcome = await connection.ready
++    if (outcome.error !== undefined && config.failOnStartupError) {
++      throw new Error(`mcp-client(${config.serverName}): initial connection or tool synchronization failed`, { cause: outcome.error })
++    }
+   }
+ }
+diff --git a/packages/mcp/mcp-client/tests/apply.spec.ts b/packages/mcp/mcp-client/tests/apply.spec.ts
+index 1b1716e51b..02f154eec6 100644
+--- a/packages/mcp/mcp-client/tests/apply.spec.ts
++++ b/packages/mcp/mcp-client/tests/apply.spec.ts
+@@ -84,6 +84,7 @@ const stdioConfig: Config = {
+   cwd: '',
+   toolCallTimeoutMs: 60_000,
+   failOnStartupError: false,
++  startup: 'eager',
+ }
+ 
+ // ---- Tests ----
+@@ -404,6 +405,7 @@ describe('apply (plugin lifecycle)', () => {
+       headers: { Authorization: 'Bearer x' },
+       toolCallTimeoutMs: 30_000,
+       failOnStartupError: false,
++      startup: 'eager',
+     }
+ 
+     await apply(ctx, httpConfig)
+diff --git a/packages/mcp/mcp-client/tests/mcp-client.e2e.ts b/packages/mcp/mcp-client/tests/mcp-client.e2e.ts
+index ee3db70a77..d8a2b30897 100644
+--- a/packages/mcp/mcp-client/tests/mcp-client.e2e.ts
++++ b/packages/mcp/mcp-client/tests/mcp-client.e2e.ts
+@@ -106,6 +106,7 @@ describe('fixture server — controlled scenarios', () => {
+     cwd: packageDir,
+     toolCallTimeoutMs: 15_000,
+     failOnStartupError: false,
++    startup: 'eager',
+   }
+ 
+   beforeAll(async () => {
+@@ -205,6 +206,7 @@ describe('fixture server — duplicate serverName', () => {
+       cwd: packageDir,
+       toolCallTimeoutMs: 15_000,
+       failOnStartupError: false,
++      startup: 'eager',
+     }
+     await apply(ctx, config)
+ 
+@@ -227,6 +229,7 @@ describe('fixture server — disposal', () => {
+       cwd: packageDir,
+       toolCallTimeoutMs: 15_000,
+       failOnStartupError: false,
++      startup: 'eager',
+     })
+ 
+     // Tools are registered before dispose.
+@@ -250,6 +253,7 @@ describe('fixture server — crash recovery', () => {
+       cwd: packageDir,
+       toolCallTimeoutMs: 15_000,
+       failOnStartupError: false,
++      startup: 'eager',
+       reconnect,
+     }
+   }
+@@ -334,6 +338,7 @@ describe('server-everything — official test server', () => {
+     cwd: '',
+     toolCallTimeoutMs: 30_000,
+     failOnStartupError: false,
++    startup: 'eager',
+   }
+ 
+   beforeAll(async () => {
+@@ -403,6 +408,7 @@ describe('server-filesystem — real filesystem operations', () => {
+       cwd: '',
+       toolCallTimeoutMs: 30_000,
+       failOnStartupError: false,
++      startup: 'eager',
+     }
+     await apply(ctx, config)
+   }, 60_000)
+@@ -520,6 +526,7 @@ describe('streamable-http — in-process MCP server', () => {
+       headers: { Authorization: 'Bearer e2e-test-token' },
+       toolCallTimeoutMs: 15_000,
+       failOnStartupError: false,
++      startup: 'eager',
+     }
+     await apply(ctx, config)
+   }, 30_000)
+diff --git a/packages/mcp/mcp-client/tests/mcp-client.spec.ts b/packages/mcp/mcp-client/tests/mcp-client.spec.ts
+index 605a31ece1..4df215f7af 100644
+--- a/packages/mcp/mcp-client/tests/mcp-client.spec.ts
++++ b/packages/mcp/mcp-client/tests/mcp-client.spec.ts
+@@ -1129,6 +1129,7 @@ describe('createTransport', () => {
+       cwd: '/tmp',
+       toolCallTimeoutMs: 60_000,
+       failOnStartupError: false,
++      startup: 'eager',
+     }
+     const transport = createTransport(config)
+     expect(transport).toBeDefined()
+@@ -1144,6 +1145,7 @@ describe('createTransport', () => {
+       headers: {},
+       toolCallTimeoutMs: 60_000,
+       failOnStartupError: false,
++      startup: 'eager',
+     }
+     const transport = createTransport(config)
+     expect(transport).toBeDefined()
+@@ -1159,6 +1161,7 @@ describe('createTransport', () => {
+       headers: { Authorization: 'Bearer token' },
+       toolCallTimeoutMs: 60_000,
+       failOnStartupError: false,
++      startup: 'eager',
+     }
+     const transport = createTransport(config)
+     expect(transport).toBeDefined()
+@@ -1183,6 +1186,7 @@ describe('createTransport', () => {
+         cwd: '',
+         toolCallTimeoutMs: 60_000,
+         failOnStartupError: false,
++        startup: 'eager',
+       }
+       // StdioClientTransport keeps its env private; the observable contract is
+       // that createTransport(config) returns a transport without throwing.
+@@ -1209,6 +1213,7 @@ describe('createTransport', () => {
+       cwd: '',
+       toolCallTimeoutMs: 60_000,
+       failOnStartupError: false,
++      startup: 'eager',
+     }
+     const transport = createTransport(config)
+     expect(transport).toBeDefined()
+diff --git a/packages/mcp/mcp-client/tests/reconnect.spec.ts b/packages/mcp/mcp-client/tests/reconnect.spec.ts
+index 186d4dc345..3beb00fd96 100644
+--- a/packages/mcp/mcp-client/tests/reconnect.spec.ts
++++ b/packages/mcp/mcp-client/tests/reconnect.spec.ts
+@@ -102,6 +102,7 @@ function stdioConfig(reconnect?: Config['reconnect']): Config {
+     cwd: '',
+     toolCallTimeoutMs: 60_000,
+     failOnStartupError: false,
++    startup: 'eager',
+     ...reconnect === undefined ? {} : { reconnect },
+   }
+ }
 diff --git a/packages/util/native-command/src/path-opener.ts b/packages/util/native-command/src/path-opener.ts
 index 97d2084e61..2e4140ca1a 100644
 --- a/packages/util/native-command/src/path-opener.ts

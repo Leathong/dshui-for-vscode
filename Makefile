@@ -82,7 +82,7 @@ DSH_PNPM ?= pnpm
 # copy-clients（客户端 bundle 拷入 dshui-plugins/）→ sync-dsh（@deepseek-ai/* 拷入 node_modules）。
 # 之后即可 make package / make deploy 打包安装。
 dsh-build:
-	cd $(DSH_SRC) && $(DSH_PNPM) install
+	cd $(DSH_SRC) && $(DSH_PNPM) clean && $(DSH_PNPM) install
 	cd $(DSH_SRC) && $(DSH_PNPM) run build:lib:host
 	cd $(DSH_SRC) && $(DSH_PNPM) run build:lib:client
 	node scripts/copy-clients.mjs
