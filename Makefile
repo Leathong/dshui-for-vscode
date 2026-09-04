@@ -72,7 +72,7 @@ DSH_SRC ?= .dsh-src
 # DSH_REPO  — 上游仓库
 DSH_REPO ?= https://github.com/deepseek-ai/deepseek-harness.git
 # DSH_BASE  — 锁定基提交（来自 patches/README.md，不能漂移，漂移会导致补丁无法套用）
-DSH_BASE ?= 4e84901e6471b79ec0338099867ebb4606d12bb5
+DSH_BASE ?= a66e4702047846cdaa10c66c9d3df3951f5ea70d
 # DSH_PATCH — dshui 未归档改动（client bundle + host 运行时）
 DSH_PATCH := patches/dshui-bundles.patch
 # DSH_PNPM — 包管理器，需要 pnpm 11.7.0、Node ^22.19 || >=24

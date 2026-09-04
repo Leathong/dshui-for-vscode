@@ -32,7 +32,7 @@ const CHECKS = [
   },
   {
     file: 'packages/client/ui-workspace/src/client/index.ts',
-    markers: ["type: 'dshui:deleteSession'", "window.postMessage({ type: 'dshui:deleteSession', sessionId }"],
+    markers: ["type: 'dshui:deleteSession'", "window.parent.postMessage({ type: 'dshui:deleteSession', sessionId, cwd }"],
   },
   {
     file: 'packages/client/ui-workspace/src/client/rows/Rows.tsx',
