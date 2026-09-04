@@ -86,7 +86,10 @@ export class GitProvider {
         delete env.GIT_WORK_TREE;
         delete env.GIT_INDEX_FILE;
         this.baseEnv = env;
+        this.maxNestedRepos = Math.max(0, options.maxNestedRepos ?? 100);
     }
+    /** Cap on nested repositories materialized per capture (from options). */
+    maxNestedRepos;
     /**
      * Whether git snapshotting is usable. With the isolated snapshot repo this
      * no longer depends on the project being a git repository: every workspace
@@ -145,22 +148,176 @@ export class GitProvider {
     }
     /** Snapshot the entire worktree into a temporary-index tree object. */
     async captureTree(signal) {
-        const index = await this.createTempIndex();
-        try {
-            const reset = await this.run(['read-tree', '--empty'], signal, index);
-            if (reset.code !== 0)
-                throw new Error(`git read-tree --empty failed: ${reset.stderr.trim()}`);
-            const added = await this.run(['add', '-A'], signal, index);
-            if (added.code !== 0)
-                throw new Error(`git add -A failed: ${added.stderr.trim()}`);
-            const ledgerRel = this.ledgerRelativePath();
-            if (ledgerRel !== undefined) {
-                const removed = await this.run(['rm', '-r', '--cached', '--ignore-unmatch', '--quiet', '--', ledgerRel], signal, index);
-                if (removed.code !== 0 && removed.stderr.trim() !== '') {
-                    throw new Error(`git rm (ledger exclusion) failed: ${removed.stderr.trim()}`);
+        const info = await this.captureTreeInfo(signal);
+        return info.tree;
+    }
+    /**
+     * Snapshot the entire worktree with nested git repositories materialized
+     * as directory trees instead of gitlinks, so nested files get plain git
+     * diff/restore coverage. `materialized` reports whether any nested
+     * directory was spliced in. Materialization is best-effort: discovery or
+     * capture failures leave the gitlinks in place, exactly like before.
+     *
+     * Discovery is driven entirely by git plumbing (tree inspection + exit
+     * codes), never by parsing human-readable `add -A` stderr.
+     */
+    async captureTreeInfo(signal) {
+        const seen = new Set();
+        let budget = 0;
+        let materialized = false;
+        const materialize = async (absRoot) => {
+            const tree = await this.captureWorktree(absRoot, signal);
+            const replacements = [];
+            for (const rel of await this.gitlinkPaths(tree)) {
+                if (budget >= this.maxNestedRepos)
+                    break;
+                const abs = path.resolve(absRoot, rel);
+                const real = await fs.promises.realpath(abs).catch(() => abs);
+                if (seen.has(real))
+                    continue;
+                seen.add(real);
+                // A gitlink may point at anything; only recurse when it really is a
+                // repository (also covers gitlinks the discovery walk might miss).
+                const probe = await spawnGit(abs, ['rev-parse', '--absolute-git-dir'], this.baseEnv, this.options.spawnTimeoutMs).catch(() => undefined);
+                if (probe === undefined || probe.code !== 0)
+                    continue;
+                budget += 1;
+                const subTree = await materialize(abs).catch(() => undefined);
+                if (subTree !== undefined) {
+                    replacements.push({ path: rel, tree: subTree });
+                    materialized = true;
                 }
             }
-            const result = await this.run(['write-tree'], signal, index);
+            return replacements.length > 0 ? await this.replaceGitlinks(tree, replacements, signal) : tree;
+        };
+        const tree = await materialize(this.cwd);
+        return { tree, materialized };
+    }
+    /**
+     * Nested git repositories under the worktree, in post-order (a repo's
+     * deeper children appear before it), excluding the worktree root itself.
+     * Used for display labeling. See `scanNestedRepos` for mechanics.
+     */
+    async listNestedRepos(accept) {
+        return this.scanNestedRepos(this.cwd, accept);
+    }
+    /**
+     * Walk the real directory tree under `dir` (bounded, symlinks not
+     * followed, `.git` entries skipped) and return nested repositories in
+     * post-order, with `rel` relative to `dir`. `rev-parse` is spawned only
+     * for directories that actually contain a `.git` entry (dir or gitfile),
+     * so the walk cost is one lstat per directory entry.
+     */
+    async scanNestedRepos(dir, accept) {
+        const found = [];
+        const MAX_VISITS = 1_000_000;
+        let visits = 0;
+        const hasGitEntry = async (abs) => {
+            try {
+                const stat = await fs.promises.lstat(path.join(abs, '.git'));
+                return stat.isDirectory() || stat.isFile();
+            }
+            catch {
+                return false;
+            }
+        };
+        const walk = async (current) => {
+            if (visits >= MAX_VISITS)
+                return;
+            let entries = [];
+            try {
+                entries = await fs.promises.readdir(current, { withFileTypes: true });
+            }
+            catch {
+                return;
+            }
+            for (const entry of entries) {
+                if (visits >= MAX_VISITS)
+                    return;
+                visits += 1;
+                if (entry.name === '.git' || !entry.isDirectory())
+                    continue;
+                const abs = path.join(current, entry.name);
+                if (!(await hasGitEntry(abs))) {
+                    await walk(abs);
+                    continue;
+                }
+                const result = await spawnGit(abs, ['rev-parse', '--absolute-git-dir'], this.baseEnv, this.options.spawnTimeoutMs).catch(() => undefined);
+                if (result === undefined || result.code !== 0)
+                    continue;
+                const info = {
+                    root: abs,
+                    gitDir: path.resolve(abs, result.stdout.trim()),
+                    rel: path.relative(dir, abs).split(path.sep).join('/'),
+                };
+                if (accept !== undefined && !(await accept(info)))
+                    continue;
+                await walk(abs);
+                found.push(info);
+            }
+        };
+        try {
+            await walk(dir);
+        }
+        catch {
+            // Discovery failure: the caller labels nothing as nested.
+        }
+        return found;
+    }
+    /** Workspace-relative gitlink paths stored in a tree snapshot. */
+    async gitlinkPaths(tree) {
+        if (!isHash(tree))
+            return [];
+        const listing = await this.run(['ls-tree', '-r', '-z', tree]).catch(() => undefined);
+        if (listing === undefined || listing.code !== 0)
+            return [];
+        const paths = [];
+        for (const record of listing.stdout.split('\0')) {
+            if (record === '')
+                continue;
+            const parts = record.split('\t');
+            const meta = parts[0] ?? '';
+            const filePath = parts[1];
+            if (filePath !== undefined && meta.split(' ')[0] === '160000')
+                paths.push(filePath);
+        }
+        return paths;
+    }
+    /** Capture one worktree (the workspace root or a nested repository root). */
+    async captureWorktree(cwd, signal) {
+        const isRoot = path.resolve(cwd) === path.resolve(this.cwd);
+        const index = await this.createTempIndex();
+        try {
+            const reset = await this.runAt(cwd, ['read-tree', '--empty'], signal, index);
+            if (reset.code !== 0)
+                throw new Error(`git read-tree --empty failed: ${reset.stderr.trim()}`);
+            let added = await this.runAt(cwd, ['add', '-A'], signal, index);
+            if (added.code !== 0) {
+                // Git refuses to index a nested repository with no commit checked
+                // out. Find such directories by filesystem walk (no stderr parsing)
+                // and retry once with them excluded, so the rest of the tree keeps
+                // its snapshot. Their contents stay ledger-covered.
+                const excludes = [];
+                for (const repo of await this.scanNestedRepos(cwd).catch(() => [])) {
+                    if (!(await this.hasHead(repo.root)))
+                        excludes.push(`:(exclude)${repo.rel}/`);
+                }
+                if (excludes.length > 0) {
+                    added = await this.runAt(cwd, ['add', '-A', '--', ...excludes], signal, index);
+                }
+            }
+            if (added.code !== 0)
+                throw new Error(`git add -A failed: ${added.stderr.trim()}`);
+            if (isRoot) {
+                const ledgerRel = this.ledgerRelativePath();
+                if (ledgerRel !== undefined) {
+                    const removed = await this.runAt(cwd, ['rm', '-r', '--cached', '--ignore-unmatch', '--quiet', '--', ledgerRel], signal, index);
+                    if (removed.code !== 0 && removed.stderr.trim() !== '') {
+                        throw new Error(`git rm (ledger exclusion) failed: ${removed.stderr.trim()}`);
+                    }
+                }
+            }
+            const result = await this.runAt(cwd, ['write-tree'], signal, index);
             if (result.code !== 0)
                 throw new Error(`git write-tree failed: ${result.stderr.trim()}`);
             const tree = result.stdout.trim();
@@ -172,6 +329,51 @@ export class GitProvider {
             fs.rmSync(index, { force: true });
             fs.rmSync(path.dirname(index), { recursive: true, force: true });
         }
+    }
+    /** Whether a repository has a resolvable HEAD (false ⇒ commitless/bare). */
+    async hasHead(root) {
+        const result = await spawnGit(root, ['rev-parse', '--verify', '-q', 'HEAD'], this.baseEnv, this.options.spawnTimeoutMs).catch(() => undefined);
+        return result !== undefined && result.code === 0;
+    }
+    /** Replace gitlink records by directory trees (materialization) via a throwaway index. */
+    async replaceGitlinks(tree, entries, signal) {
+        if (entries.length === 0)
+            return tree;
+        const index = await this.createTempIndex();
+        try {
+            const reset = await this.run(['read-tree', '--empty'], signal, index);
+            if (reset.code !== 0)
+                return tree;
+            const populated = await this.run(['read-tree', tree], signal, index);
+            if (populated.code !== 0)
+                return tree;
+            for (const entry of entries) {
+                // Drop the gitlink at the exact path (may be absent when the nested
+                // repo was excluded during capture, e.g. a commitless child).
+                await this.run(['update-index', '--force-remove', '--', entry.path], signal, index);
+                const spliced = await this.run(['read-tree', '--prefix', `${entry.path}/`, entry.tree], signal, index);
+                if (spliced.code !== 0)
+                    return tree;
+            }
+            const written = await this.run(['write-tree'], signal, index);
+            if (written.code !== 0)
+                return tree;
+            const out = written.stdout.trim();
+            return isHash(out) ? out : tree;
+        }
+        finally {
+            fs.rmSync(index, { force: true });
+            fs.rmSync(path.dirname(index), { recursive: true, force: true });
+        }
+    }
+    /** Run git against the isolated repo from an arbitrary worktree. */
+    async runAt(cwd, args, signal, indexFile) {
+        const ready = await this.ensureIsolated(signal);
+        if (!ready) {
+            return { code: 128, stdout: '', stderr: 'rollback: isolated snapshot repository is unavailable' };
+        }
+        const env = indexFile === undefined ? this.baseEnv : { ...this.baseEnv, GIT_INDEX_FILE: indexFile };
+        return spawnGit(cwd, args, env, this.options.spawnTimeoutMs, signal, this.options.isolatedRepoDir, cwd);
     }
     async treeExists(tree, signal) {
         if (!isHash(tree))

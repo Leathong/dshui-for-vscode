@@ -105,7 +105,10 @@ var GitProvider = class {
 		delete env.GIT_WORK_TREE;
 		delete env.GIT_INDEX_FILE;
 		this.baseEnv = env;
+		this.maxNestedRepos = Math.max(0, options.maxNestedRepos ?? 100);
 	}
+	/** Cap on nested repositories materialized per capture (from options). */
+	maxNestedRepos;
 	/**
 	* Whether git snapshotting is usable. With the isolated snapshot repo this
 	* no longer depends on the project being a git repository: every workspace
@@ -161,26 +164,166 @@ var GitProvider = class {
 	}
 	/** Snapshot the entire worktree into a temporary-index tree object. */
 	async captureTree(signal) {
+		return (await this.captureTreeInfo(signal)).tree;
+	}
+	/**
+	* Snapshot the entire worktree with nested git repositories materialized
+	* as directory trees instead of gitlinks, so nested files get plain git
+	* diff/restore coverage. `materialized` reports whether any nested
+	* directory was spliced in. Materialization is best-effort: discovery or
+	* capture failures leave the gitlinks in place, exactly like before.
+	*
+	* Discovery is driven entirely by git plumbing (tree inspection + exit
+	* codes), never by parsing human-readable `add -A` stderr.
+	*/
+	async captureTreeInfo(signal) {
+		const seen = /* @__PURE__ */ new Set();
+		let budget = 0;
+		let materialized = false;
+		const materialize = async (absRoot) => {
+			const tree = await this.captureWorktree(absRoot, signal);
+			const replacements = [];
+			for (const rel of await this.gitlinkPaths(tree)) {
+				if (budget >= this.maxNestedRepos) break;
+				const abs = path.resolve(absRoot, rel);
+				const real = await fs.promises.realpath(abs).catch(() => abs);
+				if (seen.has(real)) continue;
+				seen.add(real);
+				const probe = await spawnGit(abs, ["rev-parse", "--absolute-git-dir"], this.baseEnv, this.options.spawnTimeoutMs).catch(() => void 0);
+				if (probe === void 0 || probe.code !== 0) continue;
+				budget += 1;
+				const subTree = await materialize(abs).catch(() => void 0);
+				if (subTree !== void 0) {
+					replacements.push({
+						path: rel,
+						tree: subTree
+					});
+					materialized = true;
+				}
+			}
+			return replacements.length > 0 ? await this.replaceGitlinks(tree, replacements, signal) : tree;
+		};
+		return {
+			tree: await materialize(this.cwd),
+			materialized
+		};
+	}
+	/**
+	* Nested git repositories under the worktree, in post-order (a repo's
+	* deeper children appear before it), excluding the worktree root itself.
+	* Used for display labeling. See `scanNestedRepos` for mechanics.
+	*/
+	async listNestedRepos(accept) {
+		return this.scanNestedRepos(this.cwd, accept);
+	}
+	/**
+	* Walk the real directory tree under `dir` (bounded, symlinks not
+	* followed, `.git` entries skipped) and return nested repositories in
+	* post-order, with `rel` relative to `dir`. `rev-parse` is spawned only
+	* for directories that actually contain a `.git` entry (dir or gitfile),
+	* so the walk cost is one lstat per directory entry.
+	*/
+	async scanNestedRepos(dir, accept) {
+		const found = [];
+		const MAX_VISITS = 1e6;
+		let visits = 0;
+		const hasGitEntry = async (abs) => {
+			try {
+				const stat = await fs.promises.lstat(path.join(abs, ".git"));
+				return stat.isDirectory() || stat.isFile();
+			} catch {
+				return false;
+			}
+		};
+		const walk = async (current) => {
+			if (visits >= MAX_VISITS) return;
+			let entries = [];
+			try {
+				entries = await fs.promises.readdir(current, { withFileTypes: true });
+			} catch {
+				return;
+			}
+			for (const entry of entries) {
+				if (visits >= MAX_VISITS) return;
+				visits += 1;
+				if (entry.name === ".git" || !entry.isDirectory()) continue;
+				const abs = path.join(current, entry.name);
+				if (!await hasGitEntry(abs)) {
+					await walk(abs);
+					continue;
+				}
+				const result = await spawnGit(abs, ["rev-parse", "--absolute-git-dir"], this.baseEnv, this.options.spawnTimeoutMs).catch(() => void 0);
+				if (result === void 0 || result.code !== 0) continue;
+				const info = {
+					root: abs,
+					gitDir: path.resolve(abs, result.stdout.trim()),
+					rel: path.relative(dir, abs).split(path.sep).join("/")
+				};
+				if (accept !== void 0 && !await accept(info)) continue;
+				await walk(abs);
+				found.push(info);
+			}
+		};
+		try {
+			await walk(dir);
+		} catch {}
+		return found;
+	}
+	/** Workspace-relative gitlink paths stored in a tree snapshot. */
+	async gitlinkPaths(tree) {
+		if (!isHash(tree)) return [];
+		const listing = await this.run([
+			"ls-tree",
+			"-r",
+			"-z",
+			tree
+		]).catch(() => void 0);
+		if (listing === void 0 || listing.code !== 0) return [];
+		const paths = [];
+		for (const record of listing.stdout.split("\0")) {
+			if (record === "") continue;
+			const parts = record.split("	");
+			const meta = parts[0] ?? "";
+			const filePath = parts[1];
+			if (filePath !== void 0 && meta.split(" ")[0] === "160000") paths.push(filePath);
+		}
+		return paths;
+	}
+	/** Capture one worktree (the workspace root or a nested repository root). */
+	async captureWorktree(cwd, signal) {
+		const isRoot = path.resolve(cwd) === path.resolve(this.cwd);
 		const index = await this.createTempIndex();
 		try {
-			const reset = await this.run(["read-tree", "--empty"], signal, index);
+			const reset = await this.runAt(cwd, ["read-tree", "--empty"], signal, index);
 			if (reset.code !== 0) throw new Error(`git read-tree --empty failed: ${reset.stderr.trim()}`);
-			const added = await this.run(["add", "-A"], signal, index);
-			if (added.code !== 0) throw new Error(`git add -A failed: ${added.stderr.trim()}`);
-			const ledgerRel = this.ledgerRelativePath();
-			if (ledgerRel !== void 0) {
-				const removed = await this.run([
-					"rm",
-					"-r",
-					"--cached",
-					"--ignore-unmatch",
-					"--quiet",
+			let added = await this.runAt(cwd, ["add", "-A"], signal, index);
+			if (added.code !== 0) {
+				const excludes = [];
+				for (const repo of await this.scanNestedRepos(cwd).catch(() => [])) if (!await this.hasHead(repo.root)) excludes.push(`:(exclude)${repo.rel}/`);
+				if (excludes.length > 0) added = await this.runAt(cwd, [
+					"add",
+					"-A",
 					"--",
-					ledgerRel
+					...excludes
 				], signal, index);
-				if (removed.code !== 0 && removed.stderr.trim() !== "") throw new Error(`git rm (ledger exclusion) failed: ${removed.stderr.trim()}`);
 			}
-			const result = await this.run(["write-tree"], signal, index);
+			if (added.code !== 0) throw new Error(`git add -A failed: ${added.stderr.trim()}`);
+			if (isRoot) {
+				const ledgerRel = this.ledgerRelativePath();
+				if (ledgerRel !== void 0) {
+					const removed = await this.runAt(cwd, [
+						"rm",
+						"-r",
+						"--cached",
+						"--ignore-unmatch",
+						"--quiet",
+						"--",
+						ledgerRel
+					], signal, index);
+					if (removed.code !== 0 && removed.stderr.trim() !== "") throw new Error(`git rm (ledger exclusion) failed: ${removed.stderr.trim()}`);
+				}
+			}
+			const result = await this.runAt(cwd, ["write-tree"], signal, index);
 			if (result.code !== 0) throw new Error(`git write-tree failed: ${result.stderr.trim()}`);
 			const tree = result.stdout.trim();
 			if (!isHash(tree)) throw new Error(`git write-tree returned invalid tree hash: ${tree}`);
@@ -192,6 +335,61 @@ var GitProvider = class {
 				force: true
 			});
 		}
+	}
+	/** Whether a repository has a resolvable HEAD (false ⇒ commitless/bare). */
+	async hasHead(root) {
+		const result = await spawnGit(root, [
+			"rev-parse",
+			"--verify",
+			"-q",
+			"HEAD"
+		], this.baseEnv, this.options.spawnTimeoutMs).catch(() => void 0);
+		return result !== void 0 && result.code === 0;
+	}
+	/** Replace gitlink records by directory trees (materialization) via a throwaway index. */
+	async replaceGitlinks(tree, entries, signal) {
+		if (entries.length === 0) return tree;
+		const index = await this.createTempIndex();
+		try {
+			if ((await this.run(["read-tree", "--empty"], signal, index)).code !== 0) return tree;
+			if ((await this.run(["read-tree", tree], signal, index)).code !== 0) return tree;
+			for (const entry of entries) {
+				await this.run([
+					"update-index",
+					"--force-remove",
+					"--",
+					entry.path
+				], signal, index);
+				if ((await this.run([
+					"read-tree",
+					"--prefix",
+					`${entry.path}/`,
+					entry.tree
+				], signal, index)).code !== 0) return tree;
+			}
+			const written = await this.run(["write-tree"], signal, index);
+			if (written.code !== 0) return tree;
+			const out = written.stdout.trim();
+			return isHash(out) ? out : tree;
+		} finally {
+			fs.rmSync(index, { force: true });
+			fs.rmSync(path.dirname(index), {
+				recursive: true,
+				force: true
+			});
+		}
+	}
+	/** Run git against the isolated repo from an arbitrary worktree. */
+	async runAt(cwd, args, signal, indexFile) {
+		if (!await this.ensureIsolated(signal)) return {
+			code: 128,
+			stdout: "",
+			stderr: "rollback: isolated snapshot repository is unavailable"
+		};
+		return spawnGit(cwd, args, indexFile === void 0 ? this.baseEnv : {
+			...this.baseEnv,
+			GIT_INDEX_FILE: indexFile
+		}, this.options.spawnTimeoutMs, signal, this.options.isolatedRepoDir, cwd);
 	}
 	async treeExists(tree, signal) {
 		if (!isHash(tree)) return false;
@@ -737,14 +935,16 @@ var SnapshotManager = class {
 		const provider = this.providerFor(cwd, session.id);
 		const head = await provider.head().catch(() => void 0);
 		let tree;
+		let materialized = false;
 		let mode = "ledger";
 		if (await provider.available().catch(() => false)) {
-			tree = await provider.captureTree().catch((error) => {});
-			if (tree !== void 0) mode = "git";
-			if (tree === void 0) {
-				tree = await provider.captureTree().catch(() => void 0);
-				if (tree !== void 0) mode = "git";
+			const captured = await provider.captureTreeInfo().catch(() => void 0);
+			if (captured !== void 0) {
+				tree = captured.tree;
+				materialized = captured.materialized;
 			}
+			if (tree === void 0) tree = await provider.captureTree().catch(() => void 0);
+			if (tree !== void 0) mode = "git";
 		}
 		if (tree === void 0) mode = "ledger";
 		const manifest = {
@@ -756,6 +956,7 @@ var SnapshotManager = class {
 			...head === void 0 ? {} : { head },
 			createdAt: Date.now(),
 			mode,
+			...materialized ? { materialized: true } : {},
 			...turnStartSeq(session, turn) === void 0 ? {} : { turnStartSeq: turnStartSeq(session, turn) }
 		};
 		const next = this.manifests.filter((item) => !(item.sessionId === session.id && item.turn === turn));
@@ -2759,10 +2960,11 @@ var SessionChangeManager = class {
 			const ownWindows = await this.ownWindowPaths(sessionId, cwd, earliest.tree, preparedTree, entries, provider);
 			const ledgerPaths = this.ledger.pathsForSession(sessionId, cwd);
 			const foreignPaths = this.ledger.foreignPathsForSession(sessionId, cwd);
+			const nestedRoots = await this.materializedNestedRoots(provider);
 			const deferredPaths = /* @__PURE__ */ new Set();
 			for (const entry of entries) {
 				if (entry.oldMode === "160000" || entry.newMode === "160000") {
-					warnings.push(entry.oldMode !== "160000" ? `nested git repository "${entry.path}" appeared after the baseline snapshot; it is outside the list scope and will not be deleted or restored` : `nested git repository "${entry.path}" is tracked as a gitlink; its internal changes are outside the list scope (only tool-written files inside it can be restored)`);
+					warnings.push(entry.oldMode !== "160000" ? `nested git repository "${entry.path}" appeared after the baseline snapshot; it is outside the list scope and will not be deleted or restored` : `nested git repository "${entry.path}" is still tracked as a gitlink; its internal changes are outside the list scope (only tool-written files inside it can be restored)`);
 					continue;
 				}
 				const windowClaimed = ownWindows === void 0 || ownWindows.has(entry.path);
@@ -2778,6 +2980,7 @@ var SessionChangeManager = class {
 						source: "git",
 						restorable: false,
 						createdAfterSnapshot: true,
+						...this.isWithinNestedRoots(entry.path, nestedRoots) ? { nested: true } : {},
 						...hunks.length > 0 ? { hunks } : {}
 					});
 					continue;
@@ -2788,7 +2991,8 @@ var SessionChangeManager = class {
 					absolutePath: provider.absolutePath(entry.path),
 					status: entry.status === "D" ? "deleted" : entry.status === "T" ? "typechange" : "modified",
 					source: "git",
-					restorable: true
+					restorable: true,
+					...this.isWithinNestedRoots(entry.path, nestedRoots) ? { nested: true } : {}
 				});
 			}
 			if (deferredPaths.size > 0) {
@@ -3091,6 +3295,17 @@ var SessionChangeManager = class {
 		if (session === void 0) return fail("session-not-found", `session "${sessionId}" is not live`, { sessionId });
 		return ok(session);
 	}
+	/**
+	* Workspace-relative roots of nested git repositories under the workspace.
+	* Discovery reuses the provider's read-only walk, so displayed nested
+	* files always match what capture would materialize. Empty on failure.
+	*/
+	async materializedNestedRoots(provider) {
+		return (await provider.listNestedRepos().catch(() => [])).map((repo) => repo.rel).filter((rel) => rel !== "");
+	}
+	isWithinNestedRoots(filePath, nestedRoots) {
+		return nestedRoots.some((root) => filePath === root || filePath.startsWith(`${root}/`));
+	}
 	/** Accept every unaccepted file of the bound list (with patch cascades). */
 	async acceptAll(request) {
 		const bound = this.bound.get(request.listId);
@@ -3305,6 +3520,7 @@ function baselineInfo(manifest, startTurn) {
 		turn: manifest.turn,
 		createdAt: manifest.createdAt,
 		mode: manifest.tree === void 0 ? "ledger" : "git",
+		...manifest.materialized === true ? { materialized: true } : {},
 		...manifest.turn > startTurn ? { degraded: true } : {}
 	};
 }

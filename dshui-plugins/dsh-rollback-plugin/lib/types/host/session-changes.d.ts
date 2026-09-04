@@ -46,6 +46,13 @@ export declare class SessionChangeManager {
      */
     private ownWindowPaths;
     private liveSession;
+    /**
+     * Workspace-relative roots of nested git repositories under the workspace.
+     * Discovery reuses the provider's read-only walk, so displayed nested
+     * files always match what capture would materialize. Empty on failure.
+     */
+    private materializedNestedRoots;
+    private isWithinNestedRoots;
     /** Accept every unaccepted file of the bound list (with patch cascades). */
     acceptAll(request: RollbackAcceptAllRequest): Promise<RollbackAcceptResult>;
     /** Undo every unaccepted file of the bound list back to the session baseline. */

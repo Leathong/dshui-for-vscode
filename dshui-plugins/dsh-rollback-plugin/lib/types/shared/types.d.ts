@@ -61,6 +61,8 @@ export interface RollbackFileChange {
     createdAfterSnapshot?: boolean;
     binary?: boolean;
     truncated?: boolean;
+    /** The file lives inside a nested git repository (materialized into the snapshot tree). */
+    nested?: boolean;
     hunks?: RollbackHunk[];
     toolCalls?: RollbackToolCall[];
 }
@@ -170,6 +172,8 @@ export interface RollbackSnapshotManifest {
     createdAt: number;
     turnStartSeq?: number;
     mode: 'git' | 'ledger';
+    /** Nested git repositories were materialized into the tree at capture time. */
+    materialized?: boolean;
 }
 /** Host-only guard record. */
 export interface RollbackGuardRecord {
@@ -204,6 +208,8 @@ export interface RollbackSessionBaseline {
     createdAt: number;
     mode: 'git' | 'ledger';
     degraded?: boolean;
+    /** Nested git repositories were materialized into the baseline tree. */
+    materialized?: boolean;
 }
 export interface RollbackSessionChangesValue {
     /** Binds this list to the worktree state captured while listing. */

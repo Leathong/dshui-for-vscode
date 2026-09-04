@@ -16,6 +16,11 @@ export interface GitProviderOptions {
     isolatedRepoDir?: string;
     /** In-flight `git init` for the isolated repo (avoids concurrent inits). */
     isolatedRepoInit?: Promise<boolean>;
+    /**
+     * Ceiling on nested git repositories materialized per capture. Directories
+     * beyond the cap stay gitlinks (their internals remain ledger-covered).
+     */
+    maxNestedRepos?: number;
 }
 export interface GitTreeEntry {
     path: string;
@@ -30,6 +35,15 @@ export interface GitRunResult {
     stdout: string;
     stderr: string;
 }
+/** A nested git repository inside the snapshot worktree, ordered leaf-first. */
+export interface NestedRepoInfo {
+    /** Absolute path to the nested repository's worktree root. */
+    root: string;
+    /** Absolute path to the nested repository's own git dir (`.git`). */
+    gitDir: string;
+    /** Workspace-relative path with forward slashes ('' for cwd itself). */
+    rel: string;
+}
 export declare function isHash(value: string): boolean;
 export declare function spawnGit(cwd: string, args: readonly string[], env: NodeJS.ProcessEnv, timeoutMs: number, signal?: AbortSignal, gitDir?: string, workTree?: string): Promise<GitRunResult>;
 export declare class GitProvider {
@@ -41,6 +55,8 @@ export declare class GitProvider {
     /** The project's own git dir (read-only fence/head queries); null = not a git worktree. */
     private projectGitDir?;
     constructor(cwd: string, options: GitProviderOptions);
+    /** Cap on nested repositories materialized per capture (from options). */
+    private readonly maxNestedRepos;
     /**
      * Whether git snapshotting is usable. With the isolated snapshot repo this
      * no longer depends on the project being a git repository: every workspace
@@ -57,6 +73,44 @@ export declare class GitProvider {
     head(signal?: AbortSignal): Promise<string | undefined>;
     /** Snapshot the entire worktree into a temporary-index tree object. */
     captureTree(signal?: AbortSignal): Promise<string>;
+    /**
+     * Snapshot the entire worktree with nested git repositories materialized
+     * as directory trees instead of gitlinks, so nested files get plain git
+     * diff/restore coverage. `materialized` reports whether any nested
+     * directory was spliced in. Materialization is best-effort: discovery or
+     * capture failures leave the gitlinks in place, exactly like before.
+     *
+     * Discovery is driven entirely by git plumbing (tree inspection + exit
+     * codes), never by parsing human-readable `add -A` stderr.
+     */
+    captureTreeInfo(signal?: AbortSignal): Promise<{
+        tree: string;
+        materialized: boolean;
+    }>;
+    /**
+     * Nested git repositories under the worktree, in post-order (a repo's
+     * deeper children appear before it), excluding the worktree root itself.
+     * Used for display labeling. See `scanNestedRepos` for mechanics.
+     */
+    listNestedRepos(accept?: (info: NestedRepoInfo) => boolean | Promise<boolean>): Promise<NestedRepoInfo[]>;
+    /**
+     * Walk the real directory tree under `dir` (bounded, symlinks not
+     * followed, `.git` entries skipped) and return nested repositories in
+     * post-order, with `rel` relative to `dir`. `rev-parse` is spawned only
+     * for directories that actually contain a `.git` entry (dir or gitfile),
+     * so the walk cost is one lstat per directory entry.
+     */
+    private scanNestedRepos;
+    /** Workspace-relative gitlink paths stored in a tree snapshot. */
+    private gitlinkPaths;
+    /** Capture one worktree (the workspace root or a nested repository root). */
+    private captureWorktree;
+    /** Whether a repository has a resolvable HEAD (false ⇒ commitless/bare). */
+    private hasHead;
+    /** Replace gitlink records by directory trees (materialization) via a throwaway index. */
+    private replaceGitlinks;
+    /** Run git against the isolated repo from an arbitrary worktree. */
+    private runAt;
     treeExists(tree: string, signal?: AbortSignal): Promise<boolean>;
     diffEntries(from: string, to: string, signal?: AbortSignal): Promise<GitTreeEntry[]>;
     diffHunks(from: string, to: string, filePath: string, signal?: AbortSignal): Promise<{

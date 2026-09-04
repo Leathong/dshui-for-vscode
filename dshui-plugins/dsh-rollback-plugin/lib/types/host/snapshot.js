@@ -155,20 +155,20 @@ export class SnapshotManager {
         const provider = this.providerFor(cwd, session.id);
         const head = await provider.head().catch(() => undefined);
         let tree;
+        let materialized = false;
         let mode = 'ledger';
         if (await provider.available().catch(() => false)) {
-            tree = await provider.captureTree().catch(error => {
-                // Keep this turn usable through the ledger fallback instead of failing the agent.
-                return undefined;
-            });
-            if (tree !== undefined)
-                mode = 'git';
+            const captured = await provider.captureTreeInfo().catch(() => undefined);
+            if (captured !== undefined) {
+                tree = captured.tree;
+                materialized = captured.materialized;
+            }
             if (tree === undefined) {
                 // Re-attempt without the ledger-exclusion path; useful when the status dir is unusual.
                 tree = await provider.captureTree().catch(() => undefined);
-                if (tree !== undefined)
-                    mode = 'git';
             }
+            if (tree !== undefined)
+                mode = 'git';
         }
         if (tree === undefined)
             mode = 'ledger';
@@ -181,6 +181,7 @@ export class SnapshotManager {
             ...(head === undefined ? {} : { head }),
             createdAt: Date.now(),
             mode,
+            ...(materialized ? { materialized: true } : {}),
             ...(turnStartSeq(session, turn) === undefined ? {} : { turnStartSeq: turnStartSeq(session, turn) }),
         };
         const next = this.manifests

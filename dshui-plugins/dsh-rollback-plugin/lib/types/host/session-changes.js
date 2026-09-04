@@ -61,14 +61,18 @@ export class SessionChangeManager {
                 const ownWindows = await this.ownWindowPaths(sessionId, cwd, earliest.tree, preparedTree, entries, provider);
                 const ledgerPaths = this.ledger.pathsForSession(sessionId, cwd);
                 const foreignPaths = this.ledger.foreignPathsForSession(sessionId, cwd);
+                const nestedRoots = await this.materializedNestedRoots(provider);
                 // Hunks for modified/deleted/typechanged files are fetched in one git
                 // process instead of one spawn per file.
                 const deferredPaths = new Set();
                 for (const entry of entries) {
                     if (entry.oldMode === '160000' || entry.newMode === '160000') {
+                        // Materialization is best-effort: a nested repository whose
+                        // gitlink survived capture (discovery failure, commitless child,
+                        // or the per-capture cap) is excluded, exactly like before.
                         warnings.push(entry.oldMode !== '160000'
                             ? `nested git repository "${entry.path}" appeared after the baseline snapshot; it is outside the list scope and will not be deleted or restored`
-                            : `nested git repository "${entry.path}" is tracked as a gitlink; its internal changes are outside the list scope (only tool-written files inside it can be restored)`);
+                            : `nested git repository "${entry.path}" is still tracked as a gitlink; its internal changes are outside the list scope (only tool-written files inside it can be restored)`);
                         continue;
                     }
                     // Attribution: a path belongs to this session's list only when it
@@ -90,6 +94,7 @@ export class SessionChangeManager {
                             source: 'git',
                             restorable: false,
                             createdAfterSnapshot: true,
+                            ...(this.isWithinNestedRoots(entry.path, nestedRoots) ? { nested: true } : {}),
                             ...(hunks.length > 0 ? { hunks } : {}),
                         });
                         continue;
@@ -101,6 +106,7 @@ export class SessionChangeManager {
                         status: entry.status === 'D' ? 'deleted' : entry.status === 'T' ? 'typechange' : 'modified',
                         source: 'git',
                         restorable: true,
+                        ...(this.isWithinNestedRoots(entry.path, nestedRoots) ? { nested: true } : {}),
                     });
                 }
                 if (deferredPaths.size > 0) {
@@ -487,6 +493,18 @@ export class SessionChangeManager {
             return fail('session-not-found', `session "${sessionId}" is not live`, { sessionId });
         return ok(session);
     }
+    /**
+     * Workspace-relative roots of nested git repositories under the workspace.
+     * Discovery reuses the provider's read-only walk, so displayed nested
+     * files always match what capture would materialize. Empty on failure.
+     */
+    async materializedNestedRoots(provider) {
+        const repos = await provider.listNestedRepos().catch(() => []);
+        return repos.map(repo => repo.rel).filter(rel => rel !== '');
+    }
+    isWithinNestedRoots(filePath, nestedRoots) {
+        return nestedRoots.some(root => filePath === root || filePath.startsWith(`${root}/`));
+    }
     /** Accept every unaccepted file of the bound list (with patch cascades). */
     async acceptAll(request) {
         const bound = this.bound.get(request.listId);
@@ -760,6 +778,7 @@ function baselineInfo(manifest, startTurn) {
         turn: manifest.turn,
         createdAt: manifest.createdAt,
         mode: manifest.tree === undefined ? 'ledger' : 'git',
+        ...(manifest.materialized === true ? { materialized: true } : {}),
         ...(manifest.turn > startTurn ? { degraded: true } : {}),
     };
 }
