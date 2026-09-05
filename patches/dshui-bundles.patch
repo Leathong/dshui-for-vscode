@@ -83,6 +83,164 @@ index ee199ddcdd..7aae8e4ca3 100644
    it('preserves relative and absolute Host-resolvable paths', async () => {
      const ctx = await context()
      const openPath = vi.fn((_path: string, _signal: AbortSignal) => Promise.resolve())
+diff --git a/packages/api/settings-controller/src/index.ts b/packages/api/settings-controller/src/index.ts
+index c5e9037ab3..0053f70fc8 100644
+--- a/packages/api/settings-controller/src/index.ts
++++ b/packages/api/settings-controller/src/index.ts
+@@ -16,6 +16,7 @@ import {
+   canOpenNativePath,
+   openNativePath,
+   openNativeTextFile,
++  type PathOpenerInternals,
+ } from '@deepseek-ai/dsh-native-command'
+ import type { SettingsDescriptor, SettingsPathOp, SettingsProvider } from '@deepseek-ai/dsh-settings'
+ import type {
+@@ -45,8 +46,8 @@ function isAborted(signal: AbortSignal): boolean {
+ 
+ /** Host integrations replaceable by direct unit tests. */
+ export interface SettingsControllerInternals {
+-  readonly openPath?: (path: string, signal: AbortSignal) => Promise<void>
+-  readonly openTextFile?: (path: string, signal: AbortSignal) => Promise<void>
++  readonly openPath?: (path: string, signal: AbortSignal, internals?: PathOpenerInternals) => Promise<void>
++  readonly openTextFile?: (path: string, signal: AbortSignal, internals?: PathOpenerInternals) => Promise<void>
+   readonly canOpenPath?: () => boolean
+ }
+ 
+@@ -88,8 +89,8 @@ declare module '@deepseek-ai/cordis' {
+ export class SettingsController extends TypertRemoteService {
+   static Config: Schema<Config> = Schema.object({ nativeOpen: Schema.boolean() })
+ 
+-  private readonly openPath: (path: string, signal: AbortSignal) => Promise<void>
+-  private readonly openTextFile: (path: string, signal: AbortSignal) => Promise<void>
++  private readonly openPath: (path: string, signal: AbortSignal, internals?: PathOpenerInternals) => Promise<void>
++  private readonly openTextFile: (path: string, signal: AbortSignal, internals?: PathOpenerInternals) => Promise<void>
+   private readonly canOpenPath: () => boolean
+ 
+   /**
+@@ -187,12 +188,15 @@ export class SettingsController extends TypertRemoteService {
+ 
+   /**
+    * Materialize the provider-owned settings document and open it in a native text editor.
++   * @param dshuiOrigin - dshui patch: workspace of the window the open click
++   * happened in; when present the Host opens the document in that window's
++   * bridge ahead of workspace-ownership routing.
+    * @param signal - caller lifetime; abort terminates preparation or the native command.
+    * @returns confirmation after the native opener accepts the document.
+    * @throws RemoteError when no document exists, preparation fails, or opening fails.
+    */
+   @Remote
+-  async openSettingsDocument(signal: AbortSignal): Promise<SettingsDocumentOpenValue> {
++  async openSettingsDocument(dshuiOrigin: string | undefined, signal: AbortSignal): Promise<SettingsDocumentOpenValue> {
+     const settings = this.provider()
+     if (isAborted(signal)) throw new RemoteError('gateway/cancelled', 'settings document open was aborted', {})
+     let path: string | undefined
+@@ -207,7 +211,10 @@ export class SettingsController extends TypertRemoteService {
+     }
+     if (isAborted(signal)) throw new RemoteError('gateway/cancelled', 'settings document open was aborted', {})
+     try {
+-      await this.openTextFile(path, signal)
++      // dshui patch: thread the click origin down to the opener internals so
++      // the bridge router prefers the window the click happened in over
++      // workspace longest-prefix ownership.
++      await this.openTextFile(path, signal, dshuiOrigin === undefined ? {} : { dshuiOrigin })
+       return { opened: true }
+     } catch (error: unknown) {
+       if (isAborted(signal)) throw new RemoteError('gateway/cancelled', 'settings document open was aborted', {})
+diff --git a/packages/api/settings-controller/tests/settings-controller.host.spec.ts b/packages/api/settings-controller/tests/settings-controller.host.spec.ts
+index c5df993b59..23f28c0259 100644
+--- a/packages/api/settings-controller/tests/settings-controller.host.spec.ts
++++ b/packages/api/settings-controller/tests/settings-controller.host.spec.ts
+@@ -93,7 +93,7 @@ describe('the settings Remote namespace a configuration page calls', () => {
+       () => ctx.settingsController.update('ui-test', {}, undefined),
+       () => ctx.settingsController.replace('ui-test', {}, undefined),
+       () => ctx.settingsController.mutate('ui-test', [], undefined),
+-      () => ctx.settingsController.openSettingsDocument(new AbortController().signal),
++      () => ctx.settingsController.openSettingsDocument(undefined, new AbortController().signal),
+     ]
+     for (const call of calls) {
+       const failure = await Promise.resolve().then(call).catch((error: unknown) => error)
+@@ -248,20 +248,32 @@ describe('the settings Remote namespace a configuration page calls', () => {
+     const controller = new SettingsController(ctx, {}, { openTextFile })
+     const signal = new AbortController().signal
+ 
+-    await expect(controller.openSettingsDocument(signal)).resolves.toEqual({ opened: true })
++    await expect(controller.openSettingsDocument(undefined, signal)).resolves.toEqual({ opened: true })
+     expect(prepare).toHaveBeenCalledOnce()
+-    expect(openTextFile).toHaveBeenCalledWith('/tmp/settings.yaml', signal)
++    expect(openTextFile).toHaveBeenCalledWith('/tmp/settings.yaml', signal, {})
++  })
++
++  it('threads the click origin into the settings-document opener', async () => {
++    const ctx = new Context()
++    await ctx.plugin(DocumentSettings)
++    vi.spyOn(ctx.settings, 'prepareDocument').mockResolvedValue('/tmp/settings.yaml')
++    const openTextFile = vi.fn((_path: string, _signal: AbortSignal) => Promise.resolve())
++    const controller = new SettingsController(ctx, {}, { openTextFile })
++    const signal = new AbortController().signal
++
++    await expect(controller.openSettingsDocument('/Volumes/workspace', signal)).resolves.toEqual({ opened: true })
++    expect(openTextFile).toHaveBeenCalledWith('/tmp/settings.yaml', signal, { dshuiOrigin: '/Volumes/workspace' })
+   })
+ 
+   it('preserves settings-document absence, failure, and cancellation', async () => {
+     const absent = await boot()
+-    const missingDocument = absent.controller.openSettingsDocument(new AbortController().signal)
++    const missingDocument = absent.controller.openSettingsDocument(undefined, new AbortController().signal)
+     await expect(missingDocument).rejects.toMatchObject({ code: 'gateway/internal' })
+     await expect(missingDocument).rejects.toThrow('no local document')
+ 
+     const failed = await boot(DocumentSettings)
+     vi.spyOn(failed.ctx.settings, 'prepareDocument').mockRejectedValue(new Error('read failed'))
+-    const failedRead = failed.controller.openSettingsDocument(new AbortController().signal)
++    const failedRead = failed.controller.openSettingsDocument(undefined, new AbortController().signal)
+     await expect(failedRead).rejects.toMatchObject({ code: 'gateway/internal' })
+     await expect(failedRead).rejects.toThrow('read failed')
+ 
+@@ -269,7 +281,7 @@ describe('the settings Remote namespace a configuration page calls', () => {
+     cancelled.abort(new Error('cancelled'))
+     const prepare = vi.spyOn(failed.ctx.settings, 'prepareDocument')
+     prepare.mockClear()
+-    await expect(failed.controller.openSettingsDocument(cancelled.signal))
++    await expect(failed.controller.openSettingsDocument(undefined, cancelled.signal))
+       .rejects.toMatchObject({ code: 'gateway/cancelled' })
+     expect(prepare).not.toHaveBeenCalled()
+   })
+@@ -283,7 +295,7 @@ describe('the settings Remote namespace a configuration page calls', () => {
+     const controller = new SettingsController(ctx, {}, { openTextFile })
+     const abort = new AbortController()
+ 
+-    const opening = controller.openSettingsDocument(abort.signal)
++    const opening = controller.openSettingsDocument(undefined, abort.signal)
+     abort.abort(new Error('cancelled'))
+     prepared.resolve('/tmp/settings.yaml')
+ 
+@@ -299,7 +311,7 @@ describe('the settings Remote namespace a configuration page calls', () => {
+       openTextFile: () => Promise.reject(new Error('no default editor')),
+     })
+ 
+-    await expect(controller.openSettingsDocument(new AbortController().signal))
++    await expect(controller.openSettingsDocument(undefined, new AbortController().signal))
+       .rejects.toMatchObject({ code: 'gateway/internal', message: 'path open failed: no default editor' })
+   })
+ 
+@@ -312,7 +324,7 @@ describe('the settings Remote namespace a configuration page calls', () => {
+       throw new Error('preparation stopped')
+     })
+     const preparingController = new SettingsController(preparing)
+-    await expect(preparingController.openSettingsDocument(prepareAbort.signal))
++    await expect(preparingController.openSettingsDocument(undefined, prepareAbort.signal))
+       .rejects.toMatchObject({ code: 'gateway/cancelled' })
+ 
+     const opening = new Context()
+@@ -325,7 +337,7 @@ describe('the settings Remote namespace a configuration page calls', () => {
+         throw new Error('opening stopped')
+       },
+     })
+-    await expect(openingController.openSettingsDocument(openAbort.signal))
++    await expect(openingController.openSettingsDocument(undefined, openAbort.signal))
+       .rejects.toMatchObject({ code: 'gateway/cancelled' })
+   })
+ 
 diff --git a/packages/client/connection/src/browser-auth.ts b/packages/client/connection/src/browser-auth.ts
 index 10353d9a06..a2ca442c05 100644
 --- a/packages/client/connection/src/browser-auth.ts
@@ -1022,6 +1180,113 @@ index 6ccfee9612..35be86df0a 100644
  
 -export default clientBundle('@deepseek-ai/dsh-client-ui-conversation', ['lib/types/index.js'])
 +export default clientBundle('dshui-client-ui-conversation', ['lib/types/index.js'])
+diff --git a/packages/client/ui-settings-general/src/client/settings-document-store.ts b/packages/client/ui-settings-general/src/client/settings-document-store.ts
+index 1a5f45d7ee..8fe87db0f3 100644
+--- a/packages/client/ui-settings-general/src/client/settings-document-store.ts
++++ b/packages/client/ui-settings-general/src/client/settings-document-store.ts
+@@ -6,6 +6,28 @@ import type {} from '@deepseek-ai/dsh-api-remotes/client'
+ import { createSnapshotStore, type SnapshotStore } from '@deepseek-ai/dsh-client-store'
+ import type { SettingsDescribeFace } from '@deepseek-ai/dsh-client-ui-settings/client'
+ 
++/**
++ * dshui patch: the VS Code workspace of the window the open click happens in,
++ * published by the dshui host plugin as `window.__DSHUI_WORKSPACE__` (with a
++ * fallback to the boot URL's `dshui_workspace` query parameter). Attached to
++ * `openSettingsDocument` as `dshuiOrigin` so the Host opens the settings
++ * document in this window even when its path is owned by no workspace.
++ * @returns the scope path, or undefined when neither source is set.
++ */
++function dshuiClickOrigin(): string | undefined {
++  if (typeof window === 'undefined') return undefined
++  const global = (window as typeof window & { __DSHUI_WORKSPACE__?: unknown }).__DSHUI_WORKSPACE__
++  if (typeof global === 'string' && global !== '') return global
++  const param = new URLSearchParams(window.location.search).get('dshui_workspace')
++  if (param === null || param === '') return undefined
++  try {
++    const decoded = decodeURIComponent(param)
++    return decoded === '' ? undefined : decoded
++  } catch {
++    return param
++  }
++}
++
+ /** Browser state of the Host-owned settings document. */
+ export interface SettingsDocumentState {
+   /** Metadata-loading phase; unavailable means the provider has no local document or the read failed. */
+@@ -62,7 +84,10 @@ export class SettingsDocumentStore {
+       state.error = null
+     })
+     try {
+-      const result = await this.ctx.remote.settings.openSettingsDocument()
++      // dshui patch: attach the click origin so the Host opens the settings
++      // document in this window even when no workspace owns the document path.
++      const dshuiOrigin = dshuiClickOrigin()
++      const result = await this.ctx.remote.settings.openSettingsDocument(dshuiOrigin)
+       if (!result.ok) {
+         const { message } = result.error
+         this.store.update((state) => { state.error = message })
+diff --git a/packages/client/ui-settings-general/tests/components.client.spec.tsx b/packages/client/ui-settings-general/tests/components.client.spec.tsx
+index d106f0211e..aa1070bced 100644
+--- a/packages/client/ui-settings-general/tests/components.client.spec.tsx
++++ b/packages/client/ui-settings-general/tests/components.client.spec.tsx
+@@ -17,7 +17,10 @@ function derivedDocumentStore(remote: object) {
+ }
+ import { en } from '../src/client/locales.ts'
+ 
+-afterEach(cleanup)
++afterEach(() => {
++  cleanup()
++  delete (window as unknown as { __DSHUI_WORKSPACE__?: string }).__DSHUI_WORKSPACE__
++})
+ 
+ // The seat's key domain is settings ∪ common; the stub answers from the
+ // package dictionary and falls back to the key like the real chain.
+@@ -90,7 +93,31 @@ describe('SettingsDocumentAction', () => {
+     />)
+     const action = await screen.findByRole('button', { name: 'Open configuration file' })
+     fireEvent.click(action)
+-    await waitFor(() => { expect(openDocument).toHaveBeenCalledWith() })
++    await waitFor(() => { expect(openDocument).toHaveBeenCalledWith(undefined) })
++  })
++
++  it('forwards the click-origin workspace to the Host opener', async () => {
++    const openDocument = vi.fn(() => Promise.resolve({
++      ok: true as const, value: { opened: true as const },
++    }))
++    ;(window as unknown as { __DSHUI_WORKSPACE__?: string }).__DSHUI_WORKSPACE__ = '/Volumes/workspace'
++    const controller = derivedDocumentStore({
++      settings: {
++        describe: vi.fn(() => Promise.resolve({
++          ok: true as const,
++          value: { writable: true, hasDocument: true, namespaces: [] },
++        })),
++        openSettingsDocument: openDocument,
++      },
++    })
++    render(<SettingsDocumentAction
++      {...kit}
++      t={t}
++      controller={controller}
++      useSnapshot={bindSnapshotSelector(controller.store)}
++    />)
++    fireEvent.click(await screen.findByRole('button', { name: 'Open configuration file' }))
++    await waitFor(() => { expect(openDocument).toHaveBeenCalledWith('/Volumes/workspace') })
+   })
+ 
+   it('stays absent without a document and follows a mirror refresh to available', async () => {
+diff --git a/packages/client/ui-settings-general/tests/settings-document-store.client.spec.ts b/packages/client/ui-settings-general/tests/settings-document-store.client.spec.ts
+index 6bcc3d662e..f572287347 100644
+--- a/packages/client/ui-settings-general/tests/settings-document-store.client.spec.ts
++++ b/packages/client/ui-settings-general/tests/settings-document-store.client.spec.ts
+@@ -32,7 +32,7 @@ describe('SettingsDocumentStore', () => {
+       status: 'ready', opening: false, error: null,
+     })
+     await controller.open()
+-    expect(openDocument).toHaveBeenCalledWith()
++    expect(openDocument).toHaveBeenCalledWith(undefined)
+   })
+ 
+   it('marks absent or failed metadata unavailable without opening anything', async () => {
 diff --git a/packages/client/ui-workspace/src/client/contract/slots.ts b/packages/client/ui-workspace/src/client/contract/slots.ts
 index df17251c38..1b005d319d 100644
 --- a/packages/client/ui-workspace/src/client/contract/slots.ts
