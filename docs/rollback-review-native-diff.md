@@ -20,10 +20,13 @@
   { type: 'client-request', rpcId, method: 'rollback/sessionChanges', payload: { args: { sessionId } } }
   ```
 
-- 扩展为某个文件构造两个虚拟文档：
+- 扩展为某个文件构造 Diff 两侧：
 
-  - `dshui-rollback:/<reviewId>?side=orig`：原始/基线内容
-  - `dshui-rollback:/<reviewId>?side=mod`：当前/修改后内容
+  - 左侧（原始/基线）始终是虚拟文档 `dshui-rollback:/<reviewId>?side=orig`。
+  - 右侧（当前/修改后）**优先直接使用真实工作区文件**（`file:` URI）：只要对比的就是工作区
+    当前文件（`created`/`modified` 且内容可读），右侧就是文件本身，可以在 Diff 中**直接编辑
+    并保存**；仅当右侧不是真实文件内容时（删除的文件、二进制/截断等降级为 hunk 文本拼接）
+    才回退到虚拟文档 `dshui-rollback:/<reviewId>?side=mod`（只读）。
 
 - 使用 VSCode 内置命令打开原生 Diff：
 
@@ -33,7 +36,7 @@
 
 - 原生 Diff 中的 Accept / Undo 提供两种稳定可用的交互方式：
 
-  - **CodeLens 按钮**（推荐）：每个 hunk 的**首个变更行**上方渲染 `Accept` / `Undo` 可点击按钮（hunk 行号不可用时回退到修改侧第一行；删除文件锚定在原始侧），点击直接调用 RPC。依赖 `diffEditor.codeLens` 设置，扩展通过 `configurationDefaults` 将其默认值翻为 `true`。
+  - **CodeLens 按钮**（推荐）：每个 hunk 的**首个变更行**上方渲染 `Accept` / `Undo` 可点击按钮（hunk 行号不可用时回退到修改侧第一行；删除文件锚定在原始侧），点击直接调用 RPC。依赖 `diffEditor.codeLens` 设置，扩展通过 `configurationDefaults` 将其默认值翻为 `true`。右侧为真实文件时，按钮由一个 `file` scheme 的第二个 CodeLens provider 渲染，且**仅在对应审查 Diff 可见时**出现（关闭 Diff 后同一文件的普通编辑器不会残留按钮）。
   - **右键菜单命令**（保留）：`dshui.rollback.accept`、`dshui.rollback.undo`，根据当前 Diff 类型调用 `acceptFile`/`acceptModification` 或 `undoFile`/`undoModification`。
 
 - 侧边栏 ModificationDock 只展示文件列表和操作按钮，不再内联展开 DiffBlock。
@@ -55,10 +58,15 @@ extension.ts onDidReceiveMessage
   ▼
 RollbackReviewManager
   ├─ 调用 rollback/sessionChanges 获取最新 listId、changes、modifications
-  ├─ 构造 original / modified 虚拟文档
+  ├─ 构造基线虚拟文档；修改侧为工作区文件本身时直接用真实文件 URI（可直接编辑）
   └─ 执行 vscode.diff 打开原生 Diff
   ▼
+用户可在 Diff 右侧直接编辑并保存工作区文件
+  │  保存 → 侧边栏列表刷新 + 审查状态回绑（基线/按钮锚点/listId 跟随新内容）
+  ▼
 用户点击 Diff 修改侧顶部的 CodeLens 按钮（或右键菜单）Accept / Undo
+  │  Accept：右侧未保存的编辑先落盘，再按当前磁盘内容接受
+  │  Undo：确认框提示未保存编辑将一并丢弃 → 先落盘并回绑新列表 → 再恢复基线
   ▼
 RollbackReviewManager 调用 rollback/acceptFile | undoFile
   ▼
@@ -72,21 +80,25 @@ RollbackReviewManager 调用 rollback/acceptFile | undoFile
 - `ROLLBACK_SCHEME = 'dshui-rollback'`
 - `RollbackReviewManager`
   - 注册 `TextDocumentContentProvider`，按 URI 返回 `original` / `modified` 内容。
+  - `ReviewState.realModifiedPath`：文件级 Diff 的修改侧就是工作区当前文件时（`buildFileDiffTexts` 返回 `modifiedIsWorkspaceFile`），记录其绝对路径；`vscode.diff` 右侧直接传 `Uri.file(...)`，用户可以在 Diff 中**直接编辑并保存**该文件。删除的文件与降级的 hunk 拼接 Diff 仍用只读虚拟文档。
   - 注册 CodeLens provider：`registerCodeLensProvider({ scheme: ROLLBACK_SCHEME }, ...)`，只对 `dshui-rollback` 虚拟文档生效（不需要自定义语言）；按钮精确渲染在每个 hunk 的**首个变更行**上方（`firstChanged*Line`，由插件在解析/计算 diff 时给出，回退到 hunk 起始行）——删除的文件修改侧为空，按钮锚定在原始侧（`side=orig`）。按钮命令携带 state id 直接定位本次 Diff。
+  - 第二个 CodeLens provider（`{ scheme: 'file' }`，`realFileLenses`）：给真实文件右侧渲染同样的 Accept / Undo 按钮（锚点用文件内行号，`realFileAnchors`）。**可见性门控**：仅当该审查 Diff 的基线虚拟文档当前可见（`isReviewDiffVisible`）时返回按钮，Diff 关闭后同一文件的普通编辑器不会残留按钮；`onDidChangeVisibleTextEditors` 触发 `lensRefresh` 让按钮随 Diff 打开/关闭即时出现或消失。
+  - 保存联动（`onDidSaveTextDocument` → `handleRealFileSaved`）：用户在 Diff 右侧直接编辑并保存后，通知侧边栏刷新（`onDidChange`），并对该文件的每个审查状态执行 `rebindState`——重新拉取 `rollback/sessionChanges`，更新 `listId`、基线文本、按钮锚点，并 fire 虚拟文档让左侧基线跟随新内容（`undoFile` 会按 `listId` 校验工作区树，不回绑会以 `workspace-changed` 拒绝）。若保存后文件与基线已无差异，基线侧收敛为当前内容、按钮移除。
+  - Accept / Undo 的保存语义：`acceptFile` 先把右侧真实文件的未保存编辑落盘（接受的是用户看到的磁盘内容）；`undoFile` 的确认框在有未保存编辑时追加提示（会一并丢弃），确认后先落盘并 `rebindState`，再调用撤销 RPC——文档保持干净，基线恢复后由 VS Code 自动重载，关闭 Diff 不会弹保存提示。程序化保存通过 `programmaticSaves` 集合与保存监听去重。
   - 修改级 Diff（`showModification`）的文档是 hunk 文本的拼接，按钮按各 hunk 在拼接文档内的累计行定位（`patchDocAnchors`），文件行号不适用。
   - 注册命令 `dshui.rollback.accept`、`dshui.rollback.undo`（CodeLens 传入 state id；右键菜单/命令面板无参时回退到按活动编辑器解析）。
   - `showFile(port, sessionId, path)`：打开文件级原生 Diff。
   - `showModification(port, sessionId, path, modificationId)`：保留单个 write/edit 修改的原生 Diff 能力。
   - `handleReviewCommand()`：从 state id 或活动编辑器解析 review state，分派到 accept/undo。
-  - 虚拟文档语言：`showFile` 用 `openTextDocument` 探测真实文件的 language id，打开 Diff 后用 `setTextDocumentLanguage` 应用到两侧，让 Diff 带真实语法高亮（文件缺失/二进制时保持 plaintext）。
+  - 虚拟文档语言：`showFile` 用 `openTextDocument` 探测真实文件的 language id，打开 Diff 后用 `setTextDocumentLanguage` 应用到虚拟侧（右侧为真实文件时其自带语言，跳过），让 Diff 带真实语法高亮（文件缺失/二进制时保持 plaintext）。
 - RPC 封装：
   - `rollbackRpc<T>()`：POST `/api/rollback/<method>`，带 30s 超时。
   - `rollbackCall<T>()`：解包 Typert 外层的 `{ ok: true, value: RollbackResult<T> }`，统一成业务成功/失败。
-- 文件级 diff 内容构造：
-  - `created`：原文件为空，当前为文件内容或 hunk newText。
-  - `deleted`：原始为 hunk oldText，当前为空。
-  - `modified`：读取当前文件，反向应用 hunks 得到基线内容，左侧基线、右侧当前。
-  - 无法完整重建时回退为 hunk oldText / newText 拼接。
+- 文件级 diff 内容构造（`buildFileDiffTexts`，含 `modifiedIsWorkspaceFile` 标记）：
+  - `created`：原文件为空，当前为文件内容（此时右侧直接用真实文件）或 hunk newText。
+  - `deleted`：原始为 hunk oldText，当前为空（右侧为虚拟文档）。
+  - `modified`：读取当前文件，反向应用 hunks 得到基线内容，左侧基线、右侧直接用真实文件。
+  - 无法完整重建时（文件不可读、二进制、hunk 截断）回退为 hunk oldText / newText 拼接，右侧为只读虚拟文档。
 
 ### 4.2 `src/extension.ts`
 
@@ -144,6 +156,7 @@ RollbackReviewManager 调用 rollback/acceptFile | undoFile
 - VS Code 自 1.48（2020-07）起支持在原生 Diff 编辑器中渲染 CodeLens（[microsoft/vscode#97640](https://github.com/microsoft/vscode/issues/97640)）。
 - 渲染由用户设置 `diffEditor.codeLens` 控制，默认 `false`；扩展通过 `contributes.configurationDefaults` 把默认值翻为 `true`。
 - CodeLens provider 用 DocumentSelector 的 `scheme` 过滤（`{ scheme: 'dshui-rollback' }`），只对虚拟审查文档生效，**不需要注册自定义语言**；按钮按 hunk 锚点渲染（`firstChangedNewLine`→修改侧、`firstChangedOldLine`→原始侧），避免两侧重复。
+- 修改侧为真实工作区文件时，由第二个 `{ scheme: 'file' }` provider（`realFileLenses`）渲染按钮，并以「对应审查 Diff 的基线虚拟文档当前可见」做门控：Diff 关闭后同一文件的普通编辑器不会残留按钮（`onDidChangeVisibleTextEditors` 触发刷新）。
 - 副作用：`diffEditor.codeLens: true` 也会让其他 CodeLens provider（如引用计数）出现在 git 等普通 Diff 中；用户可在设置里关闭。
 
 ### 4.7 插件侧 hunk 数据契约（`dsh-rollback-plugin`）
@@ -200,7 +213,12 @@ RollbackReviewManager 调用 rollback/acceptFile | undoFile
 - 手动验证路径：
   1. 启动扩展并进入一个 dsh session。
   2. 让 agent 修改一个文件。
-  3. 在修改列表点击文件 → 应打开 VSCode 原生 Diff。
+  3. 在修改列表点击文件 → 应打开 VSCode 原生 Diff，右侧标题为真实文件（可直接编辑），左侧为只读基线虚拟文档。
   4. 在原生 Diff 修改侧顶部点击 `Accept` / `Undo` CodeLens 按钮 → 应调用 rollback RPC 并刷新列表（若按钮不显示，检查设置里 `diffEditor.codeLens` 是否为 true）。
-  5. 在原生 Diff 中右键 `Accept This Change` / `Undo This Change` → 应调用 rollback RPC 并刷新列表。
-  6. 在侧边栏文件行点击 Accept / Undo → 应直接调用文件级 RPC 并刷新列表。
+  5. 在 Diff 右侧直接编辑文件并保存 → 侧边栏列表应刷新，左侧基线与按钮锚点跟随新内容；随后点击 `Undo` → 确认框无“未保存”提示且能直接恢复基线（不因 `workspace-changed` 拒绝）。
+  6. 在 Diff 右侧编辑但**不保存**，点击 `Undo` → 确认框应提示未保存修改将一并丢弃；确认后文件恢复基线、编辑器自动重载且关闭 Diff 无保存弹窗。
+  7. 在 Diff 右侧编辑但不保存，点击 `Accept` → 未保存编辑应先落盘，再按当前内容接受。
+  8. 关闭审查 Diff 后单独打开同一文件 → 普通编辑器中不应出现 Accept / Undo 按钮。
+  9. 在原生 Diff 中右键 `Accept This Change` / `Undo This Change` → 应调用 rollback RPC 并刷新列表。
+  10. 在侧边栏文件行点击 Accept / Undo → 应直接调用文件级 RPC 并刷新列表。
+  11. 删除的文件 / 二进制或截断的降级 Diff → 右侧仍为只读虚拟文档（行为与之前一致）。

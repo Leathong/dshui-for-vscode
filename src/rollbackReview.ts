@@ -2,12 +2,18 @@
  * Rollback review with the VS Code native diff editor.
  *
  * The extension asks the dsh rollback plugin for the current session list
- * (`rollback/sessionChanges`), builds two virtual documents (the baseline
- * original and the current modified side) and opens them with the built-in
- * `vscode.diff` command. Accept / Undo are clickable CodeLens buttons on the
- * modified side of the diff, plus editor context-menu commands — both scoped
- * to the `dshui-rollback` scheme so they only appear inside our virtual
- * documents, never in normal files.
+ * (`rollback/sessionChanges`) and opens the built-in `vscode.diff` command
+ * with the baseline original on the left. Whenever the review compares the
+ * live workspace file (created/modified with readable text content), the
+ * right side is that real file, so it can be edited and saved directly in
+ * the diff; only genuinely virtual content (deleted files, degraded hunk
+ * concatenations) falls back to a read-only `dshui-rollback` document.
+ * Accept / Undo are clickable CodeLens buttons on the modified side of the
+ * diff — for real files served by a `file`-scheme provider gated on the
+ * review diff being visible — plus editor context-menu commands scoped to
+ * the `dshui-rollback` scheme so they only appear inside our virtual
+ * documents, never in normal files. Saving direct edits rebinds the review
+ * (fresh baseline, anchors and listId) and refreshes the sidebar dock.
  *
  * CodeLens inside the diff editor requires the `diffEditor.codeLens` setting;
  * the extension flips its default to `true` via `configurationDefaults` in
@@ -100,6 +106,13 @@ interface ReviewState {
   modified: string
   /** Language id of the real file, when it can be detected (syntax highlighting in the diff). */
   language?: string
+  /**
+   * When the modified side of a file diff is exactly the current workspace
+   * file (created/modified with readable text content), this is its absolute
+   * path: the diff then opens the real file on the right so it can be edited
+   * and saved directly instead of showing a read-only virtual document.
+   */
+  realModifiedPath?: string
   /**
    * 1-based anchor lines for the Accept/Undo CodeLens buttons, per diff side.
    * Git/ledger hunks carry the hunk start line (`newLine` in the new file,
@@ -224,27 +237,32 @@ function joinHunkText(hunks: readonly RollbackHunk[], side: 'old' | 'new'): stri
     .join('\n')
 }
 
-/** Build original/current texts for the file-level native diff. */
-function buildFileDiffTexts(change: RollbackFileChange): { original: string; modified: string } {
+/**
+ * Build original/current texts for the file-level native diff.
+ * `modifiedIsWorkspaceFile` reports whether the modified side is exactly the
+ * current workspace file content — callers then open the real file URI on the
+ * right of the diff so it can be edited directly.
+ */
+function buildFileDiffTexts(change: RollbackFileChange): { original: string; modified: string; modifiedIsWorkspaceFile: boolean } {
   const hunks = change.hunks ?? []
 
   if (change.status === 'created') {
     const current = readFileText(change.absolutePath)
-    return { original: '', modified: current ?? joinHunkText(hunks, 'new') }
+    return { original: '', modified: current ?? joinHunkText(hunks, 'new'), modifiedIsWorkspaceFile: current !== null }
   }
 
   if (change.status === 'deleted') {
-    return { original: joinHunkText(hunks, 'old'), modified: '' }
+    return { original: joinHunkText(hunks, 'old'), modified: '', modifiedIsWorkspaceFile: false }
   }
 
   if (hunks.length > 0 && change.binary !== true && change.truncated !== true) {
     const current = readFileText(change.absolutePath)
     if (current !== null) {
-      return { original: reverseApplyHunks(current, hunks), modified: current }
+      return { original: reverseApplyHunks(current, hunks), modified: current, modifiedIsWorkspaceFile: true }
     }
   }
 
-  return { original: joinHunkText(hunks, 'old'), modified: joinHunkText(hunks, 'new') }
+  return { original: joinHunkText(hunks, 'old'), modified: joinHunkText(hunks, 'new'), modifiedIsWorkspaceFile: false }
 }
 
 function parseReviewId(uri: vscode.Uri): string | undefined {
@@ -292,6 +310,17 @@ function hunkAnchors(hunks: readonly RollbackHunk[], side: 'orig' | 'mod'): Arra
 }
 
 /**
+ * Anchors for a diff whose modified side is the real workspace file: the
+ * buttons stay on the modified side (line numbers in the live file), rendered
+ * by the file-scheme CodeLens provider while the review diff is visible.
+ * Hunks without usable new-side lines fall back to the top of the file.
+ */
+function realFileAnchors(hunks: readonly RollbackHunk[]): Array<{ side: 'orig' | 'mod'; line: number }> {
+  const anchors = hunkAnchors(hunks, 'mod')
+  return anchors.length > 0 ? anchors : [{ side: 'mod', line: 1 }]
+}
+
+/**
  * Anchors for a modification-level diff: its document is the concatenation of
  * the hunk texts (`joinHunkText`), so file line numbers do not apply. Each
  * hunk's region starts after the previous hunks' `newText` line counts.
@@ -314,6 +343,13 @@ export class RollbackReviewManager {
   private readonly providerRegistration: vscode.Disposable
   private readonly codelensRegistration: vscode.Disposable
   private readonly commandRegistrations: vscode.Disposable[]
+  private readonly saveRegistration: vscode.Disposable
+  private readonly fileCodelensRegistration: vscode.Disposable
+  private readonly visibleEditorsRegistration: vscode.Disposable
+  /** Re-query event for both CodeLens providers (rebind / diff visibility changes). */
+  private readonly lensRefresh = new vscode.EventEmitter<void>()
+  /** Real-file URIs being saved by accept/undo themselves, so the save listener skips them. */
+  private readonly programmaticSaves = new Set<string>()
   /** Called after a successful accept/undo so the sidebar dock refreshes too. */
   onDidChange?: () => void
 
@@ -337,6 +373,7 @@ export class RollbackReviewManager {
     this.codelensRegistration = vscode.languages.registerCodeLensProvider(
       { scheme: ROLLBACK_SCHEME },
       {
+        onDidChangeCodeLenses: this.lensRefresh.event,
         provideCodeLenses: (document) => {
           const id = parseReviewId(document.uri)
           if (id === undefined) return []
@@ -377,6 +414,23 @@ export class RollbackReviewManager {
         },
       },
     )
+    // The right side of a real-file diff is a regular workspace file, which
+    // the scheme-scoped provider above never matches. This second provider
+    // covers `file` documents but only returns buttons while the review diff
+    // that owns the file is actually visible, so plain editors of the same
+    // file stay clean once the diff is closed.
+    this.fileCodelensRegistration = vscode.languages.registerCodeLensProvider(
+      { scheme: 'file' },
+      {
+        onDidChangeCodeLenses: this.lensRefresh.event,
+        provideCodeLenses: (document) => this.realFileLenses(document),
+      },
+    )
+    // Diff visibility gates the file-side buttons: refresh them whenever the
+    // set of visible editors changes (diff opened, closed, or tab switched).
+    this.visibleEditorsRegistration = vscode.window.onDidChangeVisibleTextEditors(() => {
+      this.lensRefresh.fire()
+    })
     this.commandRegistrations = [
       vscode.commands.registerCommand('dshui.rollback.accept', (stateId?: unknown) => {
         void this.handleReviewCommand('accept', typeof stateId === 'string' ? stateId : undefined)
@@ -385,11 +439,22 @@ export class RollbackReviewManager {
         void this.handleReviewCommand('undo', typeof stateId === 'string' ? stateId : undefined)
       }),
     ]
+    // Direct edits on a real-file diff's right side: when the user saves them,
+    // refresh the sidebar list and rebind the review state so the baseline,
+    // CodeLens anchors and the listId used by Accept/Undo match the new disk
+    // content (undoFile rejects stale lists with `workspace-changed`).
+    this.saveRegistration = vscode.workspace.onDidSaveTextDocument((document) => {
+      void this.handleRealFileSaved(document)
+    })
   }
 
   dispose(): void {
     this.providerRegistration.dispose()
     this.codelensRegistration.dispose()
+    this.fileCodelensRegistration.dispose()
+    this.visibleEditorsRegistration.dispose()
+    this.saveRegistration.dispose()
+    this.lensRefresh.dispose()
     for (const registration of this.commandRegistrations) registration.dispose()
     this.states.clear()
   }
@@ -429,6 +494,11 @@ export class RollbackReviewManager {
       void vscode.window.showWarningMessage(L('No textual diff is available for this file.', '此文件没有可显示的文本差异。'))
       return
     }
+    // When the modified side is the current workspace file itself, open that
+    // real file on the right of the diff so the user can edit and save it
+    // directly; only genuinely virtual content (deleted files, degraded hunk
+    // concatenations) stays on a read-only `dshui-rollback` document.
+    const realModifiedPath = texts.modifiedIsWorkspaceFile ? resolvedChange.absolutePath : undefined
     const state: ReviewState = {
       id: crypto.randomUUID(),
       kind: 'file',
@@ -439,10 +509,16 @@ export class RollbackReviewManager {
       original: texts.original,
       modified: texts.modified,
       language: await detectLanguage(resolvedChange.absolutePath),
-      // Deleted files: the right side is empty, so anchor on the old side.
-      anchors: resolvedChange.status === 'deleted'
-        ? hunkAnchors(resolvedChange.hunks ?? [], 'orig')
-        : hunkAnchors(resolvedChange.hunks ?? [], 'mod'),
+      ...(realModifiedPath === undefined ? {} : { realModifiedPath }),
+      // Real-file diffs keep the buttons on the modified side — now the live
+      // file, served by the file-scheme CodeLens provider while the review
+      // diff is visible; deleted files anchor on the original side (modified
+      // side empty); the rest anchor on the virtual modified side.
+      anchors: realModifiedPath !== undefined
+        ? realFileAnchors(resolvedChange.hunks ?? [])
+        : resolvedChange.status === 'deleted'
+          ? hunkAnchors(resolvedChange.hunks ?? [], 'orig')
+          : hunkAnchors(resolvedChange.hunks ?? [], 'mod'),
     }
     this.states.set(state.id, state)
     await this.openDiff(state, `${path} · ${L('baseline → current', '基线 → 当前')}`)
@@ -485,11 +561,21 @@ export class RollbackReviewManager {
     return vscode.Uri.parse(`${ROLLBACK_SCHEME}:/${encodeURIComponent(state.id)}?side=${side}`)
   }
 
+  /**
+   * Right side of the diff: the real workspace file when the review shows its
+   * live content (directly editable), otherwise the virtual document.
+   */
+  private modifiedUri(state: ReviewState): vscode.Uri {
+    return state.realModifiedPath !== undefined
+      ? vscode.Uri.file(state.realModifiedPath)
+      : this.uriFor(state, 'mod')
+  }
+
   private async openDiff(state: ReviewState, title: string): Promise<void> {
     await vscode.commands.executeCommand(
       'vscode.diff',
       this.uriFor(state, 'orig'),
-      this.uriFor(state, 'mod'),
+      this.modifiedUri(state),
       title,
       { preview: true, preserveFocus: false },
     )
@@ -502,6 +588,9 @@ export class RollbackReviewManager {
   private async applyDiffLanguage(state: ReviewState): Promise<void> {
     if (state.language === undefined) return
     for (const side of ['orig', 'mod'] as const) {
+      // The real workspace file on the modified side already carries its own
+      // language; only virtual documents need it applied.
+      if (side === 'mod' && state.realModifiedPath !== undefined) continue
       try {
         const uri = this.uriFor(state, side)
         const doc = await vscode.workspace.openTextDocument(uri)
@@ -545,18 +634,162 @@ export class RollbackReviewManager {
     }
   }
 
+  /** The open text document for a real-file diff's right side, if any. */
+  private findRealModifiedDoc(state: ReviewState): vscode.TextDocument | undefined {
+    if (state.realModifiedPath === undefined) return undefined
+    const uri = vscode.Uri.file(state.realModifiedPath).toString()
+    return vscode.workspace.textDocuments.find(doc => doc.uri.toString() === uri)
+  }
+
+  /** Whether the review diff's virtual baseline side is currently visible (the diff editor is open). */
+  private isReviewDiffVisible(state: ReviewState): boolean {
+    return vscode.window.visibleTextEditors.some(editor => {
+      const id = parseReviewId(editor.document.uri)
+      return id === state.id && isOriginalSide(editor.document.uri)
+    })
+  }
+
+  /**
+   * CodeLens buttons for the real workspace file on a review diff's modified
+   * side. Only served while the matching review diff (its virtual baseline
+   * side) is visible, so the same file in a plain editor gets no buttons once
+   * the review is closed. The most recently opened matching review wins.
+   */
+  private realFileLenses(document: vscode.TextDocument): vscode.CodeLens[] {
+    const uriString = document.uri.toString()
+    let target: ReviewState | undefined
+    for (const state of this.states.values()) {
+      if (state.realModifiedPath === undefined) continue
+      if (vscode.Uri.file(state.realModifiedPath).toString() !== uriString) continue
+      if (!this.isReviewDiffVisible(state)) continue
+      // States iterate in insertion order; the last match is the newest review.
+      target = state
+    }
+    if (target === undefined) return []
+    const lines = new Set<number>()
+    for (const anchor of target.anchors) {
+      if (anchor.side !== 'mod') continue
+      // Anchors that fell outside the live file (edited since the review was
+      // bound) are dropped; a save rebinds the state and restores them.
+      if (anchor.line >= 1 && anchor.line <= document.lineCount) lines.add(anchor.line)
+    }
+    const lenses: vscode.CodeLens[] = []
+    for (const line of [...lines].sort((a, b) => a - b)) {
+      const position = new vscode.Range(line - 1, 0, line - 1, 0)
+      lenses.push(new vscode.CodeLens(position, {
+        command: 'dshui.rollback.accept',
+        title: `$(check) ${L('Accept', '接受')}`,
+        arguments: [target.id],
+      }))
+      lenses.push(new vscode.CodeLens(position, {
+        command: 'dshui.rollback.undo',
+        title: `$(undo) ${L('Undo', '撤销')}`,
+        arguments: [target.id],
+      }))
+    }
+    return lenses
+  }
+
+  /**
+   * Flush unsaved edits made directly in the diff to disk before an RPC acts
+   * on the file: accept snapshots the current content as the new baseline, and
+   * undo needs a clean document so VS Code reloads the restored baseline into
+   * it without a save prompt.
+   */
+  private async saveRealModifiedDoc(state: ReviewState): Promise<void> {
+    const doc = this.findRealModifiedDoc(state)
+    if (doc === undefined || !doc.isDirty) return
+    const key = doc.uri.toString()
+    this.programmaticSaves.add(key)
+    try {
+      await doc.save()
+    } catch {
+      // best effort — the RPC still acts on the current disk state
+    } finally {
+      this.programmaticSaves.delete(key)
+    }
+  }
+
+  /**
+   * The user saved direct edits made on a real-file diff's right side:
+   * refresh the sidebar dock and rebind every review state for that file so
+   * the baseline, the CodeLens anchors and the listId used by Accept/Undo
+   * follow the new disk content.
+   */
+  private async handleRealFileSaved(document: vscode.TextDocument): Promise<void> {
+    if (this.programmaticSaves.has(document.uri.toString())) return
+    const affected = [...this.states.values()].filter(state =>
+      state.realModifiedPath !== undefined
+      && vscode.Uri.file(state.realModifiedPath).toString() === document.uri.toString())
+    if (affected.length === 0) return
+    this.onDidChange?.()
+    for (const state of affected) await this.rebindState(state)
+  }
+
+  /**
+   * Refetch the session list and rebind one review state after its real file
+   * changed on disk: undoFile re-checks the workspace tree against the bound
+   * list, so Accept/Undo buttons need a fresh listId, and the virtual baseline
+   * side plus its CodeLens anchors need to follow the new content.
+   */
+  private async rebindState(state: ReviewState): Promise<void> {
+    const remote = await rollbackSessionChanges(state.port, state.sessionId)
+    if (!remote.ok) return
+    const value = remote.value
+    const found = value.changes.find(item => item.path === state.path && item.accepted !== true)
+    state.listId = value.listId
+    if (found === undefined) {
+      // The file no longer differs from the baseline (e.g. the save restored
+      // it by hand): collapse the baseline side to the current content so the
+      // diff shows no changes, and drop the Accept/Undo buttons.
+      if (state.realModifiedPath !== undefined) {
+        state.original = readFileText(state.realModifiedPath) ?? ''
+        state.modified = state.original
+        state.anchors = []
+        this.emitter.fire(this.uriFor(state, 'orig'))
+        this.lensRefresh.fire()
+      }
+      return
+    }
+    const texts = buildFileDiffTexts(found)
+    state.original = texts.original
+    state.modified = texts.modified
+    state.anchors = state.realModifiedPath !== undefined
+      ? realFileAnchors(found.hunks ?? [])
+      : found.status === 'deleted'
+        ? hunkAnchors(found.hunks ?? [], 'orig')
+        : hunkAnchors(found.hunks ?? [], 'mod')
+    this.emitter.fire(this.uriFor(state, 'orig'))
+    this.lensRefresh.fire()
+  }
+
   private async acceptFile(state: ReviewState): Promise<void> {
+    // The right side may be the real workspace file with unsaved direct edits;
+    // accept snapshots the on-disk content, so flush them first.
+    await this.saveRealModifiedDoc(state)
     const result = await rollbackCall<unknown>(state.port, 'rollback/acceptFile', { request: { sessionId: state.sessionId, path: state.path, listId: state.listId } })
     this.finishMutation(result, 'acceptFile')
   }
 
   private async undoFile(state: ReviewState): Promise<void> {
+    const realDoc = this.findRealModifiedDoc(state)
+    const dirty = realDoc !== undefined && realDoc.isDirty
     const choice = await vscode.window.showWarningMessage(
-      L(`dshui: Undo changes for ${state.path}?`, `dshui: 撤销文件 ${state.path} 的修改？`),
+      L(`dshui: Undo changes for ${state.path}?`, `dshui: 撤销文件 ${state.path} 的修改？`)
+        + (dirty ? L(' Unsaved edits made in the diff will be discarded too.', '（Diff 中未保存的修改也会一并丢弃）') : ''),
       { modal: true },
       L('Undo', '撤销'),
     )
     if (choice !== L('Undo', '撤销')) return
+    if (dirty) {
+      // Flush first so the document is clean: after the RPC restores the
+      // baseline, VS Code reloads it into the editor and closing the diff
+      // needs no save prompt (the flushed edits are undone with the rest).
+      // Then rebind to a list whose prepared tree includes those edits, or
+      // undoFile would reject the now-stale listId with `workspace-changed`.
+      await this.saveRealModifiedDoc(state)
+      await this.rebindState(state)
+    }
     const result = await rollbackCall<unknown>(state.port, 'rollback/undoFile', { request: { sessionId: state.sessionId, path: state.path, listId: state.listId } })
     this.finishMutation(result, 'undoFile')
   }
