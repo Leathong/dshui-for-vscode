@@ -449,9 +449,25 @@ export class SessionChangeManager {
      * or snapshot objects were garbage collected) — partial attribution
      * would hide the session's own changes, which is worse than showing
      * foreign ones.
+     *
+     * Window-end trees captured by OTHER sessions live in those sessions'
+     * isolated snapshot repos, invisible to this session's provider. They are
+     * borrowed read-only through git alternates (`GIT_ALTERNATE_OBJECT_
+     * DIRECTORIES`); without this the boundary diff fails and the window
+     * silently extends to the current worktree, leaking later sessions'
+     * changes into this session's list.
+     *
+     * Candidates are walked lazily in timeline order (distinct trees after the
+     * window's snapshot, current worktree last) and the walk stops at the first
+     * reachable boundary, so the common case attempts exactly one diff instead
+     * of materializing — and quadratically deduping — the whole timeline
+     * suffix per window.
      */
     async ownWindowPaths(sessionId, cwd, baselineTree, preparedTree, preparedEntries, provider) {
         const timeline = await this.snapshots.listForWorkspace(cwd);
+        // Per-listing memo: each foreign session's repo existence is one sync
+        // stat, resolved once no matter how many windows reference it.
+        const objectsDirMemo = new Map();
         const own = new Set();
         let found = false;
         for (let index = 0; index < timeline.length; index += 1) {
@@ -459,33 +475,65 @@ export class SessionChangeManager {
             if (manifest.sessionId !== sessionId || manifest.tree === undefined)
                 continue;
             found = true;
-            const endTrees = [];
-            for (let next = index + 1; next < timeline.length; next += 1) {
-                const tree = timeline[next].tree;
-                if (tree !== undefined && tree !== manifest.tree && !endTrees.includes(tree))
-                    endTrees.push(tree);
-            }
-            if (preparedTree !== manifest.tree && !endTrees.includes(preparedTree))
-                endTrees.push(preparedTree);
-            if (endTrees.length === 0)
-                continue;
+            // `tried` doubles as the O(1) dedupe set (seeded with the window's own
+            // tree, which is never a valid end) and as the record of whether the
+            // current worktree was already attempted as a timeline candidate.
+            const tried = new Set([manifest.tree]);
             let entries;
-            if (manifest.tree === baselineTree && endTrees[0] === preparedTree) {
-                entries = preparedEntries;
-            }
-            else {
-                for (const endTree of endTrees) {
-                    entries = await provider.diffEntries(manifest.tree, endTree).catch(() => undefined);
-                    if (entries !== undefined)
-                        break;
+            let attempted = false;
+            for (let next = index + 1; next < timeline.length; next += 1) {
+                const candidate = timeline[next];
+                const tree = candidate.tree;
+                if (tree === undefined || tried.has(tree))
+                    continue;
+                tried.add(tree);
+                attempted = true;
+                if (tree === preparedTree && manifest.tree === baselineTree) {
+                    // The boundary is the current worktree itself; reuse the already
+                    // computed baseline diff.
+                    entries = preparedEntries;
+                    break;
                 }
+                // preparedTree's objects were just written to the own repo by this
+                // listing's capture, so only genuinely foreign trees need borrowing.
+                const objects = candidate.sessionId === sessionId || tree === preparedTree
+                    ? undefined
+                    : this.foreignObjectDir(cwd, candidate.sessionId, objectsDirMemo);
+                entries = await provider.diffEntries(manifest.tree, tree, undefined, objects === undefined ? undefined : [objects]).catch(() => undefined);
+                if (entries !== undefined)
+                    break;
             }
+            if (entries === undefined && !tried.has(preparedTree)) {
+                // Final window end: the current worktree, not covered by any
+                // timeline candidate.
+                attempted = true;
+                entries = manifest.tree === baselineTree
+                    ? preparedEntries
+                    : await provider.diffEntries(manifest.tree, preparedTree).catch(() => undefined);
+            }
+            if (!attempted)
+                continue; // no distinct end: nothing changed after this snapshot
             if (entries === undefined)
                 return undefined;
             for (const entry of entries)
                 own.add(entry.path);
         }
         return found ? own : undefined;
+    }
+    /**
+     * Read-only alternate object dir of one foreign session's isolated snapshot
+     * repo, when it still exists on disk. A removed session store leaves its
+     * boundary tree unreachable; the window diff then falls through to the next
+     * reachable end (existing behaviour). Results (including the "gone"
+     * negative) are memoized per listing, so a session with many windows stats
+     * each foreign repo at most once.
+     */
+    foreignObjectDir(cwd, foreignSessionId, memo) {
+        if (memo.has(foreignSessionId))
+            return memo.get(foreignSessionId);
+        const objects = this.snapshots.sessionObjectsDir(cwd, foreignSessionId);
+        memo.set(foreignSessionId, objects);
+        return objects;
     }
     liveSession(sessionId) {
         const session = this.ctx.sessions.get(sessionId);

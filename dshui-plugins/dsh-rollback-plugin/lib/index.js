@@ -141,6 +141,7 @@ var GitProvider = class {
 		delete env.GIT_DIR;
 		delete env.GIT_WORK_TREE;
 		delete env.GIT_INDEX_FILE;
+		delete env.GIT_ALTERNATE_OBJECT_DIRECTORIES;
 		this.baseEnv = env;
 		this.maxNestedRepos = Math.max(0, options.maxNestedRepos ?? 100);
 	}
@@ -436,7 +437,7 @@ var GitProvider = class {
 			`${tree}^{tree}`
 		], signal)).code === 0;
 	}
-	async diffEntries(from, to, signal) {
+	async diffEntries(from, to, signal, alternateObjectDirs) {
 		if (!isHash(from) || !isHash(to)) throw new Error("diff-trees requires valid tree hashes");
 		const result = await this.run([
 			"diff-tree",
@@ -445,7 +446,7 @@ var GitProvider = class {
 			"-z",
 			from,
 			to
-		], signal);
+		], signal, void 0, alternateObjectDirs);
 		if (result.code !== 0) throw new Error(`git diff-tree failed: ${result.stderr.trim()}`);
 		return parseDiffTreeZ(result.stdout);
 	}
@@ -563,16 +564,22 @@ var GitProvider = class {
 		for (const sub of ["rebase-merge", "rebase-apply"]) if (fs.existsSync(path.join(dir, sub))) return true;
 		return false;
 	}
-	/** All snapshot object operations run against the isolated repo. */
-	async run(args, signal, indexFile) {
+	/**
+	* All snapshot object operations run against the isolated repo.
+	* `alternateObjectDirs` borrows additional object stores read-only (git
+	* alternates), used to diff against tree objects captured by other
+	* sessions into their own isolated repos.
+	*/
+	async run(args, signal, indexFile, alternateObjectDirs) {
 		if (!await this.ensureIsolated(signal)) return {
 			code: 128,
 			stdout: "",
 			stderr: "rollback: isolated snapshot repository is unavailable"
 		};
-		const env = indexFile === void 0 ? this.baseEnv : {
+		const env = indexFile === void 0 && alternateObjectDirs === void 0 ? this.baseEnv : {
 			...this.baseEnv,
-			GIT_INDEX_FILE: indexFile
+			...indexFile === void 0 ? {} : { GIT_INDEX_FILE: indexFile },
+			...alternateObjectDirs === void 0 || alternateObjectDirs.length === 0 ? {} : { GIT_ALTERNATE_OBJECT_DIRECTORIES: alternateObjectDirs.join(path.delimiter) }
 		};
 		return spawnGit(this.cwd, args, env, this.options.spawnTimeoutMs, signal, this.options.isolatedRepoDir, this.cwd);
 	}
@@ -947,6 +954,16 @@ var SnapshotManager = class {
 			isolatedRepoDir,
 			isolatedRepoInit
 		});
+	}
+	/**
+	* Objects directory of one session's isolated snapshot repo, when it exists
+	* on disk. Used to borrow foreign snapshot trees read-only (git alternates)
+	* for cross-session window diffs; undefined when the session store was
+	* removed together with its session.
+	*/
+	sessionObjectsDir(cwd, sessionId) {
+		const objects = path.join(sessionSnapshotRepo(this.dshHome, cwd, sessionId), "objects");
+		return fs.existsSync(objects) ? objects : void 0;
 	}
 	ensureIsolatedRepo(dir) {
 		const existing = this.isolatedInit.get(dir);
@@ -3303,32 +3320,69 @@ var SessionChangeManager = class {
 	* or snapshot objects were garbage collected) — partial attribution
 	* would hide the session's own changes, which is worse than showing
 	* foreign ones.
+	*
+	* Window-end trees captured by OTHER sessions live in those sessions'
+	* isolated snapshot repos, invisible to this session's provider. They are
+	* borrowed read-only through git alternates (`GIT_ALTERNATE_OBJECT_
+	* DIRECTORIES`); without this the boundary diff fails and the window
+	* silently extends to the current worktree, leaking later sessions'
+	* changes into this session's list.
+	*
+	* Candidates are walked lazily in timeline order (distinct trees after the
+	* window's snapshot, current worktree last) and the walk stops at the first
+	* reachable boundary, so the common case attempts exactly one diff instead
+	* of materializing — and quadratically deduping — the whole timeline
+	* suffix per window.
 	*/
 	async ownWindowPaths(sessionId, cwd, baselineTree, preparedTree, preparedEntries, provider) {
 		const timeline = await this.snapshots.listForWorkspace(cwd);
+		const objectsDirMemo = /* @__PURE__ */ new Map();
 		const own = /* @__PURE__ */ new Set();
 		let found = false;
 		for (let index = 0; index < timeline.length; index += 1) {
 			const manifest = timeline[index];
 			if (manifest.sessionId !== sessionId || manifest.tree === void 0) continue;
 			found = true;
-			const endTrees = [];
-			for (let next = index + 1; next < timeline.length; next += 1) {
-				const tree = timeline[next].tree;
-				if (tree !== void 0 && tree !== manifest.tree && !endTrees.includes(tree)) endTrees.push(tree);
-			}
-			if (preparedTree !== manifest.tree && !endTrees.includes(preparedTree)) endTrees.push(preparedTree);
-			if (endTrees.length === 0) continue;
+			const tried = new Set([manifest.tree]);
 			let entries;
-			if (manifest.tree === baselineTree && endTrees[0] === preparedTree) entries = preparedEntries;
-			else for (const endTree of endTrees) {
-				entries = await provider.diffEntries(manifest.tree, endTree).catch(() => void 0);
+			let attempted = false;
+			for (let next = index + 1; next < timeline.length; next += 1) {
+				const candidate = timeline[next];
+				const tree = candidate.tree;
+				if (tree === void 0 || tried.has(tree)) continue;
+				tried.add(tree);
+				attempted = true;
+				if (tree === preparedTree && manifest.tree === baselineTree) {
+					entries = preparedEntries;
+					break;
+				}
+				const objects = candidate.sessionId === sessionId || tree === preparedTree ? void 0 : this.foreignObjectDir(cwd, candidate.sessionId, objectsDirMemo);
+				entries = await provider.diffEntries(manifest.tree, tree, void 0, objects === void 0 ? void 0 : [objects]).catch(() => void 0);
 				if (entries !== void 0) break;
 			}
+			if (entries === void 0 && !tried.has(preparedTree)) {
+				attempted = true;
+				entries = manifest.tree === baselineTree ? preparedEntries : await provider.diffEntries(manifest.tree, preparedTree).catch(() => void 0);
+			}
+			if (!attempted) continue;
 			if (entries === void 0) return void 0;
 			for (const entry of entries) own.add(entry.path);
 		}
 		return found ? own : void 0;
+	}
+	/**
+	* Read-only alternate object dir of one foreign session's isolated snapshot
+	* repo, when it still exists on disk. A removed session store leaves its
+	* boundary tree unreachable; the window diff then falls through to the next
+	* reachable end (existing behaviour). Results (including the "gone"
+	* negative) are memoized per listing, so a session with many windows stats
+	* each foreign repo at most once.
+	*/
+	foreignObjectDir(cwd, foreignSessionId, memo) {
+		if (memo.has(foreignSessionId)) return memo.get(foreignSessionId);
+		const objects = this.snapshots.sessionObjectsDir(cwd, foreignSessionId);
+		memo.set(foreignSessionId, objects);
+		return objects;
 	}
 	liveSession(sessionId) {
 		const session = this.ctx.sessions.get(sessionId);

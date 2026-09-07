@@ -133,6 +133,16 @@ export class SnapshotManager {
             isolatedRepoInit,
         });
     }
+    /**
+     * Objects directory of one session's isolated snapshot repo, when it exists
+     * on disk. Used to borrow foreign snapshot trees read-only (git alternates)
+     * for cross-session window diffs; undefined when the session store was
+     * removed together with its session.
+     */
+    sessionObjectsDir(cwd, sessionId) {
+        const objects = path.join(sessionSnapshotRepo(this.dshHome, cwd, sessionId), 'objects');
+        return fs.existsSync(objects) ? objects : undefined;
+    }
     ensureIsolatedRepo(dir) {
         const existing = this.isolatedInit.get(dir);
         if (existing !== undefined)

@@ -112,7 +112,7 @@ export declare class GitProvider {
     /** Run git against the isolated repo from an arbitrary worktree. */
     private runAt;
     treeExists(tree: string, signal?: AbortSignal): Promise<boolean>;
-    diffEntries(from: string, to: string, signal?: AbortSignal): Promise<GitTreeEntry[]>;
+    diffEntries(from: string, to: string, signal?: AbortSignal, alternateObjectDirs?: readonly string[]): Promise<GitTreeEntry[]>;
     diffHunks(from: string, to: string, filePath: string, signal?: AbortSignal): Promise<{
         hunks: RollbackHunk[];
         truncated: boolean;
@@ -134,8 +134,13 @@ export declare class GitProvider {
     fileHash(relPath: string, signal?: AbortSignal): Promise<string | undefined>;
     restorePaths(tree: string, relPaths: readonly string[], signal?: AbortSignal): Promise<void>;
     assertNoGitOperation(signal?: AbortSignal): Promise<boolean>;
-    /** All snapshot object operations run against the isolated repo. */
-    run(args: readonly string[], signal?: AbortSignal, indexFile?: string): Promise<GitRunResult>;
+    /**
+     * All snapshot object operations run against the isolated repo.
+     * `alternateObjectDirs` borrows additional object stores read-only (git
+     * alternates), used to diff against tree objects captured by other
+     * sessions into their own isolated repos.
+     */
+    run(args: readonly string[], signal?: AbortSignal, indexFile?: string, alternateObjectDirs?: readonly string[]): Promise<GitRunResult>;
     /** Read-only queries against the project's own repo (head, fences). */
     private runProject;
     /** The project's git dir (`.git`), or undefined outside a git worktree. */

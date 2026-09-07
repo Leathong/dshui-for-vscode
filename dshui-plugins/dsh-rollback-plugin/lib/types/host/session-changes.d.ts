@@ -43,8 +43,30 @@ export declare class SessionChangeManager {
      * or snapshot objects were garbage collected) — partial attribution
      * would hide the session's own changes, which is worse than showing
      * foreign ones.
+     *
+     * Window-end trees captured by OTHER sessions live in those sessions'
+     * isolated snapshot repos, invisible to this session's provider. They are
+     * borrowed read-only through git alternates (`GIT_ALTERNATE_OBJECT_
+     * DIRECTORIES`); without this the boundary diff fails and the window
+     * silently extends to the current worktree, leaking later sessions'
+     * changes into this session's list.
+     *
+     * Candidates are walked lazily in timeline order (distinct trees after the
+     * window's snapshot, current worktree last) and the walk stops at the first
+     * reachable boundary, so the common case attempts exactly one diff instead
+     * of materializing — and quadratically deduping — the whole timeline
+     * suffix per window.
      */
     private ownWindowPaths;
+    /**
+     * Read-only alternate object dir of one foreign session's isolated snapshot
+     * repo, when it still exists on disk. A removed session store leaves its
+     * boundary tree unreachable; the window diff then falls through to the next
+     * reachable end (existing behaviour). Results (including the "gone"
+     * negative) are memoized per listing, so a session with many windows stats
+     * each foreign repo at most once.
+     */
+    private foreignObjectDir;
     private liveSession;
     /**
      * Workspace-relative roots of nested git repositories under the workspace.

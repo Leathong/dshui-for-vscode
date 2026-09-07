@@ -56,6 +56,13 @@ export declare class SnapshotManager {
      * `sessionId` undefined degrades to ledger-only coverage.
      */
     providerFor(cwd: string, sessionId?: string): GitProvider;
+    /**
+     * Objects directory of one session's isolated snapshot repo, when it exists
+     * on disk. Used to borrow foreign snapshot trees read-only (git alternates)
+     * for cross-session window diffs; undefined when the session store was
+     * removed together with its session.
+     */
+    sessionObjectsDir(cwd: string, sessionId: string): string | undefined;
     private ensureIsolatedRepo;
     /** Capture the pre-step baseline. Failures are caught by the caller and never block the agent. */
     capture(session: Session, turn: number): Promise<RollbackSnapshotManifest | undefined>;

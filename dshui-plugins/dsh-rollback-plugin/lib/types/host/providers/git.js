@@ -85,6 +85,7 @@ export class GitProvider {
         delete env.GIT_DIR;
         delete env.GIT_WORK_TREE;
         delete env.GIT_INDEX_FILE;
+        delete env.GIT_ALTERNATE_OBJECT_DIRECTORIES;
         this.baseEnv = env;
         this.maxNestedRepos = Math.max(0, options.maxNestedRepos ?? 100);
     }
@@ -381,10 +382,10 @@ export class GitProvider {
         const result = await this.run(['cat-file', '-e', `${tree}^{tree}`], signal);
         return result.code === 0;
     }
-    async diffEntries(from, to, signal) {
+    async diffEntries(from, to, signal, alternateObjectDirs) {
         if (!isHash(from) || !isHash(to))
             throw new Error('diff-trees requires valid tree hashes');
-        const result = await this.run(['diff-tree', '-r', '--no-renames', '-z', from, to], signal);
+        const result = await this.run(['diff-tree', '-r', '--no-renames', '-z', from, to], signal, undefined, alternateObjectDirs);
         if (result.code !== 0)
             throw new Error(`git diff-tree failed: ${result.stderr.trim()}`);
         return parseDiffTreeZ(result.stdout);
@@ -488,13 +489,26 @@ export class GitProvider {
         }
         return false;
     }
-    /** All snapshot object operations run against the isolated repo. */
-    async run(args, signal, indexFile) {
+    /**
+     * All snapshot object operations run against the isolated repo.
+     * `alternateObjectDirs` borrows additional object stores read-only (git
+     * alternates), used to diff against tree objects captured by other
+     * sessions into their own isolated repos.
+     */
+    async run(args, signal, indexFile, alternateObjectDirs) {
         const ready = await this.ensureIsolated(signal);
         if (!ready) {
             return { code: 128, stdout: '', stderr: 'rollback: isolated snapshot repository is unavailable' };
         }
-        const env = indexFile === undefined ? this.baseEnv : { ...this.baseEnv, GIT_INDEX_FILE: indexFile };
+        const env = indexFile === undefined && alternateObjectDirs === undefined
+            ? this.baseEnv
+            : {
+                ...this.baseEnv,
+                ...(indexFile === undefined ? {} : { GIT_INDEX_FILE: indexFile }),
+                ...(alternateObjectDirs === undefined || alternateObjectDirs.length === 0
+                    ? {}
+                    : { GIT_ALTERNATE_OBJECT_DIRECTORIES: alternateObjectDirs.join(path.delimiter) }),
+            };
         return spawnGit(this.cwd, args, env, this.options.spawnTimeoutMs, signal, this.options.isolatedRepoDir, this.cwd);
     }
     /** Read-only queries against the project's own repo (head, fences). */
