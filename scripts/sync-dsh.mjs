@@ -327,6 +327,7 @@ async function main() {
 
   fs.mkdirSync(targetRoot, { recursive: true })
   let copiedCount = 0
+  const copiedNames = []
   const missingLib = []
   for (const name of closure) {
     const entry = byName.get(name)
@@ -344,7 +345,25 @@ async function main() {
     const scopeName = name.slice('@deepseek-ai/'.length)
     writePackage(entry, name, versionFor, path.join(targetRoot, scopeName), dshDeps)
     copiedCount += 1
+    copiedNames.push(name)
     console.log(`  ✓ ${name}`)
+  }
+  // The anchor manifest's dependency closure must list only packages that were
+  // actually copied — npm list (which vsce runs) treats every listed dep as
+  // required, so an unbuilt platform package (other OS/arch) must not appear.
+  // The anchor was written during the loop with the full closure; rewrite it
+  // now with the copied set (JSON key order follows the closure walk).
+  const dshDepsCopied = {}
+  for (const name of copiedNames) {
+    if (name === '@deepseek-ai/dsh') continue
+    const version = versionFor.get(name)
+    dshDepsCopied[name] = version === undefined ? '*' : version
+  }
+  const anchorPkgPath = path.join(targetRoot, 'dsh', 'package.json')
+  if (fs.existsSync(anchorPkgPath)) {
+    const anchorPkg = JSON.parse(fs.readFileSync(anchorPkgPath, 'utf8'))
+    anchorPkg.dependencies = dshDepsCopied
+    fs.writeFileSync(anchorPkgPath, `${JSON.stringify(anchorPkg, null, 2)}\n`)
   }
   if (missingLib.length > 0) {
     console.warn(`\n[sync-dsh] ${missingLib.length} 个闭包含缺 lib/ 构建产物：`)
