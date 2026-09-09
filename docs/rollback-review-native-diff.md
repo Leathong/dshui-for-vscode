@@ -81,6 +81,7 @@ RollbackReviewManager 调用 rollback/acceptFile | undoFile
 - `RollbackReviewManager`
   - 注册 `TextDocumentContentProvider`，按 URI 返回 `original` / `modified` 内容。
   - `ReviewState.realModifiedPath`：文件级 Diff 的修改侧就是工作区当前文件时（`buildFileDiffTexts` 返回 `modifiedIsWorkspaceFile`），记录其绝对路径；`vscode.diff` 右侧直接传 `Uri.file(...)`，用户可以在 Diff 中**直接编辑并保存**该文件。删除的文件与降级的 hunk 拼接 Diff 仍用只读虚拟文档。
+  - 真实文件右侧的可编辑性：由于 Diff 的原始侧是 `dshui-rollback:` 自定义 scheme（内容提供器），VS Code 的原生 Diff 编辑器会把**改造侧也标记为只读**（即便那是一个真实的工作区文件）。因此 `openDiff` 在打开真实文件 Diff 后追加 `workbench.action.files.setActiveEditorWriteableInSession`，把活动（即修改侧）标记为**会话内可写**，从而让用户能在 Diff 中直接编辑并保存；修改级 Diff（`realModifiedPath` 未设置）不调用该命令，右侧仍是只读虚拟补丁文档。
   - 注册 CodeLens provider：`registerCodeLensProvider({ scheme: ROLLBACK_SCHEME }, ...)`，只对 `dshui-rollback` 虚拟文档生效（不需要自定义语言）；按钮精确渲染在每个 hunk 的**首个变更行**上方（`firstChanged*Line`，由插件在解析/计算 diff 时给出，回退到 hunk 起始行）——删除的文件修改侧为空，按钮锚定在原始侧（`side=orig`）。按钮命令携带 state id 直接定位本次 Diff。
   - 第二个 CodeLens provider（`{ scheme: 'file' }`，`realFileLenses`）：给真实文件右侧渲染同样的 Accept / Undo 按钮（锚点用文件内行号，`realFileAnchors`）。**可见性门控**：仅当该审查 Diff 的基线虚拟文档当前可见（`isReviewDiffVisible`）时返回按钮，Diff 关闭后同一文件的普通编辑器不会残留按钮；`onDidChangeVisibleTextEditors` 触发 `lensRefresh` 让按钮随 Diff 打开/关闭即时出现或消失。
   - 保存联动（`onDidSaveTextDocument` → `handleRealFileSaved`）：用户在 Diff 右侧直接编辑并保存后，通知侧边栏刷新（`onDidChange`），并对该文件的每个审查状态执行 `rebindState`——重新拉取 `rollback/sessionChanges`，更新 `listId`、基线文本、按钮锚点，并 fire 虚拟文档让左侧基线跟随新内容（`undoFile` 会按 `listId` 校验工作区树，不回绑会以 `workspace-changed` 拒绝）。若保存后文件与基线已无差异，基线侧收敛为当前内容、按钮移除。

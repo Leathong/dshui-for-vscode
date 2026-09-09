@@ -6,8 +6,10 @@
  * with the baseline original on the left. Whenever the review compares the
  * live workspace file (created/modified with readable text content), the
  * right side is that real file, so it can be edited and saved directly in
- * the diff; only genuinely virtual content (deleted files, degraded hunk
- * concatenations) falls back to a read-only `dshui-rollback` document.
+ * the diff (the diff opens read-only because the original is a custom-scheme
+ * document; `openDiff` flips the modified side writeable-in-session); only
+ * genuinely virtual content (deleted files, degraded hunk concatenations)
+ * falls back to a read-only `dshui-rollback` document.
  * Accept / Undo are clickable CodeLens buttons on the modified side of the
  * diff — for real files served by a `file`-scheme provider gated on the
  * review diff being visible — plus editor context-menu commands scoped to
@@ -579,6 +581,22 @@ export class RollbackReviewManager {
       title,
       { preview: true, preserveFocus: false },
     )
+    // A diff whose modified side is the real workspace file is still opened
+    // read-only here: once the *original* side is a custom-scheme document
+    // (the `dshui-rollback:` content provider), VS Code's diff editor marks
+    // the modified side read-only regardless of it being a real file on disk.
+    // Mark the active (modified) side writeable-in-session so the user can
+    // edit and save the file directly in the diff, as the real-file review
+    // intends. Modification-level diffs (realModifiedPath unset) keep the
+    // read-only virtual patch document on the right. Best effort: a failure
+    // to mark it writeable must not block the diff from opening.
+    if (state.realModifiedPath !== undefined) {
+      try {
+        await vscode.commands.executeCommand('workbench.action.files.setActiveEditorWriteableInSession')
+      } catch {
+        // best effort — the diff is still open, just read-only
+      }
+    }
   }
 
   /**

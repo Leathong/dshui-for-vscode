@@ -108,6 +108,7 @@ window.__ModuleLoader__.load({
 			".wsc-details div{display:contents}",
 			".wsc-details dt{color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:17px}",
 			".wsc-details dd{min-width:0;margin:0;overflow-wrap:anywhere;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:17px}",
+			".wsc-detail-tool{display:block;line-height:17px}",
 			".wsc-switch{display:inline-flex;flex:none;align-items:center;padding:0;border:0;background:transparent;cursor:pointer;border-radius:999px}",
 			".wsc-switch:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary);outline-offset:2px}",
 			".wsc-switch-track{position:relative;display:inline-block;width:28px;height:16px;border-radius:999px;background:var(--dsw-alias-border-l2);transition:background-color 120ms var(--ds-ease-in-out)}",
@@ -410,7 +411,7 @@ window.__ModuleLoader__.load({
 				});
 			};
 			const visibleIds = [...visibleSkills.map((s) => `skill:${s.name}`), ...visibleMcps.map((m) => `mcp:${m.server}`)];
-			const renderRow = (id, name, detail, kind, enabled, onToggle) => {
+			const renderRow = (id, name, detail, kind, enabled, onToggle, tools) => {
 				const open = expanded === id && visibleIds.includes(id);
 				return react.createElement("li", {
 					className: "wsc-card",
@@ -432,7 +433,10 @@ window.__ModuleLoader__.load({
 				}, enabled ? "已启用" : "已禁用"), react.createElement(ChevronIcon, { className: "wsc-chevron" }))), open ? react.createElement("div", {
 					className: "wsc-card-details",
 					id: `wsc-details-${id}`
-				}, react.createElement("p", { className: "wsc-detail-desc" }, detail), react.createElement("dl", { className: "wsc-details" }, react.createElement("div", null, react.createElement("dt", null, "状态"), react.createElement("dd", null, enabled ? "已启用" : "已禁用")), kind === "skill" ? react.createElement("div", null, react.createElement("dt", null, "加载"), react.createElement("dd", null, "会话中可用 /", name, " 临时加载")) : react.createElement("div", null, react.createElement("dt", null, "类型"), react.createElement("dd", null, "Host 全局 MCP 服务器")))) : null);
+				}, react.createElement("p", { className: "wsc-detail-desc" }, detail), react.createElement("dl", { className: "wsc-details" }, react.createElement("div", null, react.createElement("dt", null, "状态"), react.createElement("dd", null, enabled ? "已启用" : "已禁用")), kind === "skill" ? react.createElement("div", null, react.createElement("dt", null, "加载"), react.createElement("dd", null, "会话中可用 /", name, " 临时加载")) : react.createElement(react.Fragment, null, react.createElement("div", null, react.createElement("dt", null, "类型"), react.createElement("dd", null, "Host 全局 MCP 服务器")), react.createElement("div", null, react.createElement("dt", null, "工具"), react.createElement("dd", null, tools !== void 0 && tools.length > 0 ? tools.map((tool) => react.createElement("span", {
+					key: tool,
+					className: "wsc-detail-tool"
+				}, tool)) : "（无）"))))) : null);
 			};
 			const body = data === null ? react.createElement("div", { className: "wsc-hint" }, error ?? (sessionId !== void 0 ? "正在加载…" : "当前没有可用的会话上下文，请先新建或打开一个会话。")) : react.createElement("div", { className: "wsc-body" }, react.createElement("p", { className: "wsc-desc" }, "仅对新对话开场生效：本配置决定新对话开始时注入的技能与 Host 全局 MCP，已进行的对话不受影响。不影响 /<技能名> 手势：对话中随时可用。改动即时保存。"), react.createElement("label", { className: "wsc-search" }, react.createElement(SearchIcon, null), react.createElement("input", {
 				type: "search",
@@ -458,7 +462,7 @@ window.__ModuleLoader__.load({
 					...c,
 					mcps: !c.mcps
 				}))
-			}, react.createElement("h3", null, "全局 MCP 服务器"), react.createElement("span", { "data-count": visibleMcps.length }, visibleMcps.length), react.createElement(ChevronIcon, { className: "wsc-heading-chevron" })), !collapsed.mcps && (visibleMcps.length > 0 ? react.createElement("ul", { className: "wsc-cards" }, visibleMcps.map((m) => renderRow(`mcp:${m.server}`, m.server, `${m.toolCount} 个工具`, "mcp", selectedMcps.has(m.server), () => toggleMcp(m.server)))) : react.createElement("p", { className: "wsc-hint" }, "没有匹配的全局 MCP 服务器。")), react.createElement("div", { className: "wsc-actions" }, react.createElement("button", {
+			}, react.createElement("h3", null, "全局 MCP 服务器"), react.createElement("span", { "data-count": visibleMcps.length }, visibleMcps.length), react.createElement(ChevronIcon, { className: "wsc-heading-chevron" })), !collapsed.mcps && (visibleMcps.length > 0 ? react.createElement("ul", { className: "wsc-cards" }, visibleMcps.map((m) => renderRow(`mcp:${m.server}`, m.server, `${m.toolCount} 个工具`, "mcp", selectedMcps.has(m.server), () => toggleMcp(m.server), m.tools))) : react.createElement("p", { className: "wsc-hint" }, "没有匹配的全局 MCP 服务器。")), react.createElement("div", { className: "wsc-actions" }, react.createElement("button", {
 				type: "button",
 				className: "wsc-btn",
 				onClick: allEnabled

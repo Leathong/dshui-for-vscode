@@ -284,10 +284,14 @@ export function apply(ctx) {
             // An unavailable provider should not break the management UI.
         }
         const byServer = globalMcpToolsMap();
-        const mcp = [...byServer.keys()].sort().map((server) => ({
-            server,
-            toolCount: (byServer.get(server) ?? []).length,
-        }));
+        const mcp = [...byServer.keys()]
+            .sort()
+            .map((server) => {
+            const tools = (byServer.get(server) ?? [])
+                .map((name) => /^mcp__[A-Za-z0-9_-]{1,32}__(.+)$/.exec(name)?.[1] ?? name)
+                .sort();
+            return { server, toolCount: tools.length, tools };
+        });
         return { skills: skillList, mcp, config: await readConfig(cwd) };
     }
     async function saveResult(body) {

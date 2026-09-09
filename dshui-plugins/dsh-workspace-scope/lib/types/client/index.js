@@ -95,6 +95,7 @@ const CSS = [
     ".wsc-details div{display:contents}",
     ".wsc-details dt{color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:17px}",
     ".wsc-details dd{min-width:0;margin:0;overflow-wrap:anywhere;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:17px}",
+    ".wsc-detail-tool{display:block;line-height:17px}",
     // Self-drawn switch: theme tokens only, so a dsh theme switch re-skins it
     // automatically (no hardcoded colors).
     ".wsc-switch{display:inline-flex;flex:none;align-items:center;padding:0;border:0;background:transparent;cursor:pointer;border-radius:999px}",
@@ -408,7 +409,7 @@ function ScopeModal(props) {
         ...visibleSkills.map((s) => `skill:${s.name}`),
         ...visibleMcps.map((m) => `mcp:${m.server}`),
     ];
-    const renderRow = (id, name, detail, kind, enabled, onToggle) => {
+    const renderRow = (id, name, detail, kind, enabled, onToggle, tools) => {
         const open = expanded === id && visibleIds.includes(id);
         return (React.createElement("li", { className: "wsc-card", "data-open": open ? "true" : undefined, key: id },
             React.createElement("div", { className: "wsc-card-main" },
@@ -428,9 +429,15 @@ function ScopeModal(props) {
                         React.createElement("dd", null,
                             "\u4F1A\u8BDD\u4E2D\u53EF\u7528 /",
                             name,
-                            " \u4E34\u65F6\u52A0\u8F7D"))) : (React.createElement("div", null,
-                        React.createElement("dt", null, "\u7C7B\u578B"),
-                        React.createElement("dd", null, "Host \u5168\u5C40 MCP \u670D\u52A1\u5668")))))) : null));
+                            " \u4E34\u65F6\u52A0\u8F7D"))) : (React.createElement(React.Fragment, null,
+                        React.createElement("div", null,
+                            React.createElement("dt", null, "\u7C7B\u578B"),
+                            React.createElement("dd", null, "Host \u5168\u5C40 MCP \u670D\u52A1\u5668")),
+                        React.createElement("div", null,
+                            React.createElement("dt", null, "\u5DE5\u5177"),
+                            React.createElement("dd", null, tools !== undefined && tools.length > 0
+                                ? tools.map((tool) => (React.createElement("span", { key: tool, className: "wsc-detail-tool" }, tool)))
+                                : "（无）"))))))) : null));
     };
     const body = data === null ? (React.createElement("div", { className: "wsc-hint" }, error ??
         (sessionId !== undefined
@@ -451,7 +458,7 @@ function ScopeModal(props) {
             React.createElement("span", { "data-count": visibleMcps.length }, visibleMcps.length),
             React.createElement(ChevronIcon, { className: "wsc-heading-chevron" })),
         !collapsed.mcps &&
-            (visibleMcps.length > 0 ? (React.createElement("ul", { className: "wsc-cards" }, visibleMcps.map((m) => renderRow(`mcp:${m.server}`, m.server, `${m.toolCount} 个工具`, "mcp", selectedMcps.has(m.server), () => toggleMcp(m.server))))) : (React.createElement("p", { className: "wsc-hint" }, "\u6CA1\u6709\u5339\u914D\u7684\u5168\u5C40 MCP \u670D\u52A1\u5668\u3002"))),
+            (visibleMcps.length > 0 ? (React.createElement("ul", { className: "wsc-cards" }, visibleMcps.map((m) => renderRow(`mcp:${m.server}`, m.server, `${m.toolCount} 个工具`, "mcp", selectedMcps.has(m.server), () => toggleMcp(m.server), m.tools)))) : (React.createElement("p", { className: "wsc-hint" }, "\u6CA1\u6709\u5339\u914D\u7684\u5168\u5C40 MCP \u670D\u52A1\u5668\u3002"))),
         React.createElement("div", { className: "wsc-actions" },
             React.createElement("button", { type: "button", className: "wsc-btn", onClick: allEnabled }, "\u5168\u90E8\u542F\u7528"),
             React.createElement("button", { type: "button", className: "wsc-btn", onClick: allDisabled }, "\u5168\u90E8\u7981\u7528")),
