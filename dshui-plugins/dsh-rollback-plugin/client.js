@@ -509,6 +509,7 @@ window.__ModuleLoader__.load({
 				const onEvent = () => {
 					const window = sessionEvents.getSnapshot();
 					if (window.change.kind === "replace") return;
+					if (window.change.kind !== "prepend" && window.change.kind !== "append") return;
 					if (!isModificationRelevant(window.change.entries)) return;
 					if (timer !== void 0) clearTimeout(timer);
 					timer = setTimeout(() => {

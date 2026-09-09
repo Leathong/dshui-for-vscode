@@ -10,10 +10,6 @@ window.__ModuleLoader__.load({
 		let react = require("react");
 		let _deepseek_ai_dsh_client_ui_primitives = require("@deepseek-ai/dsh-client-ui-primitives");
 		//#region ../../util/workspace-path/src/index.ts
-		/**
-		* Browser-safe Workspace path and display helpers.
-		* @module @deepseek-ai/dsh-util-workspace-path
-		*/
 		/** Whether a path uses a Windows drive or UNC prefix. */
 		function isWindowsStylePath(value) {
 			return /^[A-Za-z]:[/\\]/.test(value) || value.startsWith("\\\\");
@@ -73,6 +69,15 @@ window.__ModuleLoader__.load({
 				}
 			}
 			return indexed;
+		}
+		/**
+		* Resolve the Workspace browser group that owns one Session.
+		* @param workspaces - authoritative Workspace membership.
+		* @param sessionId - Session whose browser group is required.
+		* @returns owning Workspace id, or {@link UNGROUPED_KEY} when no Workspace accounts for it.
+		*/
+		function owningGroupKey(workspaces, sessionId) {
+			return workspaces.find((workspace) => workspace.sessionIds.includes(sessionId))?.workspaceId ?? "";
 		}
 		/**
 		* The dshui workspace scope: an absolute directory path the dshui host
@@ -236,7 +241,7 @@ window.__ModuleLoader__.load({
 			const deleted = new Set(deletedSessionIds);
 			const expandedGroups = new Set(view.expandedGroups);
 			const descendants = indexSubagentDescendants(list.byId);
-			const currentGroup = list.current === void 0 ? void 0 : workspaces.find((w) => w.sessionIds.includes(list.current))?.workspaceId ?? "";
+			const currentGroup = list.current === void 0 ? void 0 : owningGroupKey(workspaces, list.current);
 			const groups = [];
 			for (const g of groupByWorkspace(list, workspaces, archived, view.ungroupedOrder, deleted, scope)) {
 				const expanded = expandedGroups.has(g.key);
@@ -963,18 +968,25 @@ window.__ModuleLoader__.load({
 		* @param props.onRename - open the session rename dialog (id + current title).
 		* @param props.onFork - fork a session at its last completed turn.
 		* @param props.onDelete - delete this session by id (extension host removes the log).
+		* @param props.onReveal - scroll this row into view after search navigation, then acknowledge it.
 		* @param props.drag - optional draggable-row wiring.
 		* @param props.flat - omit the empty status slot in the hierarchy-free flat list.
 		* @param props.t - the browser root's locale seat.
 		* @returns the session row.
 		*/
-		function SessionNodeItem({ node, currentId, now, onOpen, onRename, onFork, onDelete, drag, flat = false, t }) {
+		function SessionNodeItem({ node, currentId, now, onOpen, onRename, onFork, onDelete, onReveal, drag, flat = false, t }) {
 			const row = node;
 			const title = displayTitle(node, t);
 			const selected = node.id === currentId;
 			const statuses = sessionStatuses(node, t);
 			const showStatus = statuses[0].state !== "done" || row.completed;
 			const [menuOpen, setMenuOpen] = (0, react.useState)(false);
+			const rowRef = (0, react.useRef)(null);
+			(0, react.useEffect)(() => {
+				if (onReveal === void 0) return;
+				rowRef.current?.scrollIntoView({ block: "nearest" });
+				onReveal();
+			}, [onReveal]);
 			const sessionMenuItems = [
 				{
 					id: "rename",
@@ -995,6 +1007,7 @@ window.__ModuleLoader__.load({
 			];
 			return (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.HoverCard, {
 				anchor: (0, react_jsx_runtime.jsxs)("div", {
+					ref: rowRef,
 					className: clsx(Rows_module_css_default.sessionRow, selected && Rows_module_css_default.selected, menuOpen && Rows_module_css_default.menuOpen, flat && !showStatus && Rows_module_css_default.flatSessionRowWithoutStatus, drag?.marker === "before" && Rows_module_css_default.dropBefore, drag?.marker === "after" && Rows_module_css_default.dropAfter),
 					role: "treeitem",
 					"aria-selected": selected,
@@ -1491,10 +1504,11 @@ window.__ModuleLoader__.load({
 			return e.clientY < rect.top + rect.height / 2 ? "before" : "after";
 		}
 		/** The scrolling session tree; unmounting drops the sessions subscription and expand-all state. */
-		function SessionTree({ useSessions, useSessionPendingInteraction, startSession, open, forkSession, workspaces, archivedSessionIds, onRenameRequest, onDeleteRequest, onSessionRename, onSessionDelete, scope, deletedSessionIds, insertWorkspaceBefore, insertSessionBefore, orderBy, groupExpansion, setGroupExpanded, sessionOrderByAccount, sessionUpdatedAtByAccount, syncSessionOrderAccount, setSessionOrder, home, t }) {
+		function SessionTree({ useSessions, useSessionPendingInteraction, startSession, open, forkSession, workspaces, archivedSessionIds, workspaceReady, onRenameRequest, onDeleteRequest, onSessionRename, onSessionDelete, scope, deletedSessionIds, insertWorkspaceBefore, insertSessionBefore, orderBy, groupExpansion, setGroupExpanded, sessionOrderByAccount, sessionUpdatedAtByAccount, syncSessionOrderAccount, setSessionOrder, home, t, revealSessionId, onSessionRevealed }) {
 			const list = useSessions((s) => s);
 			const pendingInteractions = useSessionPendingInteraction((s) => s);
 			const current = list.current;
+			const revealGroup = revealSessionId === void 0 || !workspaceReady ? void 0 : owningGroupKey(workspaces, revealSessionId);
 			const [expandedSessionGroups, setExpandedSessionGroups] = (0, react.useState)([]);
 			const [drag, setDrag] = (0, react.useState)(null);
 			const sessionDropCommitted = (0, react.useRef)(false);
@@ -1502,7 +1516,7 @@ window.__ModuleLoader__.load({
 			const workspaceDropCommitted = (0, react.useRef)(false);
 			const previousOrderBy = (0, react.useRef)(orderBy);
 			useNativeDragAcceptance(drag !== null || workspaceDrag !== null);
-			const currentGroup = current === void 0 ? void 0 : workspaces.find((w) => w.sessionIds.includes(current))?.workspaceId ?? "";
+			const currentGroup = current === void 0 || !workspaceReady ? void 0 : owningGroupKey(workspaces, current);
 			(0, react.useEffect)(() => {
 				if (current === void 0 || currentGroup === void 0 || Object.hasOwn(groupExpansion, currentGroup)) return;
 				setGroupExpanded(currentGroup, true);
@@ -1572,6 +1586,25 @@ window.__ModuleLoader__.load({
 				sessionOrderByAccount,
 				scope,
 				deletedSessionIds
+			]);
+			(0, react.useEffect)(() => {
+				if (revealGroup === void 0 || groupExpansion[revealGroup] === true) return;
+				setGroupExpanded(revealGroup, true);
+			}, [
+				groupExpansion,
+				revealGroup,
+				setGroupExpanded
+			]);
+			(0, react.useEffect)(() => {
+				if (revealSessionId === void 0 || revealGroup === void 0) return;
+				const group = groups.find((candidate) => candidate.key === revealGroup);
+				if (group === void 0 || !group.expanded || !group.sessions.some((row) => row.id === revealSessionId)) return;
+				if (collapsedSessionRows(group.sessions).rows.some((row) => row.id === revealSessionId)) return;
+				setExpandedSessionGroups((keys) => keys.includes(revealGroup) ? keys : [...keys, revealGroup]);
+			}, [
+				groups,
+				revealGroup,
+				revealSessionId
 			]);
 			const now = Date.now();
 			const commitSessionDrag = (activeDrag, over) => {
@@ -1725,6 +1758,41 @@ window.__ModuleLoader__.load({
 									}),
 									(sessionsExpanded ? group.sessions : collapsed.rows).map((node) => {
 										const sameGroupDrag = drag !== null && drag.accountKey === group.key;
+										const dragProps = {
+											start: () => {
+												sessionDropCommitted.current = false;
+												setDrag({
+													accountKey: group.key,
+													sessionId: node.id,
+													over: null
+												});
+											},
+											active: sameGroupDrag,
+											marker: sameGroupDrag && drag.over?.id === node.id ? drag.over.half : null,
+											hover: (half) => {
+												/* v8 ignore next -- narrowing guard: Rows gates hover on `active`, which is false while the drag state is null. */
+												setDrag((d) => d === null ? d : {
+													...d,
+													over: {
+														id: node.id,
+														half
+													}
+												});
+											},
+											drop: (half) => {
+												/* v8 ignore next -- narrowing guard: Rows gates drop on `active`, which is false while the drag state is null. */
+												if (drag === null) return;
+												commitSessionDrag(drag, {
+													id: node.id,
+													half
+												});
+											},
+											end: () => {
+												if (drag?.over !== null && drag?.over !== void 0) commitSessionDrag(drag, drag.over);
+												else setDrag(null);
+												sessionDropCommitted.current = false;
+											}
+										};
 										return (0, react_jsx_runtime.jsx)(SessionNodeItem, {
 											node,
 											currentId: current,
@@ -1733,41 +1801,10 @@ window.__ModuleLoader__.load({
 											onRename: onSessionRename,
 											onFork: forkSession,
 											onDelete: onSessionDelete,
-											drag: {
-												start: () => {
-													sessionDropCommitted.current = false;
-													setDrag({
-														accountKey: group.key,
-														sessionId: node.id,
-														over: null
-													});
-												},
-												active: sameGroupDrag,
-												marker: sameGroupDrag && drag.over?.id === node.id ? drag.over.half : null,
-												hover: (half) => {
-													/* v8 ignore next -- narrowing guard: Rows gates hover on `active`, which is false while the drag state is null. */
-													setDrag((d) => d === null ? d : {
-														...d,
-														over: {
-															id: node.id,
-															half
-														}
-													});
-												},
-												drop: (half) => {
-													/* v8 ignore next -- narrowing guard: Rows gates drop on `active`, which is false while the drag state is null. */
-													if (drag === null) return;
-													commitSessionDrag(drag, {
-														id: node.id,
-														half
-													});
-												},
-												end: () => {
-													if (drag?.over !== null && drag?.over !== void 0) commitSessionDrag(drag, drag.over);
-													else setDrag(null);
-													sessionDropCommitted.current = false;
-												}
-											},
+											onReveal: node.id === revealSessionId && group.key === revealGroup ? () => {
+												onSessionRevealed(node.id);
+											} : void 0,
+											drag: dragProps,
 											t
 										}, node.id);
 									}),
@@ -1789,7 +1826,7 @@ window.__ModuleLoader__.load({
 			});
 		}
 		/** The flat "In one list" body: every session is one draggable top-level row. */
-		function FlatList({ useSessions, useSessionPendingInteraction, open, forkSession, onSessionRename, onSessionDelete, archivedSessionIds, scope, deletedSessionIds, orderBy, sessionOrderByAccount, sessionUpdatedAtByAccount, syncSessionOrderAccount, setSessionOrder, t }) {
+		function FlatList({ useSessions, useSessionPendingInteraction, open, forkSession, onSessionRename, onSessionDelete, scope, deletedSessionIds, archivedSessionIds, orderBy, sessionOrderByAccount, sessionUpdatedAtByAccount, syncSessionOrderAccount, setSessionOrder, revealSessionId, onSessionRevealed, t }) {
 			const list = useSessions((s) => s);
 			const pendingInteractions = useSessionPendingInteraction((s) => s);
 			const baseRows = (0, react.useMemo)(() => deriveFlat(list, archivedSessionIds, pendingInteractions, scope, deletedSessionIds), [
@@ -1874,6 +1911,9 @@ window.__ModuleLoader__.load({
 							onRename: onSessionRename,
 							onFork: forkSession,
 							onDelete: onSessionDelete,
+							onReveal: node.id === revealSessionId ? () => {
+								onSessionRevealed(node.id);
+							} : void 0,
 							flat: true,
 							drag: {
 								start: () => {
@@ -1983,6 +2023,7 @@ window.__ModuleLoader__.load({
 			const home = useHostInfo((info) => info.home);
 			const workspaces = useWorkspaces((state) => state.items);
 			const workspacePhase = useWorkspaces((state) => state.phase);
+			const workspaceStreamState = useWorkspaces((state) => state.state);
 			const archivedSessionIds = useWorkspaces((state) => state.archivedSessionIds);
 			const scope = scopedWorkspacePath();
 			const [deletedSessionIds, setDeletedSessionIds] = (0, react.useState)([]);
@@ -1996,7 +2037,7 @@ window.__ModuleLoader__.load({
 				const current = state.current;
 				return current !== void 0 && state.byId[current]?.blank === true ? current : void 0;
 			});
-			const currentBlankAccount = currentBlankSessionId === void 0 ? void 0 : workspaces.find((workspace) => workspace.sessionIds.includes(currentBlankSessionId))?.workspaceId ?? "";
+			const currentBlankAccount = currentBlankSessionId === void 0 || workspacePhase !== "ready" ? void 0 : owningGroupKey(workspaces, currentBlankSessionId);
 			const promotedBlank = (0, react.useRef)(void 0);
 			(0, react.useEffect)(() => {
 				if (currentBlankSessionId === void 0 || currentBlankAccount === void 0) {
@@ -2033,6 +2074,7 @@ window.__ModuleLoader__.load({
 			]);
 			const [query, setQuery] = (0, react.useState)("");
 			const [searchExpanded, setSearchExpanded] = (0, react.useState)(false);
+			const [revealSessionId, setRevealSessionId] = (0, react.useState)(void 0);
 			const normalizedQuery = sanitizeSearchQuery(query).trim();
 			const [remoteSearch, setRemoteSearch] = (0, react.useState)({
 				query: "",
@@ -2045,6 +2087,18 @@ window.__ModuleLoader__.load({
 			const [wsPickerOpen, setWsPickerOpen] = (0, react.useState)(false);
 			const wsPlusRef = (0, react.useRef)(null);
 			const composingRef = (0, react.useRef)(false);
+			const openSearchResult = (sessionId) => {
+				setRevealSessionId(sessionId);
+				setQuery("");
+				setSearchExpanded(false);
+				open(sessionId);
+			};
+			const acknowledgeSessionReveal = (sessionId) => {
+				setRevealSessionId((current) => current === sessionId ? void 0 : current);
+			};
+			(0, react.useEffect)(() => {
+				if (normalizedQuery !== "") setRevealSessionId(void 0);
+			}, [normalizedQuery]);
 			const [searchOnExpand, setSearchOnExpand] = (0, react.useState)(false);
 			(0, react.useEffect)(() => {
 				if (wide && searchOnExpand) {
@@ -2353,7 +2407,7 @@ window.__ModuleLoader__.load({
 						children: wide && (normalizedQuery !== "" ? (0, react_jsx_runtime.jsx)(SearchResults, {
 							useSessions,
 							useSessionPendingInteraction,
-							open,
+							open: openSearchResult,
 							workspaces,
 							archivedSessionIds,
 							scope,
@@ -2369,22 +2423,27 @@ window.__ModuleLoader__.load({
 							forkSession,
 							onSessionRename,
 							onSessionDelete,
-							archivedSessionIds,
 							scope,
 							deletedSessionIds,
+							archivedSessionIds,
 							orderBy,
 							sessionOrderByAccount,
 							sessionUpdatedAtByAccount,
 							syncSessionOrderAccount: actions.syncSessionOrderAccount,
 							setSessionOrder: actions.setSessionOrder,
+							revealSessionId,
+							onSessionRevealed: acknowledgeSessionReveal,
 							t
 						}) : (0, react_jsx_runtime.jsx)(SessionTree, {
 							useSessions,
 							useSessionPendingInteraction,
 							onSessionRename,
 							onSessionDelete,
+							scope,
+							deletedSessionIds,
 							forkSession,
 							workspaces,
+							workspaceReady: workspacePhase === "ready" && workspaceStreamState !== "loading",
 							groupExpansion,
 							setGroupExpanded: actions.setGroupExpanded,
 							sessionOrderByAccount,
@@ -2392,13 +2451,13 @@ window.__ModuleLoader__.load({
 							syncSessionOrderAccount: actions.syncSessionOrderAccount,
 							setSessionOrder: actions.setSessionOrder,
 							archivedSessionIds,
-							scope,
-							deletedSessionIds,
 							startSession,
 							open,
 							insertWorkspaceBefore,
 							insertSessionBefore,
 							orderBy,
+							revealSessionId,
+							onSessionRevealed: acknowledgeSessionReveal,
 							home,
 							t,
 							onRenameRequest: (workspaceId, currentTitle) => {

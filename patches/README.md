@@ -3,7 +3,7 @@
 > 中文 · [English](README.en.md)
 
 `dshui-bundles.patch` 是对 [deepseek-harness](https://github.com/deepseek-ai/deepseek-harness) 源码的
-dshui 改动（26 个文件，含客户端 bundle + host 运行时两大部分）。客户端与 host 必须**对齐**到同一
+dshui 改动（45 个文件，含客户端 bundle + host 运行时两大部分）。客户端与 host 必须**对齐**到同一
 基提交并一起套用，因此合并为单个补丁——套一半都是不完整的。
 
 ## 客户端 bundle（浏览器 SPA）
@@ -70,13 +70,13 @@ dshui 改动（26 个文件，含客户端 bundle + host 运行时两大部分�
 补丁针对的基提交（**固定，不能漂移**）：
 
 ```
-a66e4702047846cdaa10c66c9d3df3951f5ea70d
+5dda764ed3aa172535a7967b06ff95d9cbfe536a
 ```
 
 ```sh
 git clone https://github.com/deepseek-ai/deepseek-harness.git .dsh-src
 cd .dsh-src
-git fetch origin a66e4702047846cdaa10c66c9d3df3951f5ea70d && git checkout FETCH_HEAD
+git fetch origin 5dda764ed3aa172535a7967b06ff95d9cbfe536a && git checkout FETCH_HEAD
 git apply ../patches/dshui-bundles.patch            # 基提交不匹配会安全失败
 pnpm install                                        # 需要 pnpm 11.7.0、Node ^22.19 || >=24
 pnpm run build:lib:host

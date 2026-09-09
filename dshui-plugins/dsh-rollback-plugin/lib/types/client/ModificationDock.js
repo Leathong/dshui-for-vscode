@@ -239,6 +239,10 @@ export function ModificationDock(props) {
             // The seeding baseline is a `replace`; the dock already reads it on mount.
             if (window.change.kind === 'replace')
                 return;
+            // Only delta kinds carry entries; a settlement carries no modification
+            // change (surface event, like stream chunks) and never alters the set.
+            if (window.change.kind !== 'prepend' && window.change.kind !== 'append')
+                return;
             if (!isModificationRelevant(window.change.entries))
                 return;
             if (timer !== undefined)

@@ -43,6 +43,8 @@ const WORKSPACE_GLOBS = [
   'vendor/*',
   'native/landlock-run',
   'native/landlock-run/packages/*',
+  'native/system',
+  'native/system/packages/*',
 ]
 
 /** Directory patterns to skip entirely (no runtime payload). */
@@ -119,6 +121,7 @@ function runtimeClosure(byName) {
     const deps = new Set([
       ...Object.keys(pkgObj.dependencies ?? {}),
       ...Object.keys(pkgObj.peerDependencies ?? {}),
+      ...Object.keys(pkgObj.optionalDependencies ?? {}),
     ])
     for (const dep of deps) {
       if (!dep.startsWith('@deepseek-ai/') || seen.has(dep)) continue
@@ -329,8 +332,14 @@ async function main() {
     const entry = byName.get(name)
     if (entry === undefined) { console.warn(`  ! ${name} 不在 workspace（跳过）`); continue }
     if (!fs.existsSync(path.join(entry.dir, 'lib'))) {
-      missingLib.push(name)
-      continue
+      // Platform-native packages ship a `bin/` payload (built binaries) and no
+      // JS lib; copy them through the files path instead of warning. A missing
+      // `bin/` (not built) is the real failure.
+      const binDir = path.join(entry.dir, 'bin')
+      if (!fs.existsSync(binDir) || fs.readdirSync(binDir).length === 0) {
+        missingLib.push(name)
+        continue
+      }
     }
     const scopeName = name.slice('@deepseek-ai/'.length)
     writePackage(entry, name, versionFor, path.join(targetRoot, scopeName), dshDeps)
