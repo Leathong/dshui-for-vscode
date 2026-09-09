@@ -2454,7 +2454,7 @@ var RollbackRestore = class {
 		return ok(session);
 	}
 	async selectFilePaths(prepared, request, provider) {
-		const requested = request.scope === "files" && request.paths !== void 0 && request.paths.length > 0 ? request.paths : void 0;
+		const requested = request.scope === "files" ? request.paths : void 0;
 		const normalizedRequested = requested?.map((item) => {
 			try {
 				return provider.normalizeRelPath(item);

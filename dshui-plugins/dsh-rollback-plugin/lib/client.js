@@ -905,12 +905,14 @@ window.__ModuleLoader__.load({
 				}
 			};
 			const togglePath = (path) => {
+				setScope("files");
 				const next = new Set(paths);
 				if (next.has(path)) next.delete(path);
 				else next.add(path);
 				setPaths(next);
 			};
 			const toggleModification = (id) => {
+				setScope("modifications");
 				const next = new Set(modificationIds);
 				if (next.has(id)) next.delete(id);
 				else next.add(id);
@@ -963,6 +965,7 @@ window.__ModuleLoader__.load({
 				scope,
 				t
 			]);
+			const emptySelection = scope === "files" ? paths.size === 0 : scope === "modifications" ? modificationIds.size === 0 : false;
 			return (0, react_jsx_runtime.jsxs)("span", {
 				style: {
 					display: "inline-flex",
@@ -1123,6 +1126,7 @@ window.__ModuleLoader__.load({
 										onClick: () => {
 											runExecute();
 										},
+										disabled: emptySelection,
 										children: t("confirm")
 									})]
 								})

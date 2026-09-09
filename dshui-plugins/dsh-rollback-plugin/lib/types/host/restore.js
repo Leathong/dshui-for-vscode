@@ -351,9 +351,11 @@ export class RollbackRestore {
         return ok(session);
     }
     async selectFilePaths(prepared, request, provider) {
-        const requested = request.scope === 'files' && request.paths !== undefined && request.paths.length > 0
-            ? request.paths
-            : undefined;
+        // scope=files distinguishes an absent paths field (undefined → every
+        // restorable change, the documented legacy meaning) from an explicit
+        // selection: a present but empty array means the user unchecked every
+        // file, which must restore nothing instead of falling back to "all".
+        const requested = request.scope === 'files' ? request.paths : undefined;
         const normalizedRequested = requested?.map(item => {
             try {
                 return provider.normalizeRelPath(item);
