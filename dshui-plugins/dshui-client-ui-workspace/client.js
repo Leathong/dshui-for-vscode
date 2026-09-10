@@ -370,6 +370,7 @@ window.__ModuleLoader__.load({
 			workspaces;
 			sessions;
 			connecting = /* @__PURE__ */ new Map();
+			lifetime = new AbortController();
 			/**
 			* @param ctx - Client root Context.
 			* @param directoryPicker - the directory-picking Remote namespace.
@@ -400,6 +401,26 @@ window.__ModuleLoader__.load({
 				this.connecting.set(workspaceId, attempt);
 				return attempt;
 			}
+			openSession(sessionId) {
+				this.sessions.open(sessionId);
+				this.ctx.layout.selectPanel(null);
+			}
+			async openWorkspace(workspaceId, beforeOpen) {
+				const navigation = AbortSignal.any([this.ctx.layout.beginNavigation(), this.lifetime.signal]);
+				const isCurrent = () => !navigation.aborted;
+				const sessionId = await this.connectWorkspace(workspaceId);
+				if (!isCurrent()) return;
+				beforeOpen?.(sessionId);
+				if (isCurrent()) this.openSession(sessionId);
+			}
+			async forkSession(sessionId) {
+				const navigation = AbortSignal.any([this.ctx.layout.beginNavigation(), this.lifetime.signal]);
+				const childId = await this.sessions.fork({
+					sessionId,
+					increaseTitle: true
+				});
+				if (!navigation.aborted) this.openSession(childId);
+			}
 			startSession(workspaceId) {
 				const workspace = this.workspaces.list.getSnapshot();
 				const sessions = this.sessions.list.getSnapshot();
@@ -410,11 +431,10 @@ window.__ModuleLoader__.load({
 				const target = workspaceId ?? (scoped !== void 0 ? scoped : currentWorkspaceId ?? recent);
 				if (target === void 0) {
 					this.sessions.clear();
+					this.ctx.layout.selectPanel(null);
 					return;
 				}
-				this.connectWorkspace(target).then((sessionId) => {
-					this.sessions.open(sessionId);
-				}, (reason) => {
+				this.openWorkspace(target).catch((reason) => {
 					console.warn("new session failed:", reason);
 				});
 			}
@@ -438,20 +458,19 @@ window.__ModuleLoader__.load({
 			}
 			watchNavigation() {
 				let initial = "waiting";
-				let disposed = false;
 				const attempt = (target) => {
 					this.connectWorkspace(target).then((sessionId) => {
-						if (disposed) return;
+						if (this.lifetime.signal.aborted) return;
 						if (this.sessions.list.getSnapshot().current === void 0) this.sessions.open(sessionId);
 						initial = "done";
 					}, (reason) => {
-						if (disposed) return;
+						if (this.lifetime.signal.aborted) return;
 						initial = "waiting";
 						console.warn("initial workspace selection failed:", reason);
 					});
 				};
 				const reconcile = () => {
-					if (disposed) return;
+					if (this.lifetime.signal.aborted) return;
 					if (this.clearArchivedCurrent()) {
 						initial = "waiting";
 						return;
@@ -485,7 +504,7 @@ window.__ModuleLoader__.load({
 				const disposeSessions = this.sessions.list.subscribe(reconcile);
 				reconcile();
 				return () => {
-					disposed = true;
+					this.lifetime.abort();
 					disposeSessions();
 					disposeWorkspaces();
 				};
@@ -1504,10 +1523,11 @@ window.__ModuleLoader__.load({
 			return e.clientY < rect.top + rect.height / 2 ? "before" : "after";
 		}
 		/** The scrolling session tree; unmounting drops the sessions subscription and expand-all state. */
-		function SessionTree({ useSessions, useSessionPendingInteraction, startSession, open, forkSession, workspaces, archivedSessionIds, workspaceReady, onRenameRequest, onDeleteRequest, onSessionRename, onSessionDelete, scope, deletedSessionIds, insertWorkspaceBefore, insertSessionBefore, orderBy, groupExpansion, setGroupExpanded, sessionOrderByAccount, sessionUpdatedAtByAccount, syncSessionOrderAccount, setSessionOrder, home, t, revealSessionId, onSessionRevealed }) {
+		function SessionTree({ useSessions, useSessionPendingInteraction, startSession, open, forkSession, workspaces, archivedSessionIds, workspaceReady, usePanelInfo, onRenameRequest, onDeleteRequest, onSessionRename, onSessionDelete, scope, deletedSessionIds, insertWorkspaceBefore, insertSessionBefore, orderBy, groupExpansion, setGroupExpanded, sessionOrderByAccount, sessionUpdatedAtByAccount, syncSessionOrderAccount, setSessionOrder, home, t, revealSessionId, onSessionRevealed }) {
+			const panelActive = usePanelInfo((info) => info.activePanelId !== null);
 			const list = useSessions((s) => s);
 			const pendingInteractions = useSessionPendingInteraction((s) => s);
-			const current = list.current;
+			const current = panelActive ? void 0 : list.current;
 			const revealGroup = revealSessionId === void 0 || !workspaceReady ? void 0 : owningGroupKey(workspaces, revealSessionId);
 			const [expandedSessionGroups, setExpandedSessionGroups] = (0, react.useState)([]);
 			const [drag, setDrag] = (0, react.useState)(null);
@@ -1826,7 +1846,8 @@ window.__ModuleLoader__.load({
 			});
 		}
 		/** The flat "In one list" body: every session is one draggable top-level row. */
-		function FlatList({ useSessions, useSessionPendingInteraction, open, forkSession, onSessionRename, onSessionDelete, scope, deletedSessionIds, archivedSessionIds, orderBy, sessionOrderByAccount, sessionUpdatedAtByAccount, syncSessionOrderAccount, setSessionOrder, revealSessionId, onSessionRevealed, t }) {
+		function FlatList({ useSessions, useSessionPendingInteraction, open, forkSession, onSessionRename, onSessionDelete, scope, deletedSessionIds, archivedSessionIds, usePanelInfo, orderBy, sessionOrderByAccount, sessionUpdatedAtByAccount, syncSessionOrderAccount, setSessionOrder, revealSessionId, onSessionRevealed, t }) {
+			const panelActive = usePanelInfo((info) => info.activePanelId !== null);
 			const list = useSessions((s) => s);
 			const pendingInteractions = useSessionPendingInteraction((s) => s);
 			const baseRows = (0, react.useMemo)(() => deriveFlat(list, archivedSessionIds, pendingInteractions, scope, deletedSessionIds), [
@@ -1905,7 +1926,7 @@ window.__ModuleLoader__.load({
 						const active = drag !== null;
 						return (0, react_jsx_runtime.jsx)(SessionNodeItem, {
 							node,
-							currentId: list.current,
+							currentId: panelActive ? void 0 : list.current,
 							now,
 							onOpen: open,
 							onRename: onSessionRename,
@@ -1954,7 +1975,8 @@ window.__ModuleLoader__.load({
 			});
 		}
 		/** Flat search body: local metadata matches plus the current Host result page. */
-		function SearchResults({ useSessions, useSessionPendingInteraction, open, workspaces, archivedSessionIds, scope, deletedSessionIds, query, remote, resultLimit, t }) {
+		function SearchResults({ useSessions, useSessionPendingInteraction, open, workspaces, archivedSessionIds, scope, deletedSessionIds, query, remote, resultLimit, usePanelInfo, t }) {
+			const panelActive = usePanelInfo((info) => info.activePanelId !== null);
 			const list = useSessions((s) => s);
 			const pendingInteractions = useSessionPendingInteraction((s) => s);
 			const currentRemote = remote.query === query ? remote : {
@@ -1987,7 +2009,7 @@ window.__ModuleLoader__.load({
 							"aria-label": t("search.results.aria"),
 							children: results.items.map((result) => (0, react_jsx_runtime.jsx)(SearchResultItem, {
 								result,
-								currentId: list.current,
+								currentId: panelActive ? void 0 : list.current,
 								onOpen: open,
 								t
 							}, result.id))
@@ -2019,7 +2041,7 @@ window.__ModuleLoader__.load({
 		* @param props - composed slot props (shell owner share + store + injected actions).
 		* @returns the region element tree.
 		*/
-		function WorkspaceBrowser({ wide, expandSidebar, useSessions, useSessionPendingInteraction, useWorkspaces, useStore, actions, startSession, open, renameSession, forkSession, renameWorkspace, deleteWorkspace, insertWorkspaceBefore, deleteSession, insertSessionBefore, createWorkspace, searchSessions, searchResultLimit, useDirectoryFlow, useHostInfo, renderSlot, t }) {
+		function WorkspaceBrowser({ wide, usePanelInfo, expandSidebar, useSessions, useSessionPendingInteraction, useWorkspaces, useStore, actions, startSession, open, renameSession, forkSession, renameWorkspace, deleteWorkspace, insertWorkspaceBefore, deleteSession, insertSessionBefore, createWorkspace, searchSessions, searchResultLimit, useDirectoryFlow, useHostInfo, renderSlot, t }) {
 			const home = useHostInfo((info) => info.home);
 			const workspaces = useWorkspaces((state) => state.items);
 			const workspacePhase = useWorkspaces((state) => state.phase);
@@ -2405,6 +2427,7 @@ window.__ModuleLoader__.load({
 					(0, react_jsx_runtime.jsx)("div", {
 						className: WorkspaceBrowser_module_css_default.listArea,
 						children: wide && (normalizedQuery !== "" ? (0, react_jsx_runtime.jsx)(SearchResults, {
+							usePanelInfo,
 							useSessions,
 							useSessionPendingInteraction,
 							open: openSearchResult,
@@ -2417,6 +2440,7 @@ window.__ModuleLoader__.load({
 							resultLimit: searchResultLimit,
 							t
 						}) : groupBy === "flat" ? (0, react_jsx_runtime.jsx)(FlatList, {
+							usePanelInfo,
 							useSessions,
 							useSessionPendingInteraction,
 							open,
@@ -2435,6 +2459,7 @@ window.__ModuleLoader__.load({
 							onSessionRevealed: acknowledgeSessionReveal,
 							t
 						}) : (0, react_jsx_runtime.jsx)(SessionTree, {
+							usePanelInfo,
 							useSessions,
 							useSessionPendingInteraction,
 							onSessionRename,
@@ -2767,7 +2792,8 @@ window.__ModuleLoader__.load({
 			"workspaces",
 			"locale",
 			"remote",
-			"remote.directoryPicker"
+			"remote.directoryPicker",
+			"layout"
 		];
 		/**
 		* Register the browser and picker once their slot declarations are on the
@@ -2799,13 +2825,14 @@ window.__ModuleLoader__.load({
 				subscribe: (listener) => ctx.on("connection/reset", listener)
 			};
 			const pickerFlowSource = flowSource("conversation.hero.workspace.directoryFlow");
+			const openSession = (sessionId) => {
+				uiWorkspace.openSession(sessionId);
+			};
 			const browserInjected = () => ({
 				startSession: (workspaceId) => {
 					uiWorkspace.startSession(workspaceId);
 				},
-				open: (sessionId) => {
-					sessions.open(sessionId);
-				},
+				open: openSession,
 				searchSessions,
 				searchResultLimit: sessions.searchResultLimit,
 				renameSession: async (sessionId, title) => {
@@ -2815,12 +2842,7 @@ window.__ModuleLoader__.load({
 					if (!result.ok) throw new Error(result.error.message);
 				},
 				forkSession: (sessionId) => {
-					sessions.fork({
-						sessionId,
-						increaseTitle: true
-					}).then((childId) => {
-						sessions.open(childId);
-					}).catch(() => {});
+					uiWorkspace.forkSession(sessionId).catch(() => {});
 				},
 				renameWorkspace: async (workspaceId, title) => {
 					await workspaces.rename(workspaceId, title);

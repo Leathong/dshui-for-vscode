@@ -25,46 +25,47 @@ index 35fc113408..98e977dc27 100644
        throw new RemoteError(
          'gateway/internal',
 diff --git a/packages/api/session-controller/src/index.ts b/packages/api/session-controller/src/index.ts
-index 9cc93be179..acd9273a39 100644
+index b5e92ec6e9..cb3f5efbf8 100644
 --- a/packages/api/session-controller/src/index.ts
 +++ b/packages/api/session-controller/src/index.ts
-@@ -4,7 +4,7 @@ import { Context } from '@deepseek-ai/cordis'
+@@ -5,7 +5,7 @@ import { Context } from '@deepseek-ai/cordis'
  import z from '@deepseek-ai/schemastery'
  import { errorChain } from '@deepseek-ai/dsh-llm'
  import type {} from '@deepseek-ai/dsh-client-file-upload'
--import { canOpenNativePath, openNativePath } from '@deepseek-ai/dsh-native-command'
-+import { canOpenNativePath, openNativePath, type PathOpenerInternals } from '@deepseek-ai/dsh-native-command'
+-import { canOpenNativePath, nativeFileManager, openNativePath, revealNativePath } from '@deepseek-ai/dsh-native-command'
++import { canOpenNativePath, nativeFileManager, openNativePath, revealNativePath, type PathOpenerInternals } from '@deepseek-ai/dsh-native-command'
  import type { SessionId } from '@deepseek-ai/dsh-session'
  import type { SessionInspection } from '@deepseek-ai/dsh-session-persistence'
  import type { SessionObservation } from '@deepseek-ai/dsh-session-query'
-@@ -104,7 +104,7 @@ export class SessionController extends TypertRemoteService {
+@@ -107,7 +107,7 @@ export class SessionController extends TypertRemoteService {
    private readonly controlState: SessionControlController
    private readonly history: SessionHistoryController
    private readonly listState: ApiSessionList
 -  private readonly openPath: (path: string, signal: AbortSignal) => Promise<void>
 +  private readonly openPath: (path: string, signal: AbortSignal, internals?: PathOpenerInternals) => Promise<void>
+   private readonly revealPath: (path: string, signal: AbortSignal) => Promise<void>
    private readonly canOpenPath: () => boolean
    private readonly promotions = new Set<Promise<void>>()
- 
-@@ -289,7 +289,11 @@ export class SessionController extends TypertRemoteService {
+@@ -303,8 +303,12 @@ export class SessionController extends TypertRemoteService {
      }
      signal.throwIfAborted()
      try {
--      await this.openPath(request.path, signal)
 +      // dshui patch: thread the click origin down to the opener internals so
 +      // the bridge router prefers the window the click happened in over
 +      // workspace longest-prefix ownership.
 +      const dshuiOrigin = request.dshuiOrigin
-+      await this.openPath(request.path, signal, dshuiOrigin === undefined ? {} : { dshuiOrigin })
+       if (request.action === 'reveal') await this.revealPath(request.path, signal)
+-      else await this.openPath(request.path, signal)
++      else await this.openPath(request.path, signal, dshuiOrigin === undefined ? {} : { dshuiOrigin })
        return { opened: true }
      } catch (error: unknown) {
        if (signal.aborted) throw new RemoteError('gateway/cancelled', 'path open was aborted', {})
 diff --git a/packages/api/session-controller/src/types.ts b/packages/api/session-controller/src/types.ts
-index 607baed3cf..96c9eb4838 100644
+index 60f7a93e56..b677faf8da 100644
 --- a/packages/api/session-controller/src/types.ts
 +++ b/packages/api/session-controller/src/types.ts
-@@ -360,6 +360,12 @@ export interface SessionCancelValue {
- export interface SessionOpenWorkspacePathRequest {
+@@ -362,6 +362,12 @@ export interface SessionOpenWorkspacePathRequest {
+   readonly action?: 'reveal'
    /** Path after best-effort Session workspace resolution, in Host filesystem syntax. */
    readonly path: string
 +  /**
@@ -181,10 +182,10 @@ index 1661f505bc..f783691413 100644
 +  })
  })
 diff --git a/packages/api/session-controller/tests/session-open-workspace-path.host.spec.ts b/packages/api/session-controller/tests/session-open-workspace-path.host.spec.ts
-index ee199ddcdd..7aae8e4ca3 100644
+index eb789cb374..d1d093d06e 100644
 --- a/packages/api/session-controller/tests/session-open-workspace-path.host.spec.ts
 +++ b/packages/api/session-controller/tests/session-open-workspace-path.host.spec.ts
-@@ -60,10 +60,27 @@ describe('session/openWorkspacePath', () => {
+@@ -61,10 +61,27 @@ describe('session/openWorkspacePath', () => {
  
      await expect(remote.openWorkspacePath({ path: '/workspace/project/src/a.ts' }, signal))
        .resolves.toEqual({ ok: true, value: { opened: true } })
@@ -414,13 +415,13 @@ index 7104855a97..26bff40b6b 100644
  }
  
 diff --git a/packages/client/ui-chat/src/client/apply.ts b/packages/client/ui-chat/src/client/apply.ts
-index 2d8de50561..1db6d86366 100644
+index ef23ade8bb..35ec05d803 100644
 --- a/packages/client/ui-chat/src/client/apply.ts
 +++ b/packages/client/ui-chat/src/client/apply.ts
 @@ -8,7 +8,7 @@ import type { SessionId } from '@deepseek-ai/dsh-session/types'
  import type {} from '@deepseek-ai/dsh-client-ui-sidebar-right/client'
  // The `file` entry of `SidebarRightResourceParamsMap`, which types `{ params: { line } }` below.
- import type {} from '@deepseek-ai/dsh-client-ui-sidebar-textpreview/client'
+ import type {} from '@deepseek-ai/dsh-client-ui-sidebar-documentpreview/client'
 -import { fileAddressFor } from '@deepseek-ai/dsh-util-workspace-path'
 +import { resolveWorkspacePath } from '@deepseek-ai/dsh-util-workspace-path'
  // Type-only service and declaration merges used by the apply world.
@@ -500,7 +501,7 @@ index 8ff8eca3e0..661d99cdd8 100644
              />
            ))}
 diff --git a/packages/client/ui-chat/src/client/chat/MessageItem.module.css b/packages/client/ui-chat/src/client/chat/MessageItem.module.css
-index 2f44408b33..6a7247cc68 100644
+index 8507492a70..e7894367b8 100644
 --- a/packages/client/ui-chat/src/client/chat/MessageItem.module.css
 +++ b/packages/client/ui-chat/src/client/chat/MessageItem.module.css
 @@ -346,3 +346,31 @@
@@ -536,7 +537,7 @@ index 2f44408b33..6a7247cc68 100644
 +  text-decoration: underline;
 +}
 diff --git a/packages/client/ui-chat/src/client/chat/MessageItem.tsx b/packages/client/ui-chat/src/client/chat/MessageItem.tsx
-index fc4f257048..4124325ecb 100644
+index f4e0fffa54..719f51b3ad 100644
 --- a/packages/client/ui-chat/src/client/chat/MessageItem.tsx
 +++ b/packages/client/ui-chat/src/client/chat/MessageItem.tsx
 @@ -2,6 +2,7 @@ import { Fragment, memo, useEffect, useMemo, useState } from 'react'
@@ -544,10 +545,10 @@ index fc4f257048..4124325ecb 100644
  import type { PendingSubmission } from '@deepseek-ai/dsh-api-session-controller/client'
  import type { MessageImageSource } from '@deepseek-ai/dsh-client-ui-conversation/client'
 +import type { PropsRenderSlots } from '@deepseek-ai/dsh-client-ui-slots'
- import { DocumentFileIcon, fileSizeText, JsonBlock, projectUserText, StateDot } from '@deepseek-ai/dsh-client-ui-primitives'
+ import { fileExtension, FileTypeIcon, fileSizeText, JsonBlock, projectUserText, StateDot } from '@deepseek-ai/dsh-client-ui-primitives'
  import type { ChatNodeOwnerProps, ChatNodeViewProps, ChatViewSlotProps } from '../contract/slots.ts'
  import type { ModelRetryNode, TurnErrorNode, UserMessageNode } from '../contract/snapshot.ts'
-@@ -159,13 +160,95 @@ function TurnMaxTokensItem({ t }: {
+@@ -153,13 +154,95 @@ function TurnMaxTokensItem({ t }: {
    )
  }
  
@@ -644,7 +645,7 @@ index fc4f257048..4124325ecb 100644
    /** Optional IconActions (or similar) below the bubble; receives the joined text. */
    actions?: (text: string) => ReactNode
    /** Whether this is the Host-authoritative pre-admission steering projection. */
-@@ -219,7 +302,7 @@ function UserStyleBubble({
+@@ -213,7 +296,7 @@ function UserStyleBubble({
            </div>
          )}
          {showBubble && <div className={css.bubble}>
@@ -653,7 +654,7 @@ index fc4f257048..4124325ecb 100644
            {rest.map((block, i) => <JsonBlock key={i} label={t('message.extraBlock')} payload={block} truncatedLabel={truncated} />)}
          </div>}
          {referenceLabels.length > 0 && (
-@@ -239,15 +322,17 @@ function UserStyleBubble({
+@@ -233,15 +316,17 @@ function UserStyleBubble({
   * @param props - Pending message content and conversation translator.
   * @returns the pending steering bubble.
   */
@@ -672,7 +673,7 @@ index fc4f257048..4124325ecb 100644
        pending
        t={t}
        actions={text => (
-@@ -270,9 +355,10 @@ export function PendingSteeringBubble({ content, renderMessageImages, t }: {
+@@ -264,9 +349,10 @@ export function PendingSteeringBubble({ content, renderMessageImages, t }: {
   * @param props - the session snapshot's pending submission and render seats.
   * @returns the echoed user bubble.
   */
@@ -684,7 +685,7 @@ index fc4f257048..4124325ecb 100644
    t: ChatViewSlotProps['t']
  }): ReactNode {
    const content = useMemo(
-@@ -300,6 +386,7 @@ export function PendingSubmissionBubble({ submission, renderMessageImages, t }:
+@@ -294,6 +380,7 @@ export function PendingSubmissionBubble({ submission, renderMessageImages, t }:
        content={content}
        previewAttachments={previewAttachments}
        renderMessageImages={renderMessageImages}
@@ -692,7 +693,7 @@ index fc4f257048..4124325ecb 100644
        pending={submission.placement === 'steering'}
        echo
        t={t}
-@@ -318,13 +405,47 @@ export function PendingSubmissionBubble({ submission, renderMessageImages, t }:
+@@ -312,13 +399,47 @@ export function PendingSubmissionBubble({ submission, renderMessageImages, t }:
  
  /** User and admitted-steering keyed Chat renderer. */
  export const UserMessageNodeView = memo(function UserMessageNodeView({
@@ -775,7 +776,7 @@ index e58ec4a9ad..8ef22bd89d 100644
      { name: 'conversation.chat.node', key: 'context', locale: NS }, ContextMessageNodeView))
    ctx.slots.inject('conversation.chat.node', () => ctx.slots.register(
 diff --git a/packages/client/ui-chat/src/client/contract/slots.ts b/packages/client/ui-chat/src/client/contract/slots.ts
-index 3fb8bcfcee..6728487ef2 100644
+index b5c3a45b99..49fa44e09b 100644
 --- a/packages/client/ui-chat/src/client/contract/slots.ts
 +++ b/packages/client/ui-chat/src/client/contract/slots.ts
 @@ -48,6 +48,17 @@ export interface AssistantActionOwnerProps {
@@ -796,7 +797,7 @@ index 3fb8bcfcee..6728487ef2 100644
  /** Optional prose file-mention provider consumed by Chat. */
  export interface ChatFileMentions {
    /**
-@@ -210,5 +221,13 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
+@@ -211,5 +222,13 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
       * that entry. With no entries, the standard action row remains unchanged.
       */
      'conversation.chat.assistant-actions': { kind: 'list'; scope: 'session'; owner: AssistantActionOwnerProps }
@@ -811,10 +812,10 @@ index 3fb8bcfcee..6728487ef2 100644
    }
  }
 diff --git a/packages/client/ui-chat/tests/apply-inject.client.spec.tsx b/packages/client/ui-chat/tests/apply-inject.client.spec.tsx
-index 590cc5602c..7e0babf047 100644
+index 1e8f4e12f7..d3fc77d29d 100644
 --- a/packages/client/ui-chat/tests/apply-inject.client.spec.tsx
 +++ b/packages/client/ui-chat/tests/apply-inject.client.spec.tsx
-@@ -155,6 +155,42 @@ describe('Chat inject API', () => {
+@@ -160,6 +160,42 @@ describe('Chat inject API', () => {
      await b.runtime.dispose()
    })
  
@@ -858,7 +859,7 @@ index 590cc5602c..7e0babf047 100644
      const b = await bench()
      const entry = b.runtime.slots.entries('conversation.view')[0]!
 diff --git a/packages/client/ui-chat/tests/chat-branch-tails.client.spec.tsx b/packages/client/ui-chat/tests/chat-branch-tails.client.spec.tsx
-index 5991449f44..940fd30ac3 100644
+index a349f34576..0a97739df5 100644
 --- a/packages/client/ui-chat/tests/chat-branch-tails.client.spec.tsx
 +++ b/packages/client/ui-chat/tests/chat-branch-tails.client.spec.tsx
 @@ -1,6 +1,7 @@
@@ -988,7 +989,7 @@ index 5991449f44..940fd30ac3 100644
      const view = render(
        <MessageItem t={t} node={{
 diff --git a/packages/client/ui-chat/tests/chat-view.client.spec.tsx b/packages/client/ui-chat/tests/chat-view.client.spec.tsx
-index 7b72d280dc..faaa5b546b 100644
+index 5e9033bdd0..32cd06cba0 100644
 --- a/packages/client/ui-chat/tests/chat-view.client.spec.tsx
 +++ b/packages/client/ui-chat/tests/chat-view.client.spec.tsx
 @@ -33,8 +33,8 @@ import { zh } from '../src/client/locale.ts'
@@ -1027,10 +1028,10 @@ index 7b72d280dc..faaa5b546b 100644
          return <ContextMessageNodeView {...nodeProps<'context'>()} />
        case 'assistant-step':
 diff --git a/packages/client/ui-conversation/src/client/apply.ts b/packages/client/ui-conversation/src/client/apply.ts
-index 65b8374919..e3679d2a02 100644
+index 7eba82cfc0..5fb032f693 100644
 --- a/packages/client/ui-conversation/src/client/apply.ts
 +++ b/packages/client/ui-conversation/src/client/apply.ts
-@@ -101,10 +101,8 @@ function scopedConversation(sessions: ISessions, id: SessionId): IConversation {
+@@ -104,10 +104,8 @@ function scopedConversation(sessions: ISessions, id: SessionId): IConversation {
  }
  
  /** Resolve package-internal attachment operations from the public service. */
@@ -1043,7 +1044,7 @@ index 65b8374919..e3679d2a02 100644
  }
  
  /**
-@@ -241,7 +239,11 @@ export function apply(ctx: Context, config: Config = Config({})): void {
+@@ -243,7 +241,11 @@ export function apply(ctx: Context, config: Config = Config({})): void {
              if (sessions.binding(nextId) === undefined) {
                throw new Error(`ui-conversation: session "${nextId}" resolved no binding`)
              }
@@ -1056,7 +1057,7 @@ index 65b8374919..e3679d2a02 100644
              if (draft !== '') {
                next.setDraft(draft)
                from.setDraft('')
-@@ -305,26 +307,33 @@ export function apply(ctx: Context, config: Config = Config({})): void {
+@@ -306,26 +308,33 @@ export function apply(ctx: Context, config: Config = Config({})): void {
        'conversation.composer.dock': { kind: 'list', scope: 'session' },
      },
      inject: (sessionId: SessionId | undefined): ComposerBarInjected => {
@@ -1110,10 +1111,10 @@ index 65b8374919..e3679d2a02 100644
        const inputTriggers = inputHub.inputTriggers(sessionId)
        return {
 diff --git a/packages/client/ui-conversation/src/client/skeleton/ConversationRoot.module.css b/packages/client/ui-conversation/src/client/skeleton/ConversationRoot.module.css
-index f988537220..9e8a99d8de 100644
+index 22420cc8d8..9b1f2ce845 100644
 --- a/packages/client/ui-conversation/src/client/skeleton/ConversationRoot.module.css
 +++ b/packages/client/ui-conversation/src/client/skeleton/ConversationRoot.module.css
-@@ -462,8 +462,25 @@
+@@ -469,8 +469,25 @@
    overflow-y: auto;
  }
  
@@ -1393,10 +1394,10 @@ index 1a5f45d7ee..8fe87db0f3 100644
          const { message } = result.error
          this.store.update((state) => { state.error = message })
 diff --git a/packages/client/ui-settings-general/tests/components.client.spec.tsx b/packages/client/ui-settings-general/tests/components.client.spec.tsx
-index c3daeaaeb6..ac034000f3 100644
+index c9cb8eadad..99ed7e7910 100644
 --- a/packages/client/ui-settings-general/tests/components.client.spec.tsx
 +++ b/packages/client/ui-settings-general/tests/components.client.spec.tsx
-@@ -21,7 +21,10 @@ function derivedDocumentStore(remote: object) {
+@@ -22,7 +22,10 @@ function derivedDocumentStore(remote: object) {
  }
  import { en } from '../src/client/locales.ts'
  
@@ -1408,7 +1409,7 @@ index c3daeaaeb6..ac034000f3 100644
  
  // The seat's key domain is settings ∪ common; the stub answers from the
  // package dictionary and falls back to the key like the real chain.
-@@ -94,7 +97,31 @@ describe('SettingsDocumentAction', () => {
+@@ -95,7 +98,31 @@ describe('SettingsDocumentAction', () => {
      />)
      const action = await screen.findByRole('button', { name: 'Open configuration file' })
      fireEvent.click(action)
@@ -1475,10 +1476,10 @@ index df17251c38..1b005d319d 100644
     * Reorder a session inside its Workspace account (DOM-insertBefore
     * semantics: omitted anchor appends to the end). The view refreshes from
 diff --git a/packages/client/ui-workspace/src/client/index.ts b/packages/client/ui-workspace/src/client/index.ts
-index 7c8e1108dc..9c167cc228 100644
+index 9204fe7774..59e6263fa7 100644
 --- a/packages/client/ui-workspace/src/client/index.ts
 +++ b/packages/client/ui-workspace/src/client/index.ts
-@@ -122,7 +122,22 @@ export function apply(ctx: Context): void {
+@@ -125,7 +125,22 @@ export function apply(ctx: Context): void {
      insertWorkspaceBefore: async (workspaceId, beforeWorkspaceId) => {
        await workspaces.insertBefore(workspaceId, beforeWorkspaceId)
      },
@@ -1525,18 +1526,18 @@ index af0f535b68..dd5837c658 100644
    'sessions.count.other': '{n} sessions',
    'actions.workspace.aria': 'Workspace actions for {name}',
 diff --git a/packages/client/ui-workspace/src/client/navigation.ts b/packages/client/ui-workspace/src/client/navigation.ts
-index a460afe23a..b237986ee1 100644
+index c968595d8a..f9d7902f9b 100644
 --- a/packages/client/ui-workspace/src/client/navigation.ts
 +++ b/packages/client/ui-workspace/src/client/navigation.ts
-@@ -10,6 +10,7 @@ import type {
-   IWorkspaces, WorkspaceId, WorkspaceView,
+@@ -11,6 +11,7 @@ import type {
  } from '@deepseek-ai/dsh-api-workspace-controller/client'
  import type { SessionId } from '@deepseek-ai/dsh-session/types'
+ import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
 +import { scopedWorkspacePath } from './tree.ts'
  
  /** Workspace archive and directory operations consumed by Client UI domains. */
  export interface UiWorkspace {
-@@ -121,7 +122,11 @@ class UiWorkspaceService extends Service implements UiWorkspace {
+@@ -161,7 +162,11 @@ class UiWorkspaceService extends Service implements UiWorkspace {
      const recent = workspace.phase === 'ready' && sessions.phase === 'ready'
        ? recentWorkspace(workspace.items, sessions.byId)
        : undefined
@@ -1548,29 +1549,29 @@ index a460afe23a..b237986ee1 100644
 +    const target = workspaceId ?? (scoped !== undefined ? scoped : currentWorkspaceId ?? recent)
      if (target === undefined) {
        this.sessions.clear()
-       return
-@@ -157,10 +162,28 @@ class UiWorkspaceService extends Service implements UiWorkspace {
+       this.ctx.layout.selectPanel(null)
+@@ -196,10 +201,28 @@ class UiWorkspaceService extends Service implements UiWorkspace {
+ 
    private watchNavigation(): () => void {
      let initial: 'waiting' | 'connecting' | 'done' = 'waiting'
-     let disposed = false
 +    const attempt = (target: WorkspaceId): void => {
 +      void this.connectWorkspace(target).then(
 +        (sessionId) => {
-+          if (disposed) return
++          if (this.lifetime.signal.aborted) return
 +          if (this.sessions.list.getSnapshot().current === undefined) {
 +            this.sessions.open(sessionId)
 +          }
 +          initial = 'done'
 +        },
 +        (reason: unknown) => {
-+          if (disposed) return
++          if (this.lifetime.signal.aborted) return
 +          initial = 'waiting'
 +          console.warn('initial workspace selection failed:', reason)
 +        },
 +      )
 +    }
      const reconcile = (): void => {
-       if (disposed) return
+       if (this.lifetime.signal.aborted) return
 -      if (this.clearArchivedCurrent()) return
 -      if (initial !== 'waiting') return
 +      if (this.clearArchivedCurrent()) {
@@ -1580,7 +1581,7 @@ index a460afe23a..b237986ee1 100644
        const workspace = this.workspaces.list.getSnapshot()
        const sessions = this.sessions.list.getSnapshot()
        if (workspace.phase !== 'ready' || sessions.phase !== 'ready') return
-@@ -168,26 +191,31 @@ class UiWorkspaceService extends Service implements UiWorkspace {
+@@ -207,26 +230,31 @@ class UiWorkspaceService extends Service implements UiWorkspace {
          initial = 'done'
          return
        }
@@ -1610,14 +1611,14 @@ index a460afe23a..b237986ee1 100644
        initial = 'connecting'
 -      void this.connectWorkspace(target).then(
 -        (sessionId) => {
--          if (disposed) return
+-          if (this.lifetime.signal.aborted) return
 -          if (this.sessions.list.getSnapshot().current === undefined) {
 -            this.sessions.open(sessionId)
 -          }
 -          initial = 'done'
 -        },
 -        (reason: unknown) => {
--          if (disposed) return
+-          if (this.lifetime.signal.aborted) return
 -          initial = 'waiting'
 -          console.warn('initial workspace selection failed:', reason)
 -        },
@@ -1626,7 +1627,7 @@ index a460afe23a..b237986ee1 100644
      }
      const disposeWorkspaces = this.workspaces.list.subscribe(reconcile)
      const disposeSessions = this.sessions.list.subscribe(reconcile)
-@@ -232,4 +260,15 @@ function recentWorkspace(
+@@ -271,4 +299,15 @@ function recentWorkspace(
    return selected
  }
  
@@ -1729,7 +1730,7 @@ index 0c2101bd0a..e92b8f5710 100644
              portal
              closeOnPointerLeave
 diff --git a/packages/client/ui-workspace/src/client/rows/WorkspaceBrowser.tsx b/packages/client/ui-workspace/src/client/rows/WorkspaceBrowser.tsx
-index 0ef21ddb82..c780857f31 100644
+index 585e9c8766..d01f443948 100644
 --- a/packages/client/ui-workspace/src/client/rows/WorkspaceBrowser.tsx
 +++ b/packages/client/ui-workspace/src/client/rows/WorkspaceBrowser.tsx
 @@ -23,7 +23,7 @@ import type { SessionId } from '@deepseek-ai/dsh-session/types'
@@ -1759,13 +1760,13 @@ index 0ef21ddb82..c780857f31 100644
 @@ -276,7 +280,7 @@ type SessionTreeProps = Pick<
  function SessionTree({
    useSessions, useSessionPendingInteraction, startSession, open, forkSession, workspaces, archivedSessionIds,
-   workspaceReady,
+   workspaceReady, usePanelInfo,
 -  onRenameRequest, onDeleteRequest, onSessionRename, onSessionArchive,
 +  onRenameRequest, onDeleteRequest, onSessionRename, onSessionDelete, scope, deletedSessionIds,
    insertWorkspaceBefore, insertSessionBefore, orderBy,
    groupExpansion, setGroupExpanded,
    sessionOrderByAccount, sessionUpdatedAtByAccount, syncSessionOrderAccount, setSessionOrder, home, t,
-@@ -356,8 +360,8 @@ function SessionTree({
+@@ -357,8 +361,8 @@ function SessionTree({
        ...(sessionOrderByAccount[UNGROUPED_KEY] === undefined
          ? {}
          : { ungroupedOrder: sessionOrderByAccount[UNGROUPED_KEY] }),
@@ -1776,7 +1777,7 @@ index 0ef21ddb82..c780857f31 100644
    )
    useEffect(() => {
      if (revealGroup === undefined || groupExpansion[revealGroup] === true) return
-@@ -586,7 +590,7 @@ function SessionTree({
+@@ -587,7 +591,7 @@ function SessionTree({
                      onOpen={open}
                      onRename={onSessionRename}
                      onFork={forkSession}
@@ -1785,18 +1786,18 @@ index 0ef21ddb82..c780857f31 100644
                      onReveal={node.id === revealSessionId && group.key === revealGroup
                        ? () => { onSessionRevealed(node.id) }
                        : undefined}
-@@ -618,8 +622,8 @@ function SessionTree({
+@@ -619,8 +623,8 @@ function SessionTree({
  
  /** The flat "In one list" body: every session is one draggable top-level row. */
  function FlatList({
 -  useSessions, useSessionPendingInteraction, open, forkSession, onSessionRename, onSessionArchive,
--  archivedSessionIds,
+-  archivedSessionIds, usePanelInfo,
 +  useSessions, useSessionPendingInteraction, open, forkSession, onSessionRename, onSessionDelete,
-+  scope, deletedSessionIds, archivedSessionIds,
++  scope, deletedSessionIds, archivedSessionIds, usePanelInfo,
    orderBy, sessionOrderByAccount, sessionUpdatedAtByAccount, syncSessionOrderAccount, setSessionOrder,
    revealSessionId, onSessionRevealed, t,
  }: Pick<
-@@ -629,7 +633,9 @@ function FlatList({
+@@ -630,7 +634,9 @@ function FlatList({
    | 'open'
    | 'forkSession'
    | 'onSessionRename'
@@ -1805,9 +1806,9 @@ index 0ef21ddb82..c780857f31 100644
 +  | 'scope'
 +  | 'deletedSessionIds'
    | 'archivedSessionIds'
+   | 'usePanelInfo'
    | 'orderBy'
-   | 'sessionOrderByAccount'
-@@ -643,8 +649,8 @@ function FlatList({
+@@ -646,8 +652,8 @@ function FlatList({
    const list = useSessions(s => s)
    const pendingInteractions = useSessionPendingInteraction(s => s)
    const baseRows = useMemo(
@@ -1818,7 +1819,7 @@ index 0ef21ddb82..c780857f31 100644
    )
    const sessionIds = useMemo(() => baseRows.map(row => row.id), [baseRows])
    const previousOrderBy = useRef(orderBy)
-@@ -711,7 +717,7 @@ function FlatList({
+@@ -714,7 +720,7 @@ function FlatList({
                onOpen={open}
                onRename={onSessionRename}
                onFork={forkSession}
@@ -1827,7 +1828,7 @@ index 0ef21ddb82..c780857f31 100644
                onReveal={node.id === revealSessionId
                  ? () => { onSessionRevealed(node.id) }
                  : undefined}
-@@ -759,6 +765,8 @@ function SearchResults({
+@@ -762,6 +768,8 @@ function SearchResults({
    open,
    workspaces,
    archivedSessionIds,
@@ -1836,8 +1837,8 @@ index 0ef21ddb82..c780857f31 100644
    query,
    remote,
    resultLimit,
-@@ -766,6 +774,8 @@ function SearchResults({
- }: Pick<SessionTreeProps, 'useSessions' | 'useSessionPendingInteraction' | 'open' | 't'> & {
+@@ -770,6 +778,8 @@ function SearchResults({
+ }: Pick<SessionTreeProps, 'useSessions' | 'useSessionPendingInteraction' | 'open' | 't' | 'usePanelInfo'> & {
    workspaces: readonly WorkspaceView[]
    archivedSessionIds: readonly SessionNode['id'][]
 +  scope: string
@@ -1845,7 +1846,7 @@ index 0ef21ddb82..c780857f31 100644
    query: string
    remote: RemoteSearchState
    resultLimit: number
-@@ -784,8 +794,10 @@ function SearchResults({
+@@ -789,8 +799,10 @@ function SearchResults({
        pendingInteractions,
        currentRemote,
        resultLimit,
@@ -1857,7 +1858,7 @@ index 0ef21ddb82..c780857f31 100644
    )
    const pending = currentRemote.status === 'loading'
    const failed = currentRemote.status === 'error'
-@@ -846,7 +858,7 @@ export function WorkspaceBrowser({
+@@ -852,7 +864,7 @@ export function WorkspaceBrowser({
    renameWorkspace,
    deleteWorkspace,
    insertWorkspaceBefore,
@@ -1866,7 +1867,7 @@ index 0ef21ddb82..c780857f31 100644
    insertSessionBefore,
    createWorkspace,
    searchSessions,
-@@ -861,6 +873,11 @@ export function WorkspaceBrowser({
+@@ -867,6 +879,11 @@ export function WorkspaceBrowser({
    const workspacePhase = useWorkspaces(state => state.phase)
    const workspaceStreamState = useWorkspaces(state => state.state)
    const archivedSessionIds = useWorkspaces(state => state.archivedSessionIds)
@@ -1878,7 +1879,7 @@ index 0ef21ddb82..c780857f31 100644
    // Live occupancy of this surface's directory-flow hole (the same source the
    // flow reads): a composition without a picking affordance can add nothing.
    const directoryFlowAvailable = useDirectoryFlow(occupied => occupied)
-@@ -1069,13 +1086,15 @@ export function WorkspaceBrowser({
+@@ -1075,13 +1092,15 @@ export function WorkspaceBrowser({
      setSessionRenameError(null)
    }
  
@@ -1901,7 +1902,7 @@ index 0ef21ddb82..c780857f31 100644
      })
    }
  
-@@ -1256,6 +1275,8 @@ export function WorkspaceBrowser({
+@@ -1263,6 +1282,8 @@ export function WorkspaceBrowser({
                open={openSearchResult}
                workspaces={workspaces}
                archivedSessionIds={archivedSessionIds}
@@ -1910,8 +1911,8 @@ index 0ef21ddb82..c780857f31 100644
                query={normalizedQuery}
                remote={remoteSearch}
                resultLimit={searchResultLimit}
-@@ -1267,7 +1288,8 @@ export function WorkspaceBrowser({
-               <FlatList
+@@ -1275,7 +1296,8 @@ export function WorkspaceBrowser({
+                 usePanelInfo={usePanelInfo}
                  useSessions={useSessions} useSessionPendingInteraction={useSessionPendingInteraction}
                  open={open} forkSession={forkSession}
 -                onSessionRename={onSessionRename} onSessionArchive={onSessionArchive}
@@ -1920,7 +1921,7 @@ index 0ef21ddb82..c780857f31 100644
                  archivedSessionIds={archivedSessionIds}
                  orderBy={orderBy}
                  sessionOrderByAccount={sessionOrderByAccount}
-@@ -1284,7 +1306,9 @@ export function WorkspaceBrowser({
+@@ -1293,7 +1315,9 @@ export function WorkspaceBrowser({
                  useSessions={useSessions}
                  useSessionPendingInteraction={useSessionPendingInteraction}
                  onSessionRename={onSessionRename}
@@ -2329,10 +2330,10 @@ index 7865c31c22..1d7be5b19d 100644
      expect(screen.getByRole('treeitem').className).toMatch(/dropAfter/)
    })
 diff --git a/packages/client/ui-workspace/tests/workspace-browser.client.spec.tsx b/packages/client/ui-workspace/tests/workspace-browser.client.spec.tsx
-index 6958423e5f..41af44ce44 100644
+index b25b32e166..b01b04fbb4 100644
 --- a/packages/client/ui-workspace/tests/workspace-browser.client.spec.tsx
 +++ b/packages/client/ui-workspace/tests/workspace-browser.client.spec.tsx
-@@ -90,7 +90,7 @@ function mount(overrides: Partial<WorkspaceBrowserProps> = {}) {
+@@ -92,7 +92,7 @@ function mount(overrides: Partial<WorkspaceBrowserProps> = {}) {
      forkSession: vi.fn(),
      renameWorkspace: vi.fn(async () => {}),
      deleteWorkspace: vi.fn(async () => {}),
@@ -2341,7 +2342,7 @@ index 6958423e5f..41af44ce44 100644
      insertWorkspaceBefore: vi.fn(async () => {}),
      insertSessionBefore: vi.fn(async () => {}),
      createWorkspace: vi.fn(async () => workspace('created', [])),
-@@ -421,43 +421,42 @@ describe('WorkspaceBrowser', () => {
+@@ -447,43 +447,42 @@ describe('WorkspaceBrowser', () => {
      expect(screen.getAllByRole('treeitem').slice(1)[0]?.textContent).toContain('two')
    })
  
@@ -2400,10 +2401,10 @@ index 6958423e5f..41af44ce44 100644
      } finally {
        warn.mockRestore()
 diff --git a/packages/client/ui-workspace/tests/workspaces-service.client.spec.ts b/packages/client/ui-workspace/tests/workspaces-service.client.spec.ts
-index 393619bbb7..72cf140a67 100644
+index 52f106f0f0..75c6e7a164 100644
 --- a/packages/client/ui-workspace/tests/workspaces-service.client.spec.ts
 +++ b/packages/client/ui-workspace/tests/workspaces-service.client.spec.ts
-@@ -17,8 +17,17 @@ const wid = (id: string): WorkspaceId => id as WorkspaceId
+@@ -19,8 +19,17 @@ const wid = (id: string): WorkspaceId => id as WorkspaceId
  
  afterEach(() => {
    vi.restoreAllMocks()
@@ -2421,7 +2422,7 @@ index 393619bbb7..72cf140a67 100644
  function workspace(
    id: string,
    sessionIds: readonly SessionId[] = [],
-@@ -325,6 +334,86 @@ describe('UiWorkspaceService', () => {
+@@ -456,6 +465,86 @@ describe('UiWorkspaceService', () => {
      expect(b.sessions.create).toHaveBeenCalledWith({ workspaceId: wid('newest') })
    })
  
@@ -2518,28 +2519,28 @@ index c4bb255e57..b1838e5da4 100644
 -export default clientBundle('@deepseek-ai/dsh-client-ui-workspace', ['lib/types/index.js'])
 +export default clientBundle('dshui-client-ui-workspace', ['lib/types/index.js'])
 diff --git a/packages/extensions/cordis-client-runner/src/client/slot-catalog.ts b/packages/extensions/cordis-client-runner/src/client/slot-catalog.ts
-index e9806f64d4..c589e3115e 100644
+index 5de0596ffe..5f651662b4 100644
 --- a/packages/extensions/cordis-client-runner/src/client/slot-catalog.ts
 +++ b/packages/extensions/cordis-client-runner/src/client/slot-catalog.ts
-@@ -207,7 +207,7 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
+@@ -174,7 +174,7 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
      ],
      replaceRisk: 'none',
      example: 'return {\n  inject: [\'slots\'],\n  apply(ctx) {\n    ctx.slots.inject(\'conversation.chat.assistant-actions\', () => ctx.slots.register(\n      { name: \'conversation.chat.assistant-actions\', id: \'my-entry\', order: 100, label: \'My entry\' },\n      () => React.createElement(\'div\', null, \'hello\'),\n    ))\n  },\n}',
--    source: 'packages/client/ui-chat/src/client/contract/slots.ts:212',
-+    source: 'packages/client/ui-chat/src/client/contract/slots.ts:223',
+-    source: 'packages/client/ui-chat/src/client/contract/slots.ts:213',
++    source: 'packages/client/ui-chat/src/client/contract/slots.ts:224',
    },
    {
      key: 'conversation.chat.commandview',
-@@ -253,7 +253,7 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
+@@ -221,7 +221,7 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
      occupants: [],
      replaceRisk: 'none',
      example: 'return {\n  inject: [\'slots\'],\n  apply(ctx) {\n    ctx.slots.inject(\'conversation.chat.commandview\', () => ctx.slots.register(\n      { name: \'conversation.chat.commandview\', key: \'<one key the owner dispatches>\' },\n      () => React.createElement(\'div\', null, \'hello\'),\n    ))\n  },\n}',
--    source: 'packages/client/ui-chat/src/client/contract/slots.ts:200',
-+    source: 'packages/client/ui-chat/src/client/contract/slots.ts:211',
+-    source: 'packages/client/ui-chat/src/client/contract/slots.ts:201',
++    source: 'packages/client/ui-chat/src/client/contract/slots.ts:212',
    },
    {
      key: 'conversation.chat.node',
-@@ -301,7 +301,7 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
+@@ -270,7 +270,7 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
      declaredBy: 'an entry in \'conversation.view\' (client-ui-chat), so it exists while that entry is mounted',
      occupants: [
        'client-ui-chat UserMessageNodeView key \'user\'',
@@ -2548,21 +2549,21 @@ index e9806f64d4..c589e3115e 100644
        'client-ui-chat ContextMessageNodeView key \'context\'',
        'client-ui-chat SystemPromptNodeView key \'system-prompt\'',
        'client-ui-chat AssistantNodeView key \'assistant-step\'',
-@@ -320,7 +320,7 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
+@@ -289,7 +289,7 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
      ],
      replaceRisk: 'shadows-shipped-ui',
      example: 'return {\n  inject: [\'slots\'],\n  apply(ctx) {\n    ctx.slots.inject(\'conversation.chat.node\', () => ctx.slots.register(\n      { name: \'conversation.chat.node\', key: \'<one key the owner dispatches>\' },\n      () => React.createElement(\'div\', null, \'hello\'),\n    ))\n  },\n}',
--    source: 'packages/client/ui-chat/src/client/contract/slots.ts:181',
-+    source: 'packages/client/ui-chat/src/client/contract/slots.ts:192',
+-    source: 'packages/client/ui-chat/src/client/contract/slots.ts:182',
++    source: 'packages/client/ui-chat/src/client/contract/slots.ts:193',
    },
    {
      key: 'conversation.chat.turnTail',
-@@ -366,7 +366,63 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
+@@ -336,7 +336,64 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
      ],
      replaceRisk: 'none',
      example: 'return {\n  inject: [\'slots\'],\n  apply(ctx) {\n    ctx.slots.inject(\'conversation.chat.turnTail\', () => ctx.slots.register(\n      { name: \'conversation.chat.turnTail\', select: owner => null },\n      () => React.createElement(\'div\', null, \'hello\'),\n    ))\n  },\n}',
--    source: 'packages/client/ui-chat/src/client/contract/slots.ts:206',
-+    source: 'packages/client/ui-chat/src/client/contract/slots.ts:217',
+-    source: 'packages/client/ui-chat/src/client/contract/slots.ts:207',
++    source: 'packages/client/ui-chat/src/client/contract/slots.ts:218',
 +  },
 +  {
 +    key: 'conversation.chat.user-actions',
@@ -2599,6 +2600,7 @@ index e9806f64d4..c589e3115e 100644
 +    standardProps: [
 +      'useResource: UseResource',
 +      'useWorkspaces: SnapshotSelectorHook<WorkspaceSnapshot>',
++      'usePanelInfo: UsePanelInfo',
 +      'useSessions: UseSessions',
 +      'useSessionPendingInteraction: UseSessionPendingInteraction',
 +      'useWorkspaces: SnapshotSelectorHook<WorkspaceSnapshot>',
@@ -2618,21 +2620,21 @@ index e9806f64d4..c589e3115e 100644
 +    occupants: [],
 +    replaceRisk: 'none',
 +    example: 'return {\n  inject: [\'slots\'],\n  apply(ctx) {\n    ctx.slots.inject(\'conversation.chat.user-actions\', () => ctx.slots.register(\n      { name: \'conversation.chat.user-actions\', id: \'my-entry\', order: 100, label: \'My entry\' },\n      () => React.createElement(\'div\', null, \'hello\'),\n    ))\n  },\n}',
-+    source: 'packages/client/ui-chat/src/client/contract/slots.ts:231',
++    source: 'packages/client/ui-chat/src/client/contract/slots.ts:232',
    },
    {
      key: 'conversation.composer',
-@@ -998,7 +1054,7 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
+@@ -984,7 +1041,7 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
      ],
      replaceRisk: 'shadows-shipped-ui',
      example: 'return {\n  inject: [\'slots\'],\n  apply(ctx) {\n    ctx.slots.inject(\'conversation.message.images\', () => ctx.slots.register(\n      { name: \'conversation.message.images\' },\n      () => React.createElement(\'div\', null, \'hello\'),\n    ))\n  },\n}',
--    source: 'packages/client/ui-chat/src/client/contract/slots.ts:194',
-+    source: 'packages/client/ui-chat/src/client/contract/slots.ts:205',
+-    source: 'packages/client/ui-chat/src/client/contract/slots.ts:195',
++    source: 'packages/client/ui-chat/src/client/contract/slots.ts:206',
    },
    {
      key: 'conversation.session',
 diff --git a/packages/mcp/mcp-client/README.md b/packages/mcp/mcp-client/README.md
-index 112f477556..565e4de642 100644
+index de64625688..f98d87ed04 100644
 --- a/packages/mcp/mcp-client/README.md
 +++ b/packages/mcp/mcp-client/README.md
 @@ -60,6 +60,7 @@ Add one entry per server; nothing else is required. After the harness starts, th
@@ -2652,7 +2654,7 @@ index 112f477556..565e4de642 100644
  
  ### Tool naming and coexistence
  
-@@ -86,7 +87,7 @@ Images are supported when the current model accepts image input and the harness
+@@ -87,7 +88,7 @@ Images are supported when the current model accepts image input and the harness
  
  ### Startup, updates, and reconnection
  
@@ -2661,7 +2663,7 @@ index 112f477556..565e4de642 100644
  
  When a server connection drops — for example a local server process crashes — the plugin reconnects automatically with delays that double from 500 ms up to 30 s and then refreshes the tool set; reconnect progress is visible in the logs. During an outage the last known tools stay listed but calls to them fail until the server recovers. After ten consecutive failed attempts the server's tools are removed and reconnection stops until you reload the configuration or restart the harness; a server that stays connected for a while resets that counter. Set `reconnect.enabled: false` to disable automatic reconnection — tools then stay listed but fail until you reload. Editing the configuration entry reloads the server connection in place, and unchanged names stay unchanged.
  
-@@ -120,7 +121,7 @@ This section explains the design decisions behind the bridge and points at the c
+@@ -121,7 +122,7 @@ This section explains the design decisions behind the bridge and points at the c
  
  ### Lifecycle and sync
  
@@ -2670,7 +2672,7 @@ index 112f477556..565e4de642 100644
  
  The supervisor listens for `notifications/tools/list_changed` and queues a re-sync; a fetch-phase failure keeps the previous generation registered, while a registration conflict rolls back the attempted generation. Each outage shares one attempt budget: after `maxAttempts` consecutive failures the tools are unregistered and reconnection stops, and a connection that stays up past `maxDelayMs` resets the budget.
  
-@@ -188,7 +189,7 @@ Append-only; newly visible content follows the reusable request prefix and does
+@@ -189,7 +190,7 @@ Append-only; newly visible content follows the reusable request prefix and does
  These limits describe what you cannot do with this plugin and when it needs operational attention. They are current package constraints, not a comparison with other MCP clients or a task backlog.
  
  - **Tools are the only bridged MCP capability** — Resources and Prompts have no harness consumer mechanism and are deferred.
@@ -2680,7 +2682,7 @@ index 112f477556..565e4de642 100644
  - **Image is the only durable rich-result bridge** — PNG, JPEG, WebP, and GIF enter Native context after exact capability proof. Audio and embedded-resource payloads remain execution-local with explicit diagnostics, while resource links preserve only their name and URI as text.
  - **Unsupported MCP output schemas are not enforced** — `structuredContent` falls back to `JsonValue` when the advertised schema uses vocabulary outside the harness subset.
 diff --git a/packages/mcp/mcp-client/README.zh.md b/packages/mcp/mcp-client/README.zh.md
-index e642c7e130..76d8731bc8 100644
+index 2c71060ec3..468853dd4e 100644
 --- a/packages/mcp/mcp-client/README.zh.md
 +++ b/packages/mcp/mcp-client/README.zh.md
 @@ -60,6 +60,7 @@ kind: "package-reference"
@@ -2700,7 +2702,7 @@ index e642c7e130..76d8731bc8 100644
  
  ### 工具命名与共存
  
-@@ -120,7 +121,7 @@ kind: "package-reference"
+@@ -121,7 +122,7 @@ kind: "package-reference"
  
  ### 生命周期与同步
  
@@ -2709,7 +2711,7 @@ index e642c7e130..76d8731bc8 100644
  
  监督器监听 `notifications/tools/list_changed` 并排队一次重新同步；获取阶段失败时保留上一世代注册，注册冲突则回滚本次尝试的世代。每次中断共享一个尝试预算：连续失败达到 `maxAttempts` 次后工具被注销、重连停止；连接存活超过 `maxDelayMs` 会重置预算。
  
-@@ -188,7 +189,7 @@ kind: "package-reference"
+@@ -189,7 +190,7 @@ kind: "package-reference"
  这些限制说明你无法用本插件做什么、以及何时需要运维注意。它们是当前包约束，不是与其他 MCP 客户端的对比，也不是任务积压。
  
  - **只桥接 MCP 的工具能力**——Resources 与 Prompts 没有 harness 消费机制，暂缓实现。
@@ -2820,7 +2822,7 @@ index 59ef928751..deff561427 100644
    }
  }
 diff --git a/packages/mcp/mcp-client/tests/apply.spec.ts b/packages/mcp/mcp-client/tests/apply.spec.ts
-index 1b1716e51b..02f154eec6 100644
+index 5dee651d80..9f37ac6bbe 100644
 --- a/packages/mcp/mcp-client/tests/apply.spec.ts
 +++ b/packages/mcp/mcp-client/tests/apply.spec.ts
 @@ -84,6 +84,7 @@ const stdioConfig: Config = {
@@ -2831,7 +2833,7 @@ index 1b1716e51b..02f154eec6 100644
  }
  
  // ---- Tests ----
-@@ -404,6 +405,7 @@ describe('apply (plugin lifecycle)', () => {
+@@ -451,6 +452,7 @@ describe('apply (plugin lifecycle)', () => {
        headers: { Authorization: 'Bearer x' },
        toolCallTimeoutMs: 30_000,
        failOnStartupError: false,
@@ -2900,10 +2902,10 @@ index ee3db70a77..d8a2b30897 100644
      await apply(ctx, config)
    }, 30_000)
 diff --git a/packages/mcp/mcp-client/tests/mcp-client.spec.ts b/packages/mcp/mcp-client/tests/mcp-client.spec.ts
-index 605a31ece1..4df215f7af 100644
+index 929331b98c..332f5141c0 100644
 --- a/packages/mcp/mcp-client/tests/mcp-client.spec.ts
 +++ b/packages/mcp/mcp-client/tests/mcp-client.spec.ts
-@@ -1129,6 +1129,7 @@ describe('createTransport', () => {
+@@ -1173,6 +1173,7 @@ describe('createTransport', () => {
        cwd: '/tmp',
        toolCallTimeoutMs: 60_000,
        failOnStartupError: false,
@@ -2911,7 +2913,7 @@ index 605a31ece1..4df215f7af 100644
      }
      const transport = createTransport(config)
      expect(transport).toBeDefined()
-@@ -1144,6 +1145,7 @@ describe('createTransport', () => {
+@@ -1188,6 +1189,7 @@ describe('createTransport', () => {
        headers: {},
        toolCallTimeoutMs: 60_000,
        failOnStartupError: false,
@@ -2919,7 +2921,7 @@ index 605a31ece1..4df215f7af 100644
      }
      const transport = createTransport(config)
      expect(transport).toBeDefined()
-@@ -1159,6 +1161,7 @@ describe('createTransport', () => {
+@@ -1203,6 +1205,7 @@ describe('createTransport', () => {
        headers: { Authorization: 'Bearer token' },
        toolCallTimeoutMs: 60_000,
        failOnStartupError: false,
@@ -2927,7 +2929,7 @@ index 605a31ece1..4df215f7af 100644
      }
      const transport = createTransport(config)
      expect(transport).toBeDefined()
-@@ -1183,6 +1186,7 @@ describe('createTransport', () => {
+@@ -1227,6 +1230,7 @@ describe('createTransport', () => {
          cwd: '',
          toolCallTimeoutMs: 60_000,
          failOnStartupError: false,
@@ -2935,7 +2937,7 @@ index 605a31ece1..4df215f7af 100644
        }
        // StdioClientTransport keeps its env private; the observable contract is
        // that createTransport(config) returns a transport without throwing.
-@@ -1209,6 +1213,7 @@ describe('createTransport', () => {
+@@ -1253,6 +1257,7 @@ describe('createTransport', () => {
        cwd: '',
        toolCallTimeoutMs: 60_000,
        failOnStartupError: false,
@@ -2956,10 +2958,10 @@ index 186d4dc345..3beb00fd96 100644
    }
  }
 diff --git a/packages/util/native-command/src/path-opener.ts b/packages/util/native-command/src/path-opener.ts
-index 97d2084e61..2e4140ca1a 100644
+index 8f3443b3c1..580b30b013 100644
 --- a/packages/util/native-command/src/path-opener.ts
 +++ b/packages/util/native-command/src/path-opener.ts
-@@ -24,6 +24,13 @@ export interface PathOpenerInternals {
+@@ -25,6 +25,13 @@ export interface PathOpenerInternals {
    /** Environment used for WSL markers and the desktop Linux browser convention. */
    env?: NodeJS.ProcessEnv
    run?: PathOpenerRunner
@@ -2973,7 +2975,7 @@ index 97d2084e61..2e4140ca1a 100644
  }
  
  /** Documents a browser renders, as opposed to ones an editor merely edits. */
-@@ -116,6 +123,138 @@ async function openWslPath(path: string, signal: AbortSignal, run: PathOpenerRun
+@@ -117,6 +124,138 @@ async function openWslPath(path: string, signal: AbortSignal, run: PathOpenerRun
    await openWindowsPath(windowsPath, signal, run)
  }
  
@@ -3112,7 +3114,7 @@ index 97d2084e61..2e4140ca1a 100644
  /** Dispatch one shell-free platform command for the requested open intent. */
  async function openNativePathWithIntent(
    path: string,
-@@ -132,7 +271,12 @@ async function openNativePathWithIntent(
+@@ -133,7 +272,12 @@ async function openNativePathWithIntent(
      && await openInBrowser(path, signal, platform, run, env)) return
  
    if (platform === 'darwin') {

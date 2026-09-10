@@ -93,13 +93,13 @@ in `node_modules/@deepseek-ai/*`; this patch reproduces them from source.
 The patch targets this base commit (**pinned; it must not drift**):
 
 ```
-5dda764ed3aa172535a7967b06ff95d9cbfe536a
+183f08e9c6dde7e36cd2318eaee70b0da08fb35e
 ```
 
 ```sh
 git clone https://github.com/deepseek-ai/deepseek-harness.git .dsh-src
 cd .dsh-src
-git fetch origin 5dda764ed3aa172535a7967b06ff95d9cbfe536a && git checkout FETCH_HEAD
+git fetch origin 183f08e9c6dde7e36cd2318eaee70b0da08fb35e && git checkout FETCH_HEAD
 git apply ../patches/dshui-bundles.patch            # fails safely if the base commit mismatches
 pnpm install                                        # requires pnpm 11.7.0, Node ^22.19 || >=24
 pnpm run build:lib:host
