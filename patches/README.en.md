@@ -3,7 +3,7 @@
 > English · [中文](README.md)
 
 `dshui-bundles.patch` contains the dshui modifications to the source of
-[deepseek-harness](https://github.com/deepseek-ai/deepseek-harness) (26 files across the client
+[deepseek-harness](https://github.com/deepseek-ai/deepseek-harness) (48 files across the client
 bundles and the host runtime). The client and the host must be **aligned** to the same base commit
 and applied together, so they are merged into a single patch — applying only half is incomplete.
 
@@ -71,8 +71,17 @@ The string patches the extension once applied to the npm package at runtime (see
 - `packages/client/connection/src/browser-auth.ts`: the 303 redirect of the token exchange keeps the
   `dshui_workspace` / `dshui_theme` query params (besides `launch`), so a shared-backend window keeps
   its workspace scope after the token exchange.
+- `packages/api/session-controller/src/commands.ts`: a `session.fork` child now runs `inbox.clear()`
+  right after creation, discarding the **pending queue** it inherited from the source seed (the
+  dangling next-turn / next-step `agent/inbox/spliced` inserts). Previously, forking a session whose
+  last turn had completed but which still held a queued message handed that message to the child as
+  live input: the user's first send in the child ran the source's queued message and the message the
+  user had just typed stayed pending behind it. The inherited pending input is recorded as canceled
+  events; the source keeps its queue, and a child with nothing pending appends no event. The patch
+  also updates `tests/session-fork.host.spec.ts` (a new "child inbox is empty" case) and
+  `tests/commands-create-fork.host.spec.ts` (the fake Agent gains an `inbox`).
 
-These two packages are filled into `node_modules/@deepseek-ai/*` from the **source-built artifacts**
+These packages are filled into `node_modules/@deepseek-ai/*` from the **source-built artifacts**
 by the extension's `scripts/sync-dsh.mjs`, instead of being downloaded from npm. The root
 `package.json` declares only **one** anchor dependency `@deepseek-ai/dsh` (the rest of `@deepseek-ai/*`
 are transitive deps in its manifest, so `npm list` accepts the whole closure without fetching from

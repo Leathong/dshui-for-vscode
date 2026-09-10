@@ -3,7 +3,7 @@
 > 中文 · [English](README.en.md)
 
 `dshui-bundles.patch` 是对 [deepseek-harness](https://github.com/deepseek-ai/deepseek-harness) 源码的
-dshui 改动（45 个文件，含客户端 bundle + host 运行时两大部分）。客户端与 host 必须**对齐**到同一
+dshui 改动（48 个文件，含客户端 bundle + host 运行时两大部分）。客户端与 host 必须**对齐**到同一
 基提交并一起套用，因此合并为单个补丁——套一半都是不完整的。
 
 ## 客户端 bundle（浏览器 SPA）
@@ -59,8 +59,16 @@ dshui 改动（45 个文件，含客户端 bundle + host 运行时两大部分�
   `dshuiOrigin` 让点击来源参与路由。
 - `packages/client/connection/src/browser-auth.ts`：token 交换的 303 重定向在保留 launch 之外的
   `dshui_workspace` / `dshui_theme` 查询参数，避免共享后端窗口在 token 交换后丢失工作区作用域。
+- `packages/api/session-controller/src/commands.ts`：`session.fork` 建出的子会话在创建后立即
+  `inbox.clear()`，丢弃从源会话种子继承的**待处理队列**（`agent/inbox/spliced` 里悬挂的
+  next-turn / next-step 插入）。此前 fork 一个「最后一轮已完成、但仍有排队消息」的会话时，子会话会把
+  源会话的排队消息重建成自己的待执行输入：用户在新会话里发消息，先跑的是那条旧消息，刚发的消息只能
+  排在后面 pending（表现为「fork 后发送的是之前的消息，新消息一直 pending」）。清理以取消事件落盘，
+  源会话的队列不受影响；子会话没有可清内容时不产生任何事件。补丁同时更新
+  `tests/session-fork.host.spec.ts`（新增「子会话 inbox 为空」用例）与
+  `tests/commands-create-fork.host.spec.ts`（假 Agent 补上 `inbox`）。
 
-这两个包由扩展的 `scripts/sync-dsh.mjs` 以**源码编译产物**填充 `node_modules/@deepseek-ai/*`，
+这些包由扩展的 `scripts/sync-dsh.mjs` 以**源码编译产物**填充 `node_modules/@deepseek-ai/*`，
 而不再从 npm 下载。根 `package.json` 只声明**一个**锚点依赖 `@deepseek-ai/dsh`（其余 `@deepseek-ai/*`
 是其清单里的传递依赖，`npm list` 因此认可整个闭包，却又不会去 registry 拉取——源码产物提前就位）。
 运行时读取的是 `node_modules/@deepseek-ai/*` 中的**预编译产物**；本补丁用于从源码复现这些产物。

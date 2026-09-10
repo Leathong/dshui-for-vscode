@@ -110,6 +110,10 @@ const CHECKS = [
     file: 'packages/extensions/cordis-client-runner/src/client/slot-catalog.ts',
     markers: ["'conversation.chat.user-actions'"],
   },
+  {
+    file: 'packages/api/session-controller/src/commands.ts',
+    markers: ['child.agent.inbox.clear()'],
+  },
 ]
 
 let failed = 0

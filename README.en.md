@@ -392,10 +392,10 @@ from the upstream client packages with the dshui changes injected, shipped as **
 (`dshui-plugins/`), and loaded by the dsh server from installed packages.
 
 Changes to the upstream source are published with the repo as a patch:
-`patches/dshui-bundles.patch` (26 files covering `ui-workspace` / `ui-conversation` / `ui-chat`
-and their tests, plus the host file-opener and browser-redirect runtime changes; base commit is
-pinned — see `patches/README.md` for the apply steps). Upstream source (`.dsh-src`) and build tooling
-(`.tools/`) are **not committed to git**.
+`patches/dshui-bundles.patch` (48 files covering `ui-workspace` / `ui-conversation` / `ui-chat`
+and their tests, plus the host file-opener, browser-redirect, and fork-inherited-queue runtime
+changes; base commit is pinned — see `patches/README.md` for the apply steps). Upstream source
+(`.dsh-src`) and build tooling (`.tools/`) are **not committed to git**.
 
 | What to change | Where | Rebuild needed? |
 | --- | --- | --- |
@@ -496,6 +496,8 @@ node scripts/verify-patches.mjs      # each file flagged as missing needs its pa
 #    - ui-conversation/tsdown.config.ts                bundle id → dshui-client-ui-conversation
 #    - ui-conversation/tests/apply-inject.client.spec.tsx  openFile opens via host + click origin (falls back without cwd; silent host failure)
 #    - packages/client/tsdown.client.ts                workspaceManifest resolves dshui-client-* ids by package directory (rc.1 validates by package name)
+#    - packages/api/session-controller/src/commands.ts  clear the forked child's inherited inbox after creation
+#    - packages/api/session-controller/tests/*.host.spec.ts  child-empty-inbox case + fake Agent gains inbox
 
 # 4. Rebuild and copy in
 pnpm run build:lib:host && pnpm run build:lib:client   # inside .dsh-src
@@ -507,12 +509,15 @@ npm run compile && npx @vscode/vsce package
 
 Other drift-prone spots to check after every upgrade:
 
-- **`src/openPatch.ts`** (paired with `src/openBridge.ts`): the patch targets a string in the stock
-  darwin-open branch of the api-proxy and depends on the server environment variables
-  `DSHUI_OPEN_ENDPOINT` (injected by the extension when starting the bridge) and `DSHUI_CODE_CLI` (the
-  in-app `code` CLI path, the fallback when the bridge is unavailable). If dsh changes that code, the
-  patch skips safely and logs (`file opener patch: ... skipping`) — just rewrite the branch string for
-  the new code; when the bridge is unavailable it automatically falls back to `vscode://file`.
+- **The host part of `patches/dshui-bundles.patch`**: it targets the darwin-open branch of
+  `packages/util/native-command/src/path-opener.ts`, the token-exchange redirect in
+  `packages/client/connection/src/browser-auth.ts`, and the step in
+  `packages/api/session-controller/src/commands.ts` that clears a forked child's inherited queue, and
+  it depends on the server environment variables `DSHUI_OPEN_ENDPOINT` (injected by the extension when
+  starting the bridge), `DSHUI_CODE_CLI` (the in-app `code` CLI path, the fallback when the bridge is
+  unavailable), and `DSHUI_BRIDGES_FILE`. If dsh changes that code the patch fails safely
+  (`git apply` errors) — just rewrite it for the new source; when the bridge is unavailable the opener
+  automatically falls back to `vscode://file`.
 - **`patch.yml`:** the overridden row ids (`ui-workspace` / `ui-conversation`) and the inserted
   `dshui-host-ensure-workspace` depend on the row names in the `web-app` bundle and on the
   `workspaceRegistry` / `webServer` service names; update them in sync if these change.

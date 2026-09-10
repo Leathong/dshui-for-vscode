@@ -344,9 +344,10 @@ webview 渲染的是**原版 dsh SPA**（deepseek-harness 仓库的上游代码�
 上游，而是集中在两个「客户端插件 bundle」中——它们由上游客户端包重新构建并注入 dshui 改动，
 随扩展分发**预编译产物**（`dshui-plugins/`），由 dsh 服务器从已安装包加载。
 
-对上游源码的改动以补丁形式随仓库发布：`patches/dshui-bundles.patch`（26 个文件，覆盖
-`ui-workspace` / `ui-conversation` / `ui-chat` 及其测试、host 的文件打开与浏览器重定向；基提交固定，
-应用步骤见 `patches/README.md`）。上游源码（`.dsh-src`）与构建工具（`.tools/`）**不提交到 git**。
+对上游源码的改动以补丁形式随仓库发布：`patches/dshui-bundles.patch`（48 个文件，覆盖
+`ui-workspace` / `ui-conversation` / `ui-chat` 及其测试、host 的文件打开、浏览器重定向与
+会话 fork 的继承队列清理；基提交固定，应用步骤见 `patches/README.md`）。上游源码（`.dsh-src`）
+与构建工具（`.tools/`）**不提交到 git**。
 
 | 改什么 | 改哪里 | 需要重建？ |
 | --- | --- | --- |
@@ -445,6 +446,8 @@ cd .. && node scripts/verify-patches.mjs   # 逐个标记缺失即说明该文�
 #    - packages/client/tsdown.client.ts                workspaceManifest 对 dshui-client-* id 按包目录回退（rc.1 起按包名校验）
 #    - packages/util/native-command/src/path-opener.ts  darwin 分支改桥接/CLI/vscode://file + dshuiOrigin
 #    - packages/client/connection/src/browser-auth.ts     token 交换重定向保留 dshui 查询参数
+#    - packages/api/session-controller/src/commands.ts    fork 子会话创建后 inbox.clear()，不继承源会话排队消息
+#    - packages/api/session-controller/tests/*.host.spec.ts  子会话 inbox 为空用例 + 假 Agent 补 inbox
 
 # 4. 重建并拷入
 pnpm run build:lib:host && pnpm run build:lib:client   # 在 .dsh-src 内
@@ -458,7 +461,8 @@ npm run compile && npx @vscode/vsce package
 其他随版本漂移的风险点（升级后应逐项检查）：
 
 - **`patches/dshui-bundles.patch` 的 host 部分**：定位的是 `packages/util/native-command/src/path-opener.ts`
-  的 darwin 打开分支与 `packages/client/connection/src/browser-auth.ts` 的 token 交换重定向，
+  的 darwin 打开分支、`packages/client/connection/src/browser-auth.ts` 的 token 交换重定向，以及
+  `packages/api/session-controller/src/commands.ts` 里 `session.fork` 建子会话后清空继承队列的那一步，
   并依赖服务器环境变量 `DSHUI_OPEN_ENDPOINT`（扩展启动桥时注入）、`DSHUI_CODE_CLI`（应用内 `code`
   CLI 路径，桥不可用时的回退）与 `DSHUI_BRIDGES_FILE`。dsh 若修改该段代码，补丁会安全失败（`git
   apply` 报错），按新源码重写即可；桥接不可用时会自动回退 `vscode://file`。

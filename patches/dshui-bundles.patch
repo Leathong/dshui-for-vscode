@@ -1,3 +1,29 @@
+diff --git a/packages/api/session-controller/src/commands.ts b/packages/api/session-controller/src/commands.ts
+index 35fc113408..98e977dc27 100644
+--- a/packages/api/session-controller/src/commands.ts
++++ b/packages/api/session-controller/src/commands.ts
+@@ -258,7 +258,7 @@ export class SessionCommandController {
+     const composition = await this.agents.composeAgent(this.agents.presetForObservation(source))
+     try {
+       const { provider, model } = this.ctx.agentDefaultModel.currentSelection()
+-      await this.ctx.agents.create({
++      const child = await this.ctx.agents.create({
+         sessionId: childId,
+         seed: source.events.slice(0, cut),
+         inheritedEventCount: cut,
+@@ -273,6 +273,12 @@ export class SessionCommandController {
+         agentOptions: { provider, model },
+         setup: composition.setup,
+       })
++      // A seed carries committed history; pending inbox input is transient work
++      // the source session still owns. Replayed into the child it would run as
++      // the child's own first turn, ahead of the user's first prompt there.
++      // `clear()` records the inherited pending input as canceled and appends
++      // nothing when there is none.
++      child.agent.inbox.clear()
+     } catch (error) {
+       throw new RemoteError(
+         'gateway/internal',
 diff --git a/packages/api/session-controller/src/index.ts b/packages/api/session-controller/src/index.ts
 index 9cc93be179..acd9273a39 100644
 --- a/packages/api/session-controller/src/index.ts
@@ -50,6 +76,110 @@ index 607baed3cf..96c9eb4838 100644
  }
  
  /** Confirmation that the Host handed a workspace path to its native opener. */
+diff --git a/packages/api/session-controller/tests/commands-create-fork.host.spec.ts b/packages/api/session-controller/tests/commands-create-fork.host.spec.ts
+index 42bb3fe508..4006b6601e 100644
+--- a/packages/api/session-controller/tests/commands-create-fork.host.spec.ts
++++ b/packages/api/session-controller/tests/commands-create-fork.host.spec.ts
+@@ -4,6 +4,7 @@ import type { Agent, AgentHandle, CreateAgentOptions } from '@deepseek-ai/dsh-ag
+ import type {} from '@deepseek-ai/dsh-agent-presets'
+ import { createUserMessage } from '@deepseek-ai/dsh-llm'
+ import SessionStore, { SessionId } from '@deepseek-ai/dsh-session'
++import { createInboxStub } from '@deepseek-ai/dsh-agent-loop-testkit'
+ import { RemoteError } from '@deepseek-ai/dsh-typert-protocol'
+ import type { Workspace, WorkspaceId } from '@deepseek-ai/dsh-workspace'
+ import { describe, expect, it, vi } from 'vitest'
+@@ -170,7 +171,7 @@ function completedSession(
+ 
+ function resolvedHandle(ctx: Context, sessionId: SessionId): AgentHandle {
+   return {
+-    agent: { id: sessionId, status: 'idle', ctx } as Agent,
++    agent: { id: sessionId, status: 'idle', ctx, inbox: createInboxStub() } as Agent,
+     dispose: () => Promise.resolve(),
+   }
+ }
+diff --git a/packages/api/session-controller/tests/session-fork.host.spec.ts b/packages/api/session-controller/tests/session-fork.host.spec.ts
+index 1661f505bc..f783691413 100644
+--- a/packages/api/session-controller/tests/session-fork.host.spec.ts
++++ b/packages/api/session-controller/tests/session-fork.host.spec.ts
+@@ -10,6 +10,10 @@ import SessionStore, { SESSION_FORMAT_VERSION, SessionLogOffset, SessionSeq } fr
+ import type { Session, SessionEvent, SessionHeader, SessionId } from '@deepseek-ai/dsh-session'
+ import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
+ import type { Workspace } from '@deepseek-ai/dsh-workspace'
++import {
++  createInboxStub, mountAgentLoopTestDependencies, mountAgentLoopTestHarness,
++} from '@deepseek-ai/dsh-agent-loop-testkit'
++import type { AgentLoopTestHarness } from '@deepseek-ai/dsh-agent-loop-testkit'
+ import {
+   createSessionTestRemote, installSessionReadTestServices, testSessionPersistence,
+ } from './test-remote.ts'
+@@ -38,7 +42,7 @@ async function composed(workspaces: readonly Workspace[] = []): Promise<Context>
+       })
+       const agent = {} as Agent
+       const agentCtx = ownerCtx
+-      Object.assign(agent, { id: session.id, session, status: 'idle', ctx: agentCtx })
++      Object.assign(agent, { id: session.id, session, status: 'idle', ctx: agentCtx, inbox: createInboxStub() })
+       await options.setup?.(agentCtx, agent)
+       ctx.agents.register(agent)
+       return { agent, dispose: () => Promise.resolve() }
+@@ -82,6 +86,21 @@ function liveAgent(
+   return session
+ }
+ 
++/**
++ * Real AgentLoop composition: production Agents own a durable inbox, which is
++ * the behavior under test (the hand-built `composed()` factory assigns no
++ * inbox). The context stays caller-owned for disposal.
++ * @returns the context and the loop test driver.
++ */
++async function loopComposed(): Promise<{ ctx: Context; loop: AgentLoopTestHarness }> {
++  const ctx = new Context()
++  await mountAgentLoopTestDependencies(ctx)
++  installSessionReadTestServices(ctx)
++  ctx.provide('workspaceRegistry', { list: () => [] } as never)
++  const loop = await mountAgentLoopTestHarness(ctx)
++  return { ctx, loop }
++}
++
+ const remote = (ctx: Context) => createSessionTestRemote(ctx, {
+   defaultModelSelection: () => ({ provider: 'default-provider', model: 'default-model' }),
+   cwd: '/tmp',
+@@ -301,4 +320,36 @@ describe('sessions.fork', () => {
+     })
+     await ctx.fiber.dispose()
+   })
++
++  it('starts the child with an empty inbox instead of the source pending input', async () => {
++    const { ctx, loop } = await loopComposed()
++    const source = await loop.create(sid('session-queued-source'))
++    source.session.append('turn/start', { turn: 1 })
++    source.session.append('user/message', createUserMessage({
++      content: [{ type: 'text', text: 'first prompt' }],
++      source: { kind: 'user' },
++    }), { surfaceOp: 'append' })
++    source.session.append('turn/end', { turn: 1, reason: { kind: 'completed' } })
++    // A message the source queued for its next turn: the parent still owns it,
++    // so the fork child must not inherit it as live input.
++    const queued = createUserMessage({
++      content: [{ type: 'text', text: 'queued for the next turn' }],
++      source: { kind: 'user' },
++    })
++    source.inbox.append('next-turn', queued)
++
++    const response = await remote(ctx).fork(request({ sessionId: source.id }))
++
++    expect(source.inbox.nextTurn).toEqual([queued])
++    expect(response.ok).toBe(true)
++    if (!response.ok) {
++      await ctx.fiber.dispose()
++      return
++    }
++    const child = ctx.agents.get(response.value.sessionId)
++    if (child === undefined) throw new Error('fork did not publish the child agent')
++    expect(child.inbox.nextTurn).toEqual([])
++    expect(child.inbox.nextStep).toEqual([])
++    await ctx.fiber.dispose()
++  })
+ })
 diff --git a/packages/api/session-controller/tests/session-open-workspace-path.host.spec.ts b/packages/api/session-controller/tests/session-open-workspace-path.host.spec.ts
 index ee199ddcdd..7aae8e4ca3 100644
 --- a/packages/api/session-controller/tests/session-open-workspace-path.host.spec.ts
