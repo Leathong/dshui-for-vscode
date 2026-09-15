@@ -262,6 +262,20 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   let currentWorkspacePath: string | undefined
   let registeredSharedUser = false
   let serverUserHeartbeat: NodeJS.Timeout | null = null
+  /** Set by the dispose handler: no recovery path may start a server afterwards. */
+  let deactivating = false
+  /**
+   * Bounded budget of automatic shared-server recoveries. A server that keeps
+   * exiting right after boot must not turn into an endless respawn loop, so
+   * the budget is only returned once a server has stayed up for
+   * `SERVER_RECOVERY_STABLE_MS`.
+   */
+  let serverRecoveries = 0
+  const MAX_SERVER_RECOVERIES = 2
+  const SERVER_RECOVERY_STABLE_MS = 5 * 60_000
+  /** Wait a moment before re-rendezvousing, so another window's respawn can land first. */
+  const SERVER_RECOVERY_DELAY_MS = 1500
+  let recoveryResetTimer: NodeJS.Timeout | null = null
   const reviewManager = new RollbackReviewManager()
   reviewManager.onDidChange = () => {
     if (currentView !== null) {
@@ -372,6 +386,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     const configPort = vscode.workspace.getConfiguration('dshui').get<number>('server.port') ?? 0
     const shared = configPort > 0
     const port = configPort > 0 ? configPort : 0
+    /** In-flight shared-user removal (see the retire block); awaited before re-registering. */
+    let pendingUnregister: Promise<void> = Promise.resolve()
     // A live server bound to a different folder must be retired before the
     // new one spawns (the cwd is the workspace identity) — except a fixed-port
     // shared server that this window can simply attach back to with the new
@@ -389,8 +405,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         // Abandoning a shared server: remove our user record and leave the
         // detached process alone. If this window was the last user, the host
         // plugin will exit it after its empty-registry grace polls.
+        // 预登记必须排在这笔摘除之后：否则两者会争用注册表锁，摘除后落笔
+        // 会把刚写好的租约又删掉。
         if (!keepSharedUser) {
-          void unregisterServerUser(dshHome, true).catch(() => { /* best-effort */ })
+          pendingUnregister = unregisterServerUser(dshHome, true).catch(() => { /* best-effort */ })
         }
       } else {
         // Non-shared server: private to this window, safe to stop immediately.
@@ -405,6 +423,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       serverLaunchToken = server?.launchTokenValue || readRegistry(dshHome)?.token || serverLaunchToken
       logger.info(`[dshui] dsh web ready on port ${boundPort} for ${workspacePath}`)
       serverStart = null
+      // 只有稳定运行一段时间的服务器才归还自愈预算，避免「起来就死」的无限重启。
+      if (recoveryResetTimer !== null) clearTimeout(recoveryResetTimer)
+      recoveryResetTimer = setTimeout(() => { serverRecoveries = 0 }, SERVER_RECOVERY_STABLE_MS)
+      recoveryResetTimer.unref()
       if (currentView !== null && currentWorkspacePath === workspacePath) {
         navigate(currentView.webview, workspacePath, boundPort)
       }
@@ -419,8 +441,28 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         logger.error('[dshui] shared registry register failed:', error)
       }
     }
+    /**
+     * spawn **之前**的预登记。host 插件在服务器启动后立刻开始空注册表自检
+     * （5 × 2s），而 boot URL 要经扩展宿主的 stdout 处理才能到达这里：冷启动
+     * 时宿主经常整块卡死十几秒，注册必然晚于自检，刚起来的服务器就会把自己
+     * 杀掉。共享模式端口固定且已知，所以先把租约写进注册表并启动心跳——宿主
+     * 随后再卡，磁盘上的租约（TTL 45s）依然是新鲜的。
+     */
+    const preRegisterSharedUser = async (): Promise<void> => {
+      if (!shared) return
+      await pendingUnregister
+      registeredSharedUser = true
+      serverUserHeartbeat ??= startServerUserHeartbeat(dshHome)
+      try {
+        await registerServerUser(dshHome, port, false)
+      } catch (error) {
+        logger.error('[dshui] shared registry pre-register failed:', error)
+      }
+    }
     serverStart = (async () => {
       if (shared) {
+        // 先登记租约再拉服务器：见 preRegisterSharedUser 的说明（冷启动竞态）。
+        await preRegisterSharedUser()
         // 会合探测：固定端口上已有 dshui 服务器（另一窗口启动的）→ 直接采纳，
         // 注册自己的工作区（host 插件会经 marker 登记）并以普通用户身份加入。
         if (await probeDshuiServer(port)) {
@@ -444,7 +486,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
           )
         }
       }
-      server = new DshServer({
+      const created = new DshServer({
         cwd: workspacePath,
         dshHome,
         patchPath,
@@ -454,6 +496,17 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         onReady: notifyReady,
         onExit: (code, signal) => {
           logger.warn(`[dshui] dsh web exited (code ${String(code)}, signal ${String(signal)})`)
+          // 退出（含 host 插件的空注册表自回收）后必须清掉进行中槽位：否则后续
+          // startServer / restartServer 会一直拿到那个已解析的旧 promise，把面板
+          // 钉死在死端口上（断联后再也无法恢复）。
+          if (server === created) serverStart = null
+          // 主动 stop()（重载窗口、dshui.restartServer 重启自有服务器）不算意外退出。
+          if (deactivating || created.stoppingRequested) return
+          // 共享服务器在本窗口仍存活时被回收：延迟重新会合（probe 命中别的窗口
+          // 重新拉起的服务就直接采纳，否则本窗口成为新 owner）。只接管干净的
+          // 退出（code 0 = host 插件的空注册表自回收）；崩溃/被信号杀死由
+          // DshServer 自己的重启逻辑处理，两边同时拉起会白跑一次固定端口竞态。
+          if (shared && server === created && code === 0) recoverSharedServer()
         },
         env: {
           ...(openBridge.running ? { DSHUI_OPEN_ENDPOINT: openBridge.endpoint, DSHUI_OPEN_TOKEN: openBridge.token } : {}),
@@ -466,6 +519,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
           DSHUI_SHARED_BACKEND: shared ? '1' : '0',
         },
       })
+      server = created
       // 服务器自身（含 api-proxy 补丁）的 stdout/stderr 转发到输出面板与日志文件，
       // 排查服务器侧问题（插件加载失败、补丁报错等）直接看 Output → dsh UI。
       server.onOutput((line) => {
@@ -481,6 +535,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         } else {
           // 自己启动了服务器：成为 owner。
           await registerUse(boundPort, true)
+          // 也要走一次 ready：它复位 serverStart（否则本窗口此后永远拿到旧的
+          // 已解析 promise，无法再拉起已退出的服务器）并把 iframe 指到新地址。
+          notifyReady(boundPort)
         }
       }
       return boundPort
@@ -491,6 +548,28 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       throw error
     })
     return serverStart
+  }
+
+  /**
+   * A shared server was reaped while this window is still alive: re-rendezvous
+   * after a short delay. `startServer` probes first, so when another window has
+   * already respawned the server this window simply attaches to it; only when
+   * nobody did does this window become the new owner. Bounded by
+   * `MAX_SERVER_RECOVERIES`, so a persistent exit cause (a broken dsh install,
+   * a port that cannot be rebound) cannot turn into an endless respawn loop.
+   */
+  function recoverSharedServer(): void {
+    if (deactivating || serverRecoveries >= MAX_SERVER_RECOVERIES) return
+    serverRecoveries += 1
+    setTimeout(() => {
+      if (deactivating) return
+      if (server !== null && server.running) return
+      const workspacePath = currentWorkspace()
+      if (workspacePath === undefined) return
+      void startServer(workspacePath).catch((error) => {
+        logger.error('[dshui] shared server recovery failed:', error)
+      })
+    }, SERVER_RECOVERY_DELAY_MS)
   }
 
   /** Point a view's iframe at the server URL for the given scope. The URL also
@@ -943,6 +1022,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   context.subscriptions.push({
     dispose: () => {
+      // 先立起闸门：本窗口正在退出，任何退出自愈都不得再拉起服务器。
+      deactivating = true
+      if (recoveryResetTimer !== null) {
+        clearTimeout(recoveryResetTimer)
+        recoveryResetTimer = null
+      }
       // 共享后端：窗口关闭时不再由 owner 直接 stop。owner 直接 stop 与
       // 其他窗口的 probe→attach→register 之间存在无法消除的 TOCTOU 竞态，
       // 会误停掉刚 attach 但尚未写进 users 的窗口。这里只摘除自己的

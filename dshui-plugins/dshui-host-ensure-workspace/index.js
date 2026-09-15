@@ -40,7 +40,12 @@
  *   non-owner windows' folders become Workspaces, and self-exits once the
  *   lifecycle registry (`$DSH_HOME/dshui-server.json`) holds no live window
  *   pids — a detached server outlives its spawning window but never lingers
- *   after the last window closes.
+ *   after the last window closes. The self-check has a boot grace period
+ *   (`SELF_EXIT_BOOT_GRACE_MS`): until this process has seen at least one
+ *   live user, the stale entries of a previous session cannot justify an
+ *   exit, because the window that spawned this server may still be cold
+ *   starting (its extension host is routinely unresponsive for tens of
+ *   seconds, so its lease registration lands late).
  */
 import * as fs from 'node:fs'
 import * as os from 'node:os'
@@ -55,6 +60,19 @@ export const inject = ['workspaceRegistry', 'webServer']
 const SHARED_POLL_MS = 2000
 /** 连续多少次轮询没有存活用户才自退出（吸收窗口重载的短暂空窗）。 */
 const SELF_EXIT_GRACE_POLLS = 5
+/**
+ * 启动宽限期（自本插件 apply 起算）：只有「从来没有见过任何存活用户」的服务器
+ * 才适用。注册表里此刻装的往往是上一次会话的陈旧条目，而拉起本服务器的窗口
+ * 可能还在冷启动 —— VS Code 扩展宿主在启动阶段会整块卡死十几秒（renderer.log
+ * 的 "Extension host ... is unresponsive"），期间子进程的 stdout 不被处理，
+ * 窗口的租约登记必然晚于 SELF_EXIT_GRACE_POLLS × SHARED_POLL_MS。没有这段
+ * 宽限，刚起来的服务器会在窗口注册之前把自己杀掉（空注册表自回收），表现为
+ * 冷启动/新开窗口大概率连不上。真正无人认领的服务器仍会在宽限期后被回收，
+ * 只是晚一点。
+ */
+const SELF_EXIT_BOOT_GRACE_MS = 90_000
+/** 启动宽限期的起点：本插件模块加载（≈ apply，dsh 启动时立即加载）时刻。 */
+const bootedAt = Date.now()
 
 const dshHome = process.env.DSH_HOME || path.join(os.homedir(), '.dsh')
 const markersDir = path.join(dshHome, 'dshui-workspaces')
@@ -120,6 +138,11 @@ function processMarkers(ctx) {
 }
 
 let emptyPolls = 0
+/**
+ * 本进程是否见过至少一个存活用户。见过之后启动宽限期立即失效：否则「刚开一个
+ * 窗口、马上关掉」会让空注册表的服务器白等满宽限期才回收。
+ */
+let sawLiveUser = false
 
 /** 生命周期自检：注册表里没有存活窗口 pid 时自退出（最后窗口关闭后收尾）。 */
 function checkLiveness() {
@@ -131,12 +154,16 @@ function checkLiveness() {
   if (registry === null || typeof registry !== 'object' || !Array.isArray(registry.users)) { emptyPolls = 0; return }
   const live = registry.users.filter(isLiveUser)
   if (live.length === 0) {
+    // 启动宽限期内且从未见过存活用户：注册表里的陈旧条目不能作为自杀依据
+    // （拉起本服务器的窗口可能还在冷启动，尚未登记租约）。
+    if (!sawLiveUser && Date.now() - bootedAt < SELF_EXIT_BOOT_GRACE_MS) return
     emptyPolls += 1
     if (emptyPolls >= SELF_EXIT_GRACE_POLLS) {
       console.log('[dshui] no live windows using the shared server; exiting')
       process.exit(0)
     }
   } else {
+    sawLiveUser = true
     emptyPolls = 0
   }
 }

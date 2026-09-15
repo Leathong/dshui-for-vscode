@@ -235,6 +235,16 @@ export class DshServer {
     return this.child === null && this.boundPort !== undefined
   }
 
+  /**
+   * True when `stop()` was requested for this handle, so its child's exit is
+   * intentional (window reload, explicit restart) and must not be treated as
+   * an unexpected exit by the extension's recovery path. Cleared again when a
+   * restarted child is spawned.
+   */
+  get stoppingRequested(): boolean {
+    return this.stopping
+  }
+
   /** Subscribe to the child's stdout lines (diagnostics). */
   onOutput(listener: (line: string) => void): void {
     this.onData = listener
