@@ -52,11 +52,15 @@ window.__ModuleLoader__.load({
 			"dock.empty": "本次会话没有未接受的修改。",
 			"dock.modificationsOnly": "有工具修改记录，但没有可映射的文件变更；请刷新列表或重新执行修改。",
 			"dock.accepted": "已接受",
+			"dock.foreign": "外部改动",
+			"dock.foreignHint": "该文件已接受，之后被本会话之外的操作修改；撤销会覆盖那次修改。",
 			"dock.showAccepted": "显示已接受",
 			"dock.hideAccepted": "隐藏已接受",
 			"dock.accept": "接受此修改",
 			"dock.acceptAll": "全部接受",
 			"dock.undo": "撤销此修改",
+			"dock.undoHunk": "仅撤销此片段（hunk）",
+			"dock.hunks": "代码片段",
 			"dock.undoAll": "全部撤销",
 			"dock.undoing": "撤销中…",
 			"dock.baseline": "基线：第 {turn} 轮",
@@ -108,11 +112,15 @@ window.__ModuleLoader__.load({
 			"dock.empty": "No unaccepted modifications in this session.",
 			"dock.modificationsOnly": "Tool modifications were recorded but no file change could be mapped; refresh the list or re-run the modification.",
 			"dock.accepted": "Accepted",
+			"dock.foreign": "External",
+			"dock.foreignHint": "This file was accepted, then changed outside this session; undoing would overwrite that change.",
 			"dock.showAccepted": "Show accepted",
 			"dock.hideAccepted": "Hide accepted",
 			"dock.accept": "Accept this modification",
 			"dock.acceptAll": "Accept all",
 			"dock.undo": "Undo this modification",
+			"dock.undoHunk": "Undo only this hunk",
+			"dock.hunks": "Hunks",
 			"dock.undoAll": "Undo all",
 			"dock.undoing": "Undoing…",
 			"dock.baseline": "Baseline: turn {turn}",
@@ -143,12 +151,13 @@ window.__ModuleLoader__.load({
 		//#endregion
 		//#region lib/types/client/remote.js
 		const packageName = "dsh-rollback-plugin";
-		function parameter(name) {
+		function parameter(name, extra) {
 			return {
 				name,
 				wire: name,
 				source: "json",
-				codec: jsonCodec("dsh-rollback-plugin#JsonValue")
+				codec: jsonCodec("dsh-rollback-plugin#JsonValue"),
+				...extra
 			};
 		}
 		/** Consumer-side contribution; mirrors the Host descriptors in ../host/typert.ts. */
@@ -184,7 +193,7 @@ window.__ModuleLoader__.load({
 					parameters: [
 						parameter("sessionId"),
 						parameter("path"),
-						parameter("line")
+						parameter("line", { acceptsUndefined: true })
 					],
 					cancellation: { parameter: "signal" },
 					result: jsonCodec("dsh-rollback-plugin#RemoteResult")
@@ -278,6 +287,16 @@ window.__ModuleLoader__.load({
 					parameters: [parameter("request")],
 					cancellation: { parameter: "signal" },
 					result: jsonCodec("dsh-rollback-plugin#RemoteResult")
+				},
+				{
+					id: `${packageName}#rollback/undoHunks`,
+					service: "rollback",
+					namespace: "rollback",
+					method: "undoHunks",
+					invocation: { kind: "direct" },
+					parameters: [parameter("request")],
+					cancellation: { parameter: "signal" },
+					result: jsonCodec("dsh-rollback-plugin#RemoteResult")
 				}
 			]
 		};
@@ -357,7 +376,7 @@ window.__ModuleLoader__.load({
 			return false;
 		}
 		function ModificationDock(props) {
-			const { session, t, sessionEvents, sessionChanges, acceptAll, undoAll, acceptFile, acceptModification, undoFile, undoModification, openAt } = props;
+			const { session, t, sessionEvents, sessionChanges, acceptAll, undoAll, acceptFile, acceptModification, undoFile, undoModification, undoHunks, openAt } = props;
 			const [data, setData] = (0, react.useState)(null);
 			const [loading, setLoading] = (0, react.useState)(false);
 			const [error, setError] = (0, react.useState)(null);
@@ -366,6 +385,8 @@ window.__ModuleLoader__.load({
 			const [busy, setBusy] = (0, react.useState)(/* @__PURE__ */ new Set());
 			const [confirming, setConfirming] = (0, react.useState)(null);
 			const [confirmingAll, setConfirmingAll] = (0, react.useState)(false);
+			/** Path whose hunk list is expanded (hunk-level undo lives there). */
+			const [expanded, setExpanded] = (0, react.useState)(null);
 			const [actionError, setActionError] = (0, react.useState)(null);
 			const dataRef = (0, react.useRef)(null);
 			dataRef.current = data;
@@ -456,6 +477,11 @@ window.__ModuleLoader__.load({
 				const current = dataRef.current;
 				if (current === null) return;
 				if (await runMutation(`file:${change.path}`, () => undoFile(change.path, current.listId))) load();
+			};
+			const runUndoHunk = async (change, index) => {
+				const current = dataRef.current;
+				if (current === null) return;
+				if (await runMutation(`hunk:${change.path}:${String(index)}`, () => undoHunks(change.path, [index], current.listId))) load();
 			};
 			const runAcceptAll = async () => {
 				const current = dataRef.current;
@@ -674,6 +700,13 @@ window.__ModuleLoader__.load({
 									},
 									onCancelUndo: () => {
 										setConfirming(null);
+									},
+									expanded: expanded === change.path,
+									onToggleHunks: () => {
+										setExpanded((value) => value === change.path ? null : change.path);
+									},
+									onUndoHunk: (index) => {
+										runUndoHunk(change, index);
 									}
 								}, change.path))
 							}),
@@ -733,7 +766,8 @@ window.__ModuleLoader__.load({
 			});
 		}
 		function FileRow$1(props) {
-			const { change, busy, confirmingKey, t, onOpenReview, onOpenFile, onAccept, onRequestUndo, onConfirmUndo, onCancelUndo } = props;
+			const { change, busy, confirmingKey, t, onOpenReview, onOpenFile, onAccept, onRequestUndo, onConfirmUndo, onCancelUndo, expanded, onToggleHunks, onUndoHunk } = props;
+			const hunks = change.hunks ?? [];
 			const fileConfirming = confirmingKey === `file:${change.path}`;
 			const undoConfirm = (0, react_jsx_runtime.jsxs)("span", {
 				className: "dsh-mod-confirm",
@@ -750,9 +784,9 @@ window.__ModuleLoader__.load({
 					children: t("cancel")
 				})]
 			});
-			return (0, react_jsx_runtime.jsx)("li", {
+			return (0, react_jsx_runtime.jsxs)("li", {
 				className: "dsh-mod-file",
-				children: (0, react_jsx_runtime.jsxs)("div", {
+				children: [(0, react_jsx_runtime.jsxs)("div", {
 					className: "dsh-mod-file-row",
 					children: [
 						(0, react_jsx_runtime.jsxs)("button", {
@@ -762,6 +796,26 @@ window.__ModuleLoader__.load({
 							title: `${change.absolutePath} · ${t("openInEditor")}`,
 							children: [(0, react_jsx_runtime.jsx)("span", { className: `dsh-mod-status-dot dsh-mod-status-${change.status}` }), change.path]
 						}),
+						change.foreign === true ? (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Tooltip, {
+							label: t("dock.foreignHint"),
+							side: "bottom",
+							children: (0, react_jsx_runtime.jsx)("span", {
+								className: "dsh-mod-foreign",
+								children: t("dock.foreign")
+							})
+						}) : null,
+						hunks.length > 0 ? (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Tooltip, {
+							label: t("dock.hunks"),
+							side: "bottom",
+							children: (0, react_jsx_runtime.jsx)("button", {
+								type: "button",
+								className: "dsh-mod-link",
+								onClick: onToggleHunks,
+								"aria-expanded": expanded,
+								"aria-label": t("dock.hunks"),
+								children: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconChevronDownOutline14, {})
+							})
+						}) : null,
 						(0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Tooltip, {
 							label: t("openAt"),
 							side: "bottom",
@@ -803,8 +857,45 @@ window.__ModuleLoader__.load({
 							})]
 						})
 					]
-				})
+				}), expanded && hunks.length > 0 ? (0, react_jsx_runtime.jsx)("ul", {
+					className: "dsh-mod-hunks",
+					children: hunks.map((hunk, index) => (0, react_jsx_runtime.jsxs)("li", {
+						className: "dsh-mod-hunk",
+						children: [
+							(0, react_jsx_runtime.jsx)("span", {
+								className: "dsh-mod-hunk-line",
+								children: hunk.newLine ?? hunk.oldLine ?? "?"
+							}),
+							(0, react_jsx_runtime.jsx)("span", {
+								className: "dsh-mod-hunk-text",
+								title: `${hunk.oldText}\n→\n${hunk.newText}`,
+								children: hunkPreview(hunk)
+							}),
+							(0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Tooltip, {
+								label: t("dock.undoHunk"),
+								side: "bottom",
+								children: (0, react_jsx_runtime.jsx)("button", {
+									type: "button",
+									className: "dsh-mod-action",
+									onClick: () => {
+										onUndoHunk(index);
+									},
+									disabled: busy,
+									"aria-label": t("dock.undoHunk"),
+									children: (0, react_jsx_runtime.jsx)(IconUndoOutline14, {})
+								})
+							})
+						]
+					}, `${change.path}:${String(index)}`))
+				}) : null]
 			});
+		}
+		/** One-line preview of a hunk: the first changed line of the new side. */
+		function hunkPreview(hunk) {
+			const changed = hunk.newText.split("\n").find((item) => item.trim() !== "");
+			const removed = (hunk.oldText ?? "").split("\n").find((item) => item.trim() !== "");
+			const trimmed = (changed ?? removed ?? "").trim();
+			return trimmed.length > 72 ? `${trimmed.slice(0, 72)}…` : trimmed;
 		}
 		//#endregion
 		//#region lib/types/client/RollbackAction.js
@@ -1264,7 +1355,7 @@ window.__ModuleLoader__.load({
 				const tag = document.createElement("style");
 				tag.dataset.plugin = "dsh-rollback-plugin";
 				tag.dataset.pluginCss = tagId;
-				tag.textContent = ".dsh-rollback-action{width:28px;height:28px;color:var(--dsw-alias-label-tertiary);cursor:pointer;background:transparent;border:none;border-radius:28px;justify-content:center;align-items:center;padding:6px;display:inline-flex}.dsh-rollback-action:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-secondary)}.dsh-mod-dock{box-sizing:border-box;width:calc(100% - var(--dsh-composer-side-clearance) - var(--dsh-composer-side-clearance) - var(--dsh-composer-dock-inset) - var(--dsh-composer-dock-inset));max-width:calc(var(--dsh-composer-card-max-width) - var(--dsh-composer-dock-inset) - var(--dsh-composer-dock-inset));margin:0 auto calc(0px - var(--dsh-composer-stack-gap) - 3px);padding:0 var(--dsh-composer-dock-inset);flex:none}.dsh-mod-panel{background:var(--dsw-specific-tip);border-radius:12px 12px 0 0;width:100%;padding:2px 0;position:relative;overflow:hidden}.dsh-mod-panel:after{border:1px solid var(--dsw-alias-border-l1);border-radius:inherit;content:\"\";pointer-events:none;border-bottom:none;position:absolute;inset:0}.dsh-mod-header{box-sizing:border-box;width:100%;min-height:36px;color:var(--dsw-alias-label-primary);border-radius:8px;align-items:center;gap:4px;padding:4px 12px 4px 8px;display:flex}.dsh-mod-toggle{box-sizing:border-box;min-width:0;flex:auto;min-height:32px;color:var(--dsw-alias-label-primary);text-align:left;cursor:pointer;background:0 0;border:none;border-radius:8px;align-items:center;gap:10px;padding:4px;display:flex}.dsh-mod-toggle:focus-visible{outline:2px solid var(--dsw-alias-label-tertiary);outline-offset:-2px}.dsh-mod-header-actions{flex:none;align-items:center;gap:4px;display:flex}.dsh-mod-lead{color:var(--dsw-alias-label-tertiary);flex:none;place-items:center;display:grid}.dsh-mod-count{min-width:0;font-family:Inter,var(--dsw-font-family);flex:auto;font-size:13px;font-weight:500;line-height:24px}.dsh-mod-loading{opacity:.6}.dsh-mod-accepted-chip{flex:none;font-family:Inter,var(--dsw-font-family);font-size:11px;line-height:18px;color:var(--dsw-alias-label-tertiary);border:1px solid var(--dsw-alias-border-l2);border-radius:999px;padding:0 8px}.dsh-mod-chevron{width:14px;height:14px;color:var(--dsw-alias-label-tertiary);flex:none;place-items:center;display:grid}.dsh-mod-baseline{font-family:Inter,var(--dsw-font-family);font-size:12px;color:var(--dsw-alias-label-secondary);padding:2px 12px;display:flex;gap:6px;align-items:center}.dsh-mod-warn{width:14px;height:14px;color:#b8860b;display:grid;place-items:center}.dsh-mod-note{font-family:Inter,var(--dsw-font-family);font-size:12px;color:var(--dsw-alias-label-tertiary);padding:4px 12px}.dsh-mod-empty{font-family:Inter,var(--dsw-font-family);font-size:12px;color:var(--dsw-alias-label-tertiary);padding:6px 12px}.dsh-mod-list{max-height:240px;margin:0;padding:0 4px;list-style:none;overflow-y:auto}.dsh-mod-file{border-radius:8px}.dsh-mod-file:hover{background:var(--dsw-alias-interactive-bg-hover)}.dsh-mod-file-row{box-sizing:border-box;border-radius:8px;align-items:center;gap:8px;width:100%;min-height:32px;padding:4px 5px 4px 12px;display:flex}.dsh-mod-file-path{min-width:0;flex:auto;display:flex;align-items:center;gap:6px;background:0 0;border:none;cursor:pointer;text-align:left;color:var(--dsw-alias-label-primary);font:var(--dsw-font-xs-13);font-family:Inter,var(--dsw-font-family);padding:0;text-overflow:ellipsis;white-space:nowrap;overflow:hidden}.dsh-mod-file-path:hover{text-decoration:underline}.dsh-mod-status{flex:none;font-size:11px;color:var(--dsw-alias-label-tertiary);white-space:nowrap}.dsh-mod-status-dot{flex:none;width:8px;height:8px;border-radius:999px;background:var(--dsw-alias-state-business-primary)}.dsh-mod-status-modified{background:var(--dsw-alias-state-business-primary)}.dsh-mod-status-created{background:#2ea043}.dsh-mod-status-deleted{background:#d1242f}.dsh-mod-status-typechange,.dsh-mod-status-binary,.dsh-mod-status-ignored,.dsh-mod-status-nested-repo{background:#b8860b}.dsh-mod-actions{flex:none;align-items:center;gap:6px;display:flex}.dsh-mod-action{width:24px;height:24px;color:var(--dsw-alias-label-tertiary);cursor:pointer;background:0 0;border:none;border-radius:999px;flex:none;place-items:center;padding:0;display:grid}.dsh-mod-action:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-secondary)}.dsh-mod-action:disabled{cursor:default;opacity:.45}.dsh-mod-link{width:24px;height:24px;color:var(--dsw-alias-label-tertiary);cursor:pointer;background:0 0;border:none;border-radius:999px;place-items:center;padding:0;display:grid}.dsh-mod-link:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-secondary)}.dsh-mod-spin{display:inline-block;font-size:14px;line-height:1;animation:dsh-mod-rotate 1s linear infinite}@keyframes dsh-mod-rotate{to{transform:rotate(360deg)}}.dsh-mod-confirm{display:inline-flex;gap:4px;align-items:center}.dsh-mod-confirm-yes{font:var(--dsw-font-xs-13);color:#d1242f;background:0 0;border:1px solid #d1242f;border-radius:6px;cursor:pointer;padding:1px 8px;height:22px}.dsh-mod-confirm-no{font:var(--dsw-font-xs-13);color:var(--dsw-alias-label-secondary);background:0 0;border:1px solid var(--dsw-alias-border-l2);border-radius:6px;cursor:pointer;padding:1px 8px;height:22px}.dsh-mod-detail{padding:2px 12px 8px;display:flex;flex-direction:column;gap:6px}.dsh-mod-patches{border-left:2px solid var(--dsw-alias-border-l1);padding-left:10px;display:flex;flex-direction:column;gap:6px}.dsh-mod-patches-title{font-size:11px;color:var(--dsw-alias-label-tertiary)}.dsh-mod-patch{border:1px solid var(--dsw-alias-border-l1);border-radius:8px;padding:6px;display:flex;flex-direction:column;gap:4px;background:var(--dsw-alias-bg-base)}.dsh-mod-patch-accepted{opacity:.65}.dsh-mod-patch-row{display:flex;align-items:center;gap:8px;min-height:24px}.dsh-mod-patch-name{flex:auto;font-size:12px;color:var(--dsw-alias-label-secondary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;background:0 0;border:none;cursor:pointer;text-align:left;padding:0}.dsh-mod-accepted{font-size:11px;color:var(--dsw-alias-label-tertiary)}.dsh-mod-warn-text{font-size:11px;color:#b8860b;display:inline-flex;align-items:center;gap:2px;white-space:nowrap}.dsh-mod-accepted-toggle{width:100%;background:0 0;border:none;cursor:pointer;color:var(--dsw-alias-label-tertiary);font-size:12px;font-family:Inter,var(--dsw-font-family);text-align:left;padding:6px 12px}.dsh-mod-accepted-toggle:hover{color:var(--dsw-alias-label-secondary)}.dsh-mod-list-accepted{opacity:.7;max-height:140px}.dsh-mod-file-accepted .dsh-mod-file-path{color:var(--dsw-alias-label-secondary)}.dsh-mod-tools{display:flex;justify-content:flex-end;padding:2px 8px 4px}.dsh-mod-tool{width:24px;height:24px;color:var(--dsw-alias-label-tertiary);cursor:pointer;background:0 0;border:none;border-radius:999px;place-items:center;padding:0;display:grid}.dsh-mod-tool:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-secondary)}";
+				tag.textContent = ".dsh-rollback-action{width:28px;height:28px;color:var(--dsw-alias-label-tertiary);cursor:pointer;background:transparent;border:none;border-radius:28px;justify-content:center;align-items:center;padding:6px;display:inline-flex}.dsh-rollback-action:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-secondary)}.dsh-mod-dock{box-sizing:border-box;width:calc(100% - var(--dsh-composer-side-clearance) - var(--dsh-composer-side-clearance) - var(--dsh-composer-dock-inset) - var(--dsh-composer-dock-inset));max-width:calc(var(--dsh-composer-card-max-width) - var(--dsh-composer-dock-inset) - var(--dsh-composer-dock-inset));margin:0 auto calc(0px - var(--dsh-composer-stack-gap) - 3px);padding:0 var(--dsh-composer-dock-inset);flex:none}.dsh-mod-panel{background:var(--dsw-specific-tip);border-radius:12px 12px 0 0;width:100%;padding:2px 0;position:relative;overflow:hidden}.dsh-mod-panel:after{border:1px solid var(--dsw-alias-border-l1);border-radius:inherit;content:\"\";pointer-events:none;border-bottom:none;position:absolute;inset:0}.dsh-mod-header{box-sizing:border-box;width:100%;min-height:36px;color:var(--dsw-alias-label-primary);border-radius:8px;align-items:center;gap:4px;padding:4px 12px 4px 8px;display:flex}.dsh-mod-toggle{box-sizing:border-box;min-width:0;flex:auto;min-height:32px;color:var(--dsw-alias-label-primary);text-align:left;cursor:pointer;background:0 0;border:none;border-radius:8px;align-items:center;gap:10px;padding:4px;display:flex}.dsh-mod-toggle:focus-visible{outline:2px solid var(--dsw-alias-label-tertiary);outline-offset:-2px}.dsh-mod-header-actions{flex:none;align-items:center;gap:4px;display:flex}.dsh-mod-lead{color:var(--dsw-alias-label-tertiary);flex:none;place-items:center;display:grid}.dsh-mod-count{min-width:0;font-family:Inter,var(--dsw-font-family);flex:auto;font-size:13px;font-weight:500;line-height:24px}.dsh-mod-loading{opacity:.6}.dsh-mod-accepted-chip{flex:none;font-family:Inter,var(--dsw-font-family);font-size:11px;line-height:18px;color:var(--dsw-alias-label-tertiary);border:1px solid var(--dsw-alias-border-l2);border-radius:999px;padding:0 8px}.dsh-mod-chevron{width:14px;height:14px;color:var(--dsw-alias-label-tertiary);flex:none;place-items:center;display:grid}.dsh-mod-baseline{font-family:Inter,var(--dsw-font-family);font-size:12px;color:var(--dsw-alias-label-secondary);padding:2px 12px;display:flex;gap:6px;align-items:center}.dsh-mod-warn{width:14px;height:14px;color:#b8860b;display:grid;place-items:center}.dsh-mod-note{font-family:Inter,var(--dsw-font-family);font-size:12px;color:var(--dsw-alias-label-tertiary);padding:4px 12px}.dsh-mod-empty{font-family:Inter,var(--dsw-font-family);font-size:12px;color:var(--dsw-alias-label-tertiary);padding:6px 12px}.dsh-mod-list{max-height:240px;margin:0;padding:0 4px;list-style:none;overflow-y:auto}.dsh-mod-file{border-radius:8px}.dsh-mod-file:hover{background:var(--dsw-alias-interactive-bg-hover)}.dsh-mod-file-row{box-sizing:border-box;border-radius:8px;align-items:center;gap:8px;width:100%;min-height:32px;padding:4px 5px 4px 12px;display:flex}.dsh-mod-file-path{min-width:0;flex:auto;display:flex;align-items:center;gap:6px;background:0 0;border:none;cursor:pointer;text-align:left;color:var(--dsw-alias-label-primary);font:var(--dsw-font-xs-13);font-family:Inter,var(--dsw-font-family);padding:0;text-overflow:ellipsis;white-space:nowrap;overflow:hidden}.dsh-mod-file-path:hover{text-decoration:underline}.dsh-mod-status{flex:none;font-size:11px;color:var(--dsw-alias-label-tertiary);white-space:nowrap}.dsh-mod-foreign{flex:none;font-size:11px;line-height:16px;color:#b8860b;border:1px solid #b8860b;border-radius:999px;padding:0 6px;white-space:nowrap}.dsh-mod-status-dot{flex:none;width:8px;height:8px;border-radius:999px;background:var(--dsw-alias-state-business-primary)}.dsh-mod-status-modified{background:var(--dsw-alias-state-business-primary)}.dsh-mod-status-created{background:#2ea043}.dsh-mod-status-deleted{background:#d1242f}.dsh-mod-status-typechange,.dsh-mod-status-binary,.dsh-mod-status-ignored,.dsh-mod-status-nested-repo{background:#b8860b}.dsh-mod-actions{flex:none;align-items:center;gap:6px;display:flex}.dsh-mod-action{width:24px;height:24px;color:var(--dsw-alias-label-tertiary);cursor:pointer;background:0 0;border:none;border-radius:999px;flex:none;place-items:center;padding:0;display:grid}.dsh-mod-action:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-secondary)}.dsh-mod-action:disabled{cursor:default;opacity:.45}.dsh-mod-link{width:24px;height:24px;color:var(--dsw-alias-label-tertiary);cursor:pointer;background:0 0;border:none;border-radius:999px;place-items:center;padding:0;display:grid}.dsh-mod-link:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-secondary)}.dsh-mod-spin{display:inline-block;font-size:14px;line-height:1;animation:dsh-mod-rotate 1s linear infinite}@keyframes dsh-mod-rotate{to{transform:rotate(360deg)}}.dsh-mod-confirm{display:inline-flex;gap:4px;align-items:center}.dsh-mod-confirm-yes{font:var(--dsw-font-xs-13);color:#d1242f;background:0 0;border:1px solid #d1242f;border-radius:6px;cursor:pointer;padding:1px 8px;height:22px}.dsh-mod-confirm-no{font:var(--dsw-font-xs-13);color:var(--dsw-alias-label-secondary);background:0 0;border:1px solid var(--dsw-alias-border-l2);border-radius:6px;cursor:pointer;padding:1px 8px;height:22px}.dsh-mod-detail{padding:2px 12px 8px;display:flex;flex-direction:column;gap:6px}.dsh-mod-patches{border-left:2px solid var(--dsw-alias-border-l1);padding-left:10px;display:flex;flex-direction:column;gap:6px}.dsh-mod-patches-title{font-size:11px;color:var(--dsw-alias-label-tertiary)}.dsh-mod-patch{border:1px solid var(--dsw-alias-border-l1);border-radius:8px;padding:6px;display:flex;flex-direction:column;gap:4px;background:var(--dsw-alias-bg-base)}.dsh-mod-patch-accepted{opacity:.65}.dsh-mod-patch-row{display:flex;align-items:center;gap:8px;min-height:24px}.dsh-mod-patch-name{flex:auto;font-size:12px;color:var(--dsw-alias-label-secondary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;background:0 0;border:none;cursor:pointer;text-align:left;padding:0}.dsh-mod-accepted{font-size:11px;color:var(--dsw-alias-label-tertiary)}.dsh-mod-warn-text{font-size:11px;color:#b8860b;display:inline-flex;align-items:center;gap:2px;white-space:nowrap}.dsh-mod-accepted-toggle{width:100%;background:0 0;border:none;cursor:pointer;color:var(--dsw-alias-label-tertiary);font-size:12px;font-family:Inter,var(--dsw-font-family);text-align:left;padding:6px 12px}.dsh-mod-accepted-toggle:hover{color:var(--dsw-alias-label-secondary)}.dsh-mod-list-accepted{opacity:.7;max-height:140px}.dsh-mod-file-accepted .dsh-mod-file-path{color:var(--dsw-alias-label-secondary)}.dsh-mod-tools{display:flex;justify-content:flex-end;padding:2px 8px 4px}.dsh-mod-tool{width:24px;height:24px;color:var(--dsw-alias-label-tertiary);cursor:pointer;background:0 0;border:none;border-radius:999px;place-items:center;padding:0;display:grid}.dsh-mod-tool:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-secondary)}";
 				document.head.appendChild(tag);
 			}
 			const sessions = ctx.sessions;
@@ -1347,6 +1438,12 @@ window.__ModuleLoader__.load({
 						undoModification: (modificationId, listId) => rollback.undoModification({
 							sessionId,
 							modificationId,
+							listId
+						}),
+						undoHunks: (path, hunks, listId) => rollback.undoHunks({
+							sessionId,
+							path,
+							hunks,
 							listId
 						}),
 						openAt: (path, line) => rollback.openAt(sessionId, path, line),

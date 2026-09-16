@@ -18,9 +18,16 @@ export interface GitProviderOptions {
     isolatedRepoInit?: Promise<boolean>;
     /**
      * Ceiling on nested git repositories materialized per capture. Directories
-     * beyond the cap stay gitlinks (their internals remain ledger-covered).
+     * beyond the cap stay gitlinks (their internals are not tracked per call).
      */
     maxNestedRepos?: number;
+}
+/** One entry for a batched `update-index --index-info` call. */
+export interface GitIndexEntry {
+    path: string;
+    /** Blob hash; omitted removes the path from the index. */
+    blob?: string;
+    mode?: string;
 }
 export interface GitTreeEntry {
     path: string;
@@ -45,7 +52,7 @@ export interface NestedRepoInfo {
     rel: string;
 }
 export declare function isHash(value: string): boolean;
-export declare function spawnGit(cwd: string, args: readonly string[], env: NodeJS.ProcessEnv, timeoutMs: number, signal?: AbortSignal, gitDir?: string, workTree?: string): Promise<GitRunResult>;
+export declare function spawnGit(cwd: string, args: readonly string[], env: NodeJS.ProcessEnv, timeoutMs: number, signal?: AbortSignal, gitDir?: string, workTree?: string, input?: string): Promise<GitRunResult>;
 export declare class GitProvider {
     readonly cwd: string;
     private readonly options;
@@ -112,7 +119,7 @@ export declare class GitProvider {
     /** Run git against the isolated repo from an arbitrary worktree. */
     private runAt;
     treeExists(tree: string, signal?: AbortSignal): Promise<boolean>;
-    diffEntries(from: string, to: string, signal?: AbortSignal, alternateObjectDirs?: readonly string[]): Promise<GitTreeEntry[]>;
+    diffEntries(from: string, to: string, signal?: AbortSignal): Promise<GitTreeEntry[]>;
     diffHunks(from: string, to: string, filePath: string, signal?: AbortSignal): Promise<{
         hunks: RollbackHunk[];
         truncated: boolean;
@@ -132,15 +139,136 @@ export declare class GitProvider {
     pathsInTree(tree: string, relPath?: string, signal?: AbortSignal): Promise<string[]>;
     blobHash(tree: string, relPath: string, signal?: AbortSignal): Promise<string | undefined>;
     fileHash(relPath: string, signal?: AbortSignal): Promise<string | undefined>;
+    /**
+     * Run `body` with a **private** throwaway index.
+     *
+     * Scratch work (accept, hunk/patch application, guard capture, list diffs)
+     * must never share an index file: two overlapping operations would
+     * interleave `read-tree` / `apply --cached` / `write-tree` and could publish
+     * a corrupted tree. `update-ref`'s compare-and-swap protects the ref, not the
+     * tree, so isolation has to happen here.
+     */
+    withScratch<T>(body: (indexFile: string) => Promise<T>): Promise<T>;
+    /**
+     * A persistent index file inside the isolated repo. `scan` backs the
+     * full-worktree `add -A` (its stat cache must survive between captures).
+     * Use `withScratch` for every other index need.
+     */
+    indexPath(kind: 'scan' | 'scratch'): string | undefined;
+    /**
+     * Write a worktree file into the isolated object store and return its blob
+     * hash. `undefined` when the path is absent or unreadable, which the caller
+     * records as a deletion.
+     */
+    writeBlob(absPath: string, signal?: AbortSignal): Promise<string | undefined>;
+    /** `write-tree` from an explicit index file. */
+    writeTree(indexFile: string, signal?: AbortSignal): Promise<string>;
+    /** Reset an index file to a tree-ish (`read-tree`; `--empty` when omitted). */
+    readTree(indexFile: string, treeish?: string, signal?: AbortSignal): Promise<void>;
+    /**
+     * Register many index entries in a single git process (`update-index
+     * --index-info`). An entry without `blob` removes the path.
+     */
+    updateIndexInfo(indexFile: string, entries: readonly GitIndexEntry[], signal?: AbortSignal): Promise<void>;
+    /**
+     * Apply a patch to an index only (never the worktree). The caller follows
+     * with `checkoutIndex` to materialize the result. This is the forward-only
+     * primitive behind hunk undo and patch replay.
+     */
+    applyCached(indexFile: string, patch: string, options?: {
+        unidiffZero?: boolean;
+        threeWay?: boolean;
+    }, signal?: AbortSignal): Promise<{
+        ok: boolean;
+        stderr: string;
+    }>;
+    /**
+     * Stage specific worktree paths into an index, including ignored ones
+     * (`-f`). A tree-vs-worktree diff only sees paths present in the index, so
+     * files created after the baseline (and ignored files) must be staged before
+     * the diff, which is also what keeps the diff bounded to session paths.
+     */
+    stagePaths(indexFile: string, relPaths: readonly string[], signal?: AbortSignal): Promise<void>;
+    /** Write index entries from an index file into the worktree. */
+    checkoutIndex(indexFile: string, relPaths: readonly string[], signal?: AbortSignal): Promise<void>;
+    /**
+     * The raw patch between two tree-ish values, or between a tree-ish and the
+     * worktree when `to` is omitted. Output keeps its `diff --git` headers so it
+     * can be fed straight back to `applyCached`. For the worktree form
+     * `indexFile` must be populated from `from` (see `readTree`), otherwise git
+     * reports every path as deleted.
+     */
+    diffPatch(from: string, to: string | undefined, relPaths: readonly string[], options?: {
+        signal?: AbortSignal;
+        context?: number;
+        indexFile?: string;
+    }): Promise<string>;
+    /**
+     * Per-commit patches for many commits in one process: each commit hash on
+     * stdin produces its own diff against its first parent, prefixed by a line
+     * containing the commit hash. This is the batched form of the per-call patch
+     * list (docs/git-only-plan.md §3).
+     */
+    diffTreePatches(commits: readonly string[], options?: {
+        context?: number;
+        signal?: AbortSignal;
+    }): Promise<Map<string, string>>;
+    /** Create a commit object for a tree (no worktree or index involved). */ commitTree(tree: string, parents: readonly string[], message: string, options?: {
+        timestamp?: number;
+    }, signal?: AbortSignal): Promise<string>;
+    /** Resolve a ref to its object hash, or undefined when it does not exist. */
+    readRef(ref: string, signal?: AbortSignal): Promise<string | undefined>;
+    /**
+     * Move a ref. With `expectedOld` this is a compare-and-swap: the update
+     * fails (returns false) unless the ref currently points at `expectedOld`,
+     * which makes concurrent accepts safe without a lock.
+     */
+    updateRef(ref: string, sha: string, expectedOld?: string, signal?: AbortSignal): Promise<boolean>;
+    /** Refs under a prefix, in refname order. */
+    listRefs(prefix: string, signal?: AbortSignal): Promise<Array<{
+        ref: string;
+        sha: string;
+    }>>;
+    /**
+     * Refs under a prefix with their commit messages in the same process
+     * (`for-each-ref --format=…%(contents)`), used by the ref-backed journal.
+     */
+    listRefsDetailed(prefix: string, signal?: AbortSignal): Promise<Array<{
+        ref: string;
+        sha: string;
+        contents: string;
+    }>>;
+    /**
+     * Refs under a prefix with commit metadata in one process: refname, object
+     * hash, tree hash, committer time and message. Backs the turn-point list.
+     */
+    listRefsWithMeta(prefix: string, signal?: AbortSignal): Promise<Array<{
+        ref: string;
+        sha: string;
+        tree: string;
+        createdAt: number;
+        contents: string;
+    }>>;
+    /**
+     * Parentless ancestors of a revision (`git rev-list --max-parents=0`), i.e.
+     * the root commit(s) of its history. Used to recover the session chain base
+     * of chains created before `refs/dsh/base` existed.
+     */
+    roots(rev: string, signal?: AbortSignal): Promise<string[]>;
+    /** The tree hash a revision points at (`rev-parse <rev>^{tree}`). */
+    treeOf(rev: string, signal?: AbortSignal): Promise<string>;
+    /** Delete a ref (best-effort; missing refs are not an error). */
+    deleteRefs(refs: readonly string[], signal?: AbortSignal): Promise<void>;
+    /**
+     * Build any number of commits in one process. The caller assembles the
+     * fast-import stream; blobs must already exist in the isolated repo (see
+     * `writeBlob`), so this is the freeze step of the per-call chain.
+     */
+    fastImport(stream: string, signal?: AbortSignal): Promise<void>;
     restorePaths(tree: string, relPaths: readonly string[], signal?: AbortSignal): Promise<void>;
     assertNoGitOperation(signal?: AbortSignal): Promise<boolean>;
-    /**
-     * All snapshot object operations run against the isolated repo.
-     * `alternateObjectDirs` borrows additional object stores read-only (git
-     * alternates), used to diff against tree objects captured by other
-     * sessions into their own isolated repos.
-     */
-    run(args: readonly string[], signal?: AbortSignal, indexFile?: string, alternateObjectDirs?: readonly string[]): Promise<GitRunResult>;
+    /** Every snapshot object operation runs against the isolated repo. */
+    run(args: readonly string[], signal?: AbortSignal, indexFile?: string, _unused?: undefined, input?: string): Promise<GitRunResult>;
     /** Read-only queries against the project's own repo (head, fences). */
     private runProject;
     /** The project's git dir (`.git`), or undefined outside a git worktree. */
@@ -150,7 +278,6 @@ export declare class GitProvider {
     assertSafeRelPath(input: string): void;
     absolutePath(relPath: string): string;
     private createTempIndex;
-    private ledgerRelativePath;
 }
 export declare function parseDiffTreeZ(stdout: string): GitTreeEntry[];
 export declare function parseDiffHunks(stdout: string, maxHunks: number, maxBytes: number): {
@@ -160,6 +287,8 @@ export declare function parseDiffHunks(stdout: string, maxHunks: number, maxByte
 };
 /** Split a multi-file `git diff-tree -p` stream into per-file sections. */
 export declare function splitDiffSections(stdout: string): string[];
+/** Parse the path out of a `diff --git a/x b/x` section header (quoted or not). */
+export declare function diffGitPath(line: string): string | undefined;
 /** Undo git's C-style path quoting (core.quotePath). */
 export declare function unquoteGitPath(quoted: string): string;
 /**

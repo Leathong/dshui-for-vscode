@@ -1,6 +1,6 @@
 /** JSON-safe RPC vocabulary shared by the dsh-rollback-plugin host and client. */
 export type RollbackScope = 'turn' | 'files' | 'modifications';
-export type RollbackErrorCode = 'session-not-found' | 'session-not-live' | 'message-not-found' | 'turn-not-found' | 'turn-not-completed' | 'snapshot-unavailable' | 'snapshot-expired' | 'workspace-changed' | 'agent-running' | 'git-operation-in-progress' | 'lock-timeout' | 'path-not-in-snapshot' | 'verification-failed' | 'rollback-failed' | 'bridge-unavailable';
+export type RollbackErrorCode = 'session-not-found' | 'session-not-live' | 'message-not-found' | 'turn-not-found' | 'turn-not-completed' | 'snapshot-unavailable' | 'snapshot-expired' | 'workspace-changed' | 'agent-running' | 'git-operation-in-progress' | 'lock-timeout' | 'path-not-in-snapshot' | 'verification-failed' | 'rollback-failed' | 'hunk-conflict' | 'patch-conflict' | 'bridge-unavailable';
 export interface RollbackFailure {
     code: RollbackErrorCode;
     message: string;
@@ -58,6 +58,12 @@ export interface RollbackFileChange {
     restorable: boolean;
     /** Session modification list: the file's current state matches an accept marker. */
     accepted?: boolean;
+    /**
+     * The path was already accepted, then changed outside this session's tool
+     * chain, so the worktree no longer matches the accepted content. The row stays
+     * in the unaccepted list, but the change is not attributable to this session.
+     */
+    foreign?: boolean;
     createdAfterSnapshot?: boolean;
     binary?: boolean;
     truncated?: boolean;
@@ -254,6 +260,21 @@ export interface RollbackUndoFileValue {
     acceptedFiles: string[];
 }
 export type RollbackUndoFileResult = RollbackResult<RollbackUndoFileValue>;
+export interface RollbackUndoHunksRequest {
+    sessionId: string;
+    path: string;
+    /** Indexes into the file's hunk list (as returned by `sessionChanges`). */
+    hunks: number[];
+    listId: string;
+}
+export interface RollbackUndoHunksValue {
+    guardId: string;
+    undone: number;
+    /** The undone file is auto-accepted, so it leaves the default list view. */
+    acceptedFiles: string[];
+    acceptedModifications: string[];
+}
+export type RollbackUndoHunksResult = RollbackResult<RollbackUndoHunksValue>;
 export interface RollbackUndoModificationRequest {
     sessionId: string;
     modificationId: string;

@@ -38,13 +38,22 @@ export declare function journalsPath(): string;
 export declare function locksDir(): string;
 export declare function readJsonFile<T>(file: string, fallback: T): Promise<T>;
 export declare function writeJsonFileAtomic<T>(file: string, value: T): Promise<void>;
+export declare const POINTS_PREFIX = "refs/dsh/points/";
+/**
+ * Turn-start rollback points, stored as git commits
+ * (docs/git-only-plan.md §2.1).
+ *
+ * `refs/dsh/points/<nnnn>` is a full-worktree commit taken at the start of a
+ * turn; everything the old manifest store kept (snapshot ids, JSON files, the
+ * storage-domain table) is now a ref. The full `add -A` is the only
+ * O(worktree) operation left, and it reuses a persistent index so unchanged
+ * files are not re-hashed.
+ */
 export declare class SnapshotManager {
     private readonly options;
     private readonly ctx?;
-    private manifests;
-    private loaded;
-    private writeTail;
-    private domainStorePromise?;
+    /** In-memory manifests for the current process (never persisted). */
+    private readonly manifests;
     private readonly dshHome;
     /** In-flight isolated repo inits, keyed by repo dir (dedupe across providers). */
     private readonly isolatedInit;
@@ -53,32 +62,22 @@ export declare class SnapshotManager {
     /**
      * Provider bound to one session's isolated snapshot repo (kept inside the
      * session's own directory, so deleting the session removes the objects).
-     * `sessionId` undefined degrades to ledger-only coverage.
      */
     providerFor(cwd: string, sessionId?: string): GitProvider;
-    /**
-     * Objects directory of one session's isolated snapshot repo, when it exists
-     * on disk. Used to borrow foreign snapshot trees read-only (git alternates)
-     * for cross-session window diffs; undefined when the session store was
-     * removed together with its session.
-     */
-    sessionObjectsDir(cwd: string, sessionId: string): string | undefined;
     private ensureIsolatedRepo;
-    /** Capture the pre-step baseline. Failures are caught by the caller and never block the agent. */
+    /** Capture the turn-start point. Failures never block the agent. */
     capture(session: Session, turn: number): Promise<RollbackSnapshotManifest | undefined>;
-    /** Exact snapshot first, then the newest earlier snapshot for the same session. */
-    find(sessionId: string, targetTurn: number): Promise<{
+    /** Exact point first, then the newest earlier point for the same session. */
+    find(cwd: string, sessionId: string, targetTurn: number): Promise<{
         manifest: RollbackSnapshotManifest;
         degraded: boolean;
     } | undefined>;
+    listPoints(cwd: string, sessionId: string, provider?: GitProvider): Promise<RollbackSnapshotManifest[]>;
     ensureTreeAvailable(manifest: RollbackSnapshotManifest, provider: GitProvider): Promise<boolean>;
     snapshotInfo(manifest: RollbackSnapshotManifest, degraded: boolean): RollbackSnapshotInfo;
-    listForSession(sessionId: string): Promise<RollbackSnapshotManifest[]>;
-    /** All manifests captured in one workspace (any session), oldest first. */
-    listForWorkspace(cwd: string): Promise<RollbackSnapshotManifest[]>;
-    private load;
-    private enqueuePersist;
-    /** Open the storage-domain table when the Host composition provides one. */
-    private domainStore;
-    private openDomainStore;
+    /** Drop the oldest points beyond `maxSnapshotsPerSession`. */
+    private prune;
+    private manifestAt;
 }
+/** `refs/dsh/points/<nnnn>`: zero padded so ref order equals turn order. */
+export declare function pointRef(turn: number): string;

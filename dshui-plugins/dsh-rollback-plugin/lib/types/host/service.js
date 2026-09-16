@@ -33,17 +33,15 @@ var __esDecorate = (this && this.__esDecorate) || function (ctor, descriptorIn, 
     done = true;
 };
 import { Remote, TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol';
-import { AcceptLedger } from "./accepts.js";
-import { ChangeLedger } from "./ledger.js";
+import { AcceptBase } from "./accept-base.js";
 import { RollbackRestore } from "./restore.js";
 import { RollbackSafety } from "./safety.js";
 import { SessionChangeManager } from "./session-changes.js";
 import { SnapshotManager, changeLedgerRoot } from "./snapshot.js";
+import { CallTracker } from "./tracking.js";
 export const DEFAULT_ROLLBACK_CONFIG = {
     enabled: true,
     snapshotOnPreStep: true,
-    ledgerMaxTextBytes: 256 * 1024,
-    maxLedgerRecordsPerSession: 500,
     maxSnapshotsPerSession: 200,
     maxDiffHunksPerFile: 20,
     maxDiffBytesPerFile: 256 * 1024,
@@ -51,6 +49,10 @@ export const DEFAULT_ROLLBACK_CONFIG = {
     guardRetentionMs: 30 * 24 * 60 * 60 * 1000,
     lockStaleMs: 10 * 60 * 1000,
     spawnTimeoutMs: 60 * 1000,
+    trackingEnabled: true,
+    maxBlobBytes: 8 * 1024 * 1024,
+    maxTrackedCallsPerSession: 500,
+    diffContextLines: 3,
 };
 let RollbackService = (() => {
     let _classSuper = TypertRemoteService;
@@ -67,6 +69,7 @@ let RollbackService = (() => {
     let _undoAll_decorators;
     let _undoFile_decorators;
     let _undoModification_decorators;
+    let _undoHunks_decorators;
     return class RollbackService extends _classSuper {
         static {
             const _metadata = typeof Symbol === "function" && Symbol.metadata ? Object.create(_classSuper[Symbol.metadata] ?? null) : void 0;
@@ -82,6 +85,7 @@ let RollbackService = (() => {
             _undoAll_decorators = [Remote];
             _undoFile_decorators = [Remote];
             _undoModification_decorators = [Remote];
+            _undoHunks_decorators = [Remote];
             __esDecorate(this, null, _prepare_decorators, { kind: "method", name: "prepare", static: false, private: false, access: { has: obj => "prepare" in obj, get: obj => obj.prepare }, metadata: _metadata }, null, _instanceExtraInitializers);
             __esDecorate(this, null, _execute_decorators, { kind: "method", name: "execute", static: false, private: false, access: { has: obj => "execute" in obj, get: obj => obj.execute }, metadata: _metadata }, null, _instanceExtraInitializers);
             __esDecorate(this, null, _openAt_decorators, { kind: "method", name: "openAt", static: false, private: false, access: { has: obj => "openAt" in obj, get: obj => obj.openAt }, metadata: _metadata }, null, _instanceExtraInitializers);
@@ -94,20 +98,22 @@ let RollbackService = (() => {
             __esDecorate(this, null, _undoAll_decorators, { kind: "method", name: "undoAll", static: false, private: false, access: { has: obj => "undoAll" in obj, get: obj => obj.undoAll }, metadata: _metadata }, null, _instanceExtraInitializers);
             __esDecorate(this, null, _undoFile_decorators, { kind: "method", name: "undoFile", static: false, private: false, access: { has: obj => "undoFile" in obj, get: obj => obj.undoFile }, metadata: _metadata }, null, _instanceExtraInitializers);
             __esDecorate(this, null, _undoModification_decorators, { kind: "method", name: "undoModification", static: false, private: false, access: { has: obj => "undoModification" in obj, get: obj => obj.undoModification }, metadata: _metadata }, null, _instanceExtraInitializers);
+            __esDecorate(this, null, _undoHunks_decorators, { kind: "method", name: "undoHunks", static: false, private: false, access: { has: obj => "undoHunks" in obj, get: obj => obj.undoHunks }, metadata: _metadata }, null, _instanceExtraInitializers);
             if (_metadata) Object.defineProperty(this, Symbol.metadata, { enumerable: true, configurable: true, writable: true, value: _metadata });
         }
         host = __runInitializers(this, _instanceExtraInitializers);
         config;
         snapshots;
-        ledger;
         safety;
-        accepts;
+        acceptBase;
         restore;
         sessionChangeManager;
+        tracker;
         constructor(ctx, config = {}) {
             super(ctx, 'rollback');
             this.host = ctx;
             this.config = { ...DEFAULT_ROLLBACK_CONFIG, ...config };
+            // `change-ledger` still hosts the cross-process workspace lock directory.
             const ledgerDir = changeLedgerRoot();
             this.snapshots = new SnapshotManager({
                 maxSnapshotsPerSession: this.config.maxSnapshotsPerSession,
@@ -117,28 +123,27 @@ let RollbackService = (() => {
                 maxDiffBytesPerFile: this.config.maxDiffBytesPerFile,
                 restoreChunkSize: this.config.restoreChunkSize,
             }, this.host);
-            this.ledger = new ChangeLedger(this.host, {
-                ledgerMaxTextBytes: this.config.ledgerMaxTextBytes,
-                maxLedgerRecordsPerSession: this.config.maxLedgerRecordsPerSession,
-            });
             this.safety = new RollbackSafety({
                 lockStaleMs: this.config.lockStaleMs,
                 guardRetentionMs: this.config.guardRetentionMs,
-                ledgerDir,
                 lockTimeoutMs: 10_000,
             });
-            this.accepts = new AcceptLedger({ maxContentBytes: this.config.ledgerMaxTextBytes });
-            this.restore = new RollbackRestore(this.host, this.snapshots, this.ledger, this.safety, {
+            this.acceptBase = new AcceptBase(this.host, this.snapshots, { spawnTimeoutMs: this.config.spawnTimeoutMs });
+            this.tracker = new CallTracker(this.host, this.snapshots, {
+                maxBlobBytes: this.config.maxBlobBytes,
+                maxCallsPerSession: this.config.maxTrackedCallsPerSession,
+            });
+            this.restore = new RollbackRestore(this.host, this.snapshots, this.tracker, this.safety, {
                 maxDiffHunksPerFile: this.config.maxDiffHunksPerFile,
                 maxDiffBytesPerFile: this.config.maxDiffBytesPerFile,
                 restoreChunkSize: this.config.restoreChunkSize,
                 spawnTimeoutMs: this.config.spawnTimeoutMs,
             });
-            this.sessionChangeManager = new SessionChangeManager(this.host, this.snapshots, this.ledger, this.safety, this.accepts, {
+            this.sessionChangeManager = new SessionChangeManager(this.host, this.snapshots, this.tracker, this.acceptBase, this.safety, {
                 maxDiffHunksPerFile: this.config.maxDiffHunksPerFile,
                 maxDiffBytesPerFile: this.config.maxDiffBytesPerFile,
                 spawnTimeoutMs: this.config.spawnTimeoutMs,
-                acceptContentMaxBytes: this.config.ledgerMaxTextBytes,
+                diffContextLines: this.config.diffContextLines,
             });
         }
         prepare(sessionId, messageId, _signal) {
@@ -176,6 +181,9 @@ let RollbackService = (() => {
         }
         undoModification(request, _signal) {
             return this.sessionChangeManager.undoModification(request);
+        }
+        undoHunks(request, _signal) {
+            return this.sessionChangeManager.undoHunks(request);
         }
     };
 })();

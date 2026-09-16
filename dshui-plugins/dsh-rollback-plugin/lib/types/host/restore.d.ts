@@ -1,9 +1,8 @@
-import type { OpenAtRequest, OpenAtValue, RollbackExecuteRequest, RollbackExecuteResult, RollbackFileChange, RollbackModification, RollbackPrepareResult, RollbackResult, RollbackStatusValue } from '../shared/types.ts';
-import type { RollbackCordisContext, SessionEvent } from './context.ts';
-import { ChangeLedger } from './ledger.ts';
-import type { LedgerModificationRecord } from './ledger.ts';
+import type { OpenAtRequest, OpenAtValue, RollbackExecuteRequest, RollbackExecuteResult, RollbackPrepareResult, RollbackResult, RollbackStatusValue } from '../shared/types.ts';
+import type { RollbackCordisContext } from './context.ts';
 import { RollbackSafety } from './safety.ts';
 import { SnapshotManager } from './snapshot.ts';
+import type { CallTracker } from './tracking.ts';
 export interface RestoreOptions {
     maxDiffHunksPerFile: number;
     maxDiffBytesPerFile: number;
@@ -13,11 +12,11 @@ export interface RestoreOptions {
 export declare class RollbackRestore {
     private readonly ctx;
     private readonly snapshots;
-    private readonly ledger;
+    private readonly tracker;
     private readonly safety;
     private readonly options;
     private readonly prepared;
-    constructor(ctx: RollbackCordisContext, snapshots: SnapshotManager, ledger: ChangeLedger, safety: RollbackSafety, options: RestoreOptions);
+    constructor(ctx: RollbackCordisContext, snapshots: SnapshotManager, tracker: CallTracker, safety: RollbackSafety, options: RestoreOptions);
     prepare(sessionId: string, messageId: string): Promise<RollbackPrepareResult>;
     /** Turn-anchored prepare: also serves unfinished (stopped) turns. */
     prepareTurn(sessionId: string, turn: number): Promise<RollbackPrepareResult>;
@@ -28,19 +27,16 @@ export declare class RollbackRestore {
     openAt(sessionId: string, request: OpenAtRequest): Promise<RollbackResult<OpenAtValue>>;
     private liveSession;
     private selectFilePaths;
+    /** Per-call patches of one turn, read from the tracked commit chain. */
     private buildModifications;
-    private attachToolCalls;
+    /**
+     * `scope='modifications'`: rebuild each affected file as "turn-start state +
+     * every call of the turn except the selected ones", applied forward in call
+     * order (docs/git-only-plan.md §2.7).
+     */
     private executeModifications;
+    /** One call's forward patch (`<commit>^` → `<commit>`), path-limited. */
+    private callPatch;
     private executeFailure;
     private finishGuard;
 }
-export declare function parseRecordArgs(raw: string | undefined): Record<string, unknown>;
-/** Reusable modification builder: ledger records + log-only write/edit events. */
-export declare function buildModificationsFromRecords(cwd: string, events: readonly SessionEvent[], records: readonly LedgerModificationRecord[], later: (record: LedgerModificationRecord) => LedgerModificationRecord[], turn?: number): RollbackModification[];
-/** Attach per-path tool-call patch lists onto file-level changes. */
-export declare function attachToolCallsToChanges(changes: RollbackFileChange[], modifications: readonly RollbackModification[]): void;
-export declare function sessionLogHunks(event: {
-    type: string;
-    data: unknown;
-} | undefined, args: Record<string, unknown>): RollbackModification['hunks'];
-export declare function recordHunks(record: LedgerModificationRecord): RollbackModification['hunks'];

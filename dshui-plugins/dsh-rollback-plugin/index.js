@@ -1,9 +1,10 @@
 import { Remote, TypertRemoteService } from "@deepseek-ai/dsh-typert-protocol";
+import * as crypto from "node:crypto";
+import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import * as os from "node:os";
 import { spawn } from "node:child_process";
-import * as crypto from "node:crypto";
+import * as os from "node:os";
 //#region lib/types/host/attribution.js
 /**
 * Depth cap for the parent-lineage walk. Subagent delegation is bounded by
@@ -41,8 +42,241 @@ function attributionSession(ctx, session) {
 	return current;
 }
 //#endregion
+//#region lib/types/host/accept-base.js
+/**
+* The accept baseline of one session, held entirely in git
+* (docs/git-only-plan.md §2.4, §2.5).
+*
+* `refs/dsh/accepted` is a commit chain whose tip tree is the accepted
+* content. Accepting never touches the worktree, so it needs no workspace lock,
+* no fence and no session flush. "Is this file accepted?" is a blob-hash
+* comparison, which removes the fingerprint / accept-time-content bookkeeping
+* the ledger used to keep.
+*/
+const ACCEPTED_REF = "refs/dsh/accepted";
+var AcceptBase = class {
+	ctx;
+	snapshots;
+	options;
+	constructor(ctx, snapshots, options = { spawnTimeoutMs: 6e4 }) {
+		this.ctx = ctx;
+		this.snapshots = snapshots;
+		this.options = options;
+	}
+	/**
+	* Ensure the accepted baseline exists for a session, seeding it from the
+	* turn-start tree when this is the first call. Returns the commit that the
+	* ref points at (used directly as a tree-ish for diffs).
+	*/
+	async ensure(cwd, sessionId, seedTree, options = {}) {
+		const provider = this.snapshots.providerFor(cwd, sessionId);
+		if (!await provider.available().catch(() => false)) return void 0;
+		const existing = await provider.readRef(ACCEPTED_REF);
+		if (existing !== void 0) return existing;
+		const tree = seedTree ?? (options.requireSeed === true ? void 0 : await provider.captureTree().catch(() => void 0));
+		if (tree === void 0) return void 0;
+		const commit = await provider.commitTree(tree, [], `dsh accepted baseline\nsession=${sessionId}\n`);
+		await provider.updateRef(ACCEPTED_REF, commit);
+		return commit;
+	}
+	/** The current accepted commit, when the baseline already exists. */
+	async ref(cwd, sessionId) {
+		const provider = this.snapshots.providerFor(cwd, sessionId);
+		if (!await provider.available().catch(() => false)) return void 0;
+		return provider.readRef(ACCEPTED_REF);
+	}
+	/** The accepted blob of one path (undefined = absent from the accepted tree). */
+	async acceptedBlob(cwd, sessionId, relPath) {
+		const commit = await this.ref(cwd, sessionId);
+		if (commit === void 0) return void 0;
+		return this.snapshots.providerFor(cwd, sessionId).blobHash(commit, relPath).catch(() => void 0);
+	}
+	/**
+	* Accept the current worktree content of each path (a file that disappeared
+	* is accepted as a deletion). This is the only accept path that reads the
+	* worktree.
+	*/
+	async acceptPaths(cwd, sessionId, relPaths, options = {}) {
+		const provider = this.snapshots.providerFor(cwd, sessionId);
+		const baseline = await this.ensure(cwd, sessionId, options.seedTree, { requireSeed: true });
+		if (baseline === void 0) return {
+			ok: false,
+			reason: "no-accepted-baseline"
+		};
+		const paths = [...new Set(relPaths.map((item) => provider.normalizeRelPath(item)))];
+		if (paths.length === 0) return {
+			ok: true,
+			commit: baseline
+		};
+		const tree = await provider.withScratch(async (scratch) => {
+			await provider.readTree(scratch, baseline);
+			const entries = [];
+			for (const rel of paths) {
+				const abs = provider.absolutePath(rel);
+				const blob = await provider.writeBlob(abs).catch(() => void 0);
+				entries.push(blob === void 0 ? { path: rel } : {
+					path: rel,
+					blob
+				});
+			}
+			await provider.updateIndexInfo(scratch, entries);
+			return provider.writeTree(scratch);
+		});
+		for (let attempt = 0; attempt < 2; attempt += 1) {
+			const current = await provider.readRef(ACCEPTED_REF);
+			if (current === void 0) return {
+				ok: false,
+				reason: "git-unavailable"
+			};
+			const commit = await provider.commitTree(tree, [current], `${options.message ?? "accept"}\npaths=${paths.join(",")}\n`);
+			if (await provider.updateRef("refs/dsh/accepted", commit, current)) return {
+				ok: true,
+				commit
+			};
+		}
+		return {
+			ok: false,
+			reason: "accept-conflict"
+		};
+	}
+	/**
+	* Accept one patch by applying its forward diff onto the accepted tree. The
+	* fast path (accepted already sits exactly before the patch) only registers
+	* the patch blob; otherwise git applies the patch forward and may fall back
+	* to a three-way merge, since every pre-image is in the object store.
+	*/
+	async acceptPatch(cwd, sessionId, relPath, patch, options = {}) {
+		const provider = this.snapshots.providerFor(cwd, sessionId);
+		const baseline = await this.ensure(cwd, sessionId, options.seedTree, { requireSeed: true });
+		if (baseline === void 0) return {
+			ok: false,
+			reason: "no-accepted-baseline"
+		};
+		const rel = provider.normalizeRelPath(relPath);
+		const accepted = await provider.blobHash(baseline, rel).catch(() => void 0);
+		const fast = accepted !== void 0 && options.beforeBlob !== void 0 && accepted === options.beforeBlob && options.afterBlob !== void 0;
+		const applied = await provider.withScratch(async (scratch) => {
+			await provider.readTree(scratch, baseline);
+			if (fast) await provider.updateIndexInfo(scratch, [{
+				path: rel,
+				blob: options.afterBlob
+			}]);
+			else if (patch.trim() !== "") {
+				let result = await provider.applyCached(scratch, patch);
+				if (!result.ok) result = await provider.applyCached(scratch, patch, { threeWay: true });
+				if (!result.ok) return {
+					ok: false,
+					reason: result.stderr || "patch-conflict"
+				};
+			}
+			return {
+				ok: true,
+				tree: await provider.writeTree(scratch)
+			};
+		});
+		if (!applied.ok || applied.tree === void 0) return {
+			ok: false,
+			reason: applied.reason
+		};
+		const tree = applied.tree;
+		for (let attempt = 0; attempt < 2; attempt += 1) {
+			const current = await provider.readRef(ACCEPTED_REF);
+			if (current === void 0) return {
+				ok: false,
+				reason: "git-unavailable"
+			};
+			const commit = await provider.commitTree(tree, [current], `accept patch\npaths=${rel}\n`);
+			if (await provider.updateRef("refs/dsh/accepted", commit, current)) return {
+				ok: true,
+				commit
+			};
+		}
+		return {
+			ok: false,
+			reason: "accept-conflict"
+		};
+	}
+};
+//#endregion
+//#region lib/types/host/errors.js
+function ok(value) {
+	return {
+		ok: true,
+		value
+	};
+}
+function fail(code, message, fields = {}) {
+	return {
+		ok: false,
+		error: {
+			code,
+			message,
+			...fields
+		}
+	};
+}
+//#endregion
+//#region lib/types/host/boundary.js
+function resolveBoundary(session, messageId) {
+	let assistant;
+	for (const event of session.snapshotEvents()) {
+		if (event.type !== "assistant/message") continue;
+		if (event.data.message.id === messageId) assistant = event;
+	}
+	if (assistant === void 0) return { failure: {
+		code: "message-not-found",
+		message: `assistant message "${messageId}" was not found in session "${session.id}"`,
+		sessionId: session.id,
+		messageId
+	} };
+	return resolveForTurn(session, assistant.data.turn, { assistantEvent: assistant });
+}
+/**
+* Resolve the rollback boundary of a turn by its number. Works for unfinished
+* turns (a stopped/interrupted assistant message never emits `turn/end`): the
+* rollback target is the turn-start snapshot and the fork anchor is the last
+* completed turn end before it.
+*/
+function resolveBoundaryForTurn(session, turn) {
+	const turnStart = session.snapshotEvents().find((event) => event.type === "turn/start" && event.data.turn === turn);
+	if (turnStart === void 0) return { failure: {
+		code: "turn-not-found",
+		message: `turn ${turn} has no turn/start in session "${session.id}"`,
+		sessionId: session.id
+	} };
+	return resolveForTurn(session, turn, { turnStartSeq: turnStart.seq });
+}
+function resolveForTurn(session, targetTurn, extras) {
+	const events = session.snapshotEvents();
+	const turnStart = events.find((event) => event.type === "turn/start" && event.data.turn === targetTurn);
+	const anchor = findPreviousTurnEnd(events, turnStart?.seq ?? Number.MAX_SAFE_INTEGER);
+	return { boundary: {
+		targetTurn,
+		...anchor === void 0 ? {} : { forkAtSeq: anchor.seq },
+		forkAvailable: anchor !== void 0,
+		...extras,
+		...turnStart === void 0 ? {} : { turnStartSeq: turnStart.seq }
+	} };
+}
+function findPreviousTurnEnd(events, beforeSeq) {
+	let found;
+	for (const event of events) {
+		if (event.seq >= beforeSeq) break;
+		if (event.type === "turn/end") found = event;
+	}
+	return found;
+}
+function boundaryInfo(boundary) {
+	return {
+		targetTurn: boundary.targetTurn,
+		...boundary.forkAtSeq === void 0 ? {} : { forkAtSeq: boundary.forkAtSeq },
+		forkAvailable: boundary.forkAvailable
+	};
+}
+//#endregion
 //#region lib/types/host/providers/git.js
 const HEX_RE = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/;
+const ZERO_SHA = "0000000000000000000000000000000000000000";
 const RUNNING_OPS = [
 	"MERGE_HEAD",
 	"CHERRY_PICK_HEAD",
@@ -52,7 +286,7 @@ const RUNNING_OPS = [
 function isHash(value) {
 	return HEX_RE.test(value);
 }
-function spawnGit(cwd, args, env, timeoutMs, signal, gitDir, workTree) {
+function spawnGit(cwd, args, env, timeoutMs, signal, gitDir, workTree, input) {
 	const flags = [];
 	if (gitDir !== void 0 && gitDir !== "") flags.push(`--git-dir=${gitDir}`);
 	if (workTree !== void 0 && workTree !== "") flags.push(`--work-tree=${workTree}`);
@@ -70,12 +304,13 @@ function spawnGit(cwd, args, env, timeoutMs, signal, gitDir, workTree) {
 				LC_ALL: "C"
 			},
 			stdio: [
-				"ignore",
+				"pipe",
 				"pipe",
 				"pipe"
 			],
 			windowsHide: true
 		});
+		child.stdin.end(input ?? "");
 		let stderr = "";
 		let settled = false;
 		const chunks = [];
@@ -218,8 +453,10 @@ var GitProvider = class {
 		const seen = /* @__PURE__ */ new Set();
 		let budget = 0;
 		let materialized = false;
+		const scanIndex = this.indexPath("scan");
 		const materialize = async (absRoot) => {
-			const tree = await this.captureWorktree(absRoot, signal);
+			const isRoot = path.resolve(absRoot) === path.resolve(this.cwd);
+			const tree = await this.captureWorktree(absRoot, signal, isRoot ? scanIndex : void 0);
 			const replacements = [];
 			for (const rel of await this.gitlinkPaths(tree)) {
 				if (budget >= this.maxNestedRepos) break;
@@ -328,12 +565,15 @@ var GitProvider = class {
 		return paths;
 	}
 	/** Capture one worktree (the workspace root or a nested repository root). */
-	async captureWorktree(cwd, signal) {
-		const isRoot = path.resolve(cwd) === path.resolve(this.cwd);
-		const index = await this.createTempIndex();
+	async captureWorktree(cwd, signal, reuseIndex) {
+		path.resolve(cwd), path.resolve(this.cwd);
+		const ownsIndex = reuseIndex === void 0;
+		const index = reuseIndex ?? await this.createTempIndex();
 		try {
-			const reset = await this.runAt(cwd, ["read-tree", "--empty"], signal, index);
-			if (reset.code !== 0) throw new Error(`git read-tree --empty failed: ${reset.stderr.trim()}`);
+			if (ownsIndex) {
+				const reset = await this.runAt(cwd, ["read-tree", "--empty"], signal, index);
+				if (reset.code !== 0) throw new Error(`git read-tree --empty failed: ${reset.stderr.trim()}`);
+			}
 			let added = await this.runAt(cwd, ["add", "-A"], signal, index);
 			if (added.code !== 0) {
 				const excludes = [];
@@ -346,32 +586,19 @@ var GitProvider = class {
 				], signal, index);
 			}
 			if (added.code !== 0) throw new Error(`git add -A failed: ${added.stderr.trim()}`);
-			if (isRoot) {
-				const ledgerRel = this.ledgerRelativePath();
-				if (ledgerRel !== void 0) {
-					const removed = await this.runAt(cwd, [
-						"rm",
-						"-r",
-						"--cached",
-						"--ignore-unmatch",
-						"--quiet",
-						"--",
-						ledgerRel
-					], signal, index);
-					if (removed.code !== 0 && removed.stderr.trim() !== "") throw new Error(`git rm (ledger exclusion) failed: ${removed.stderr.trim()}`);
-				}
-			}
 			const result = await this.runAt(cwd, ["write-tree"], signal, index);
 			if (result.code !== 0) throw new Error(`git write-tree failed: ${result.stderr.trim()}`);
 			const tree = result.stdout.trim();
 			if (!isHash(tree)) throw new Error(`git write-tree returned invalid tree hash: ${tree}`);
 			return tree;
 		} finally {
-			fs.rmSync(index, { force: true });
-			fs.rmSync(path.dirname(index), {
-				recursive: true,
-				force: true
-			});
+			if (ownsIndex) {
+				fs.rmSync(index, { force: true });
+				fs.rmSync(path.dirname(index), {
+					recursive: true,
+					force: true
+				});
+			}
 		}
 	}
 	/** Whether a repository has a resolvable HEAD (false ⇒ commitless/bare). */
@@ -437,7 +664,7 @@ var GitProvider = class {
 			`${tree}^{tree}`
 		], signal)).code === 0;
 	}
-	async diffEntries(from, to, signal, alternateObjectDirs) {
+	async diffEntries(from, to, signal) {
 		if (!isHash(from) || !isHash(to)) throw new Error("diff-trees requires valid tree hashes");
 		const result = await this.run([
 			"diff-tree",
@@ -446,7 +673,7 @@ var GitProvider = class {
 			"-z",
 			from,
 			to
-		], signal, void 0, alternateObjectDirs);
+		], signal);
 		if (result.code !== 0) throw new Error(`git diff-tree failed: ${result.stderr.trim()}`);
 		return parseDiffTreeZ(result.stdout);
 	}
@@ -527,6 +754,390 @@ var GitProvider = class {
 		const hash = result.stdout.trim();
 		return isHash(hash) ? hash : void 0;
 	}
+	/**
+	* Run `body` with a **private** throwaway index.
+	*
+	* Scratch work (accept, hunk/patch application, guard capture, list diffs)
+	* must never share an index file: two overlapping operations would
+	* interleave `read-tree` / `apply --cached` / `write-tree` and could publish
+	* a corrupted tree. `update-ref`'s compare-and-swap protects the ref, not the
+	* tree, so isolation has to happen here.
+	*/
+	async withScratch(body) {
+		const index = await this.createTempIndex();
+		try {
+			return await body(index);
+		} finally {
+			fs.rmSync(index, { force: true });
+			fs.rmSync(path.dirname(index), {
+				recursive: true,
+				force: true
+			});
+		}
+	}
+	/**
+	* A persistent index file inside the isolated repo. `scan` backs the
+	* full-worktree `add -A` (its stat cache must survive between captures).
+	* Use `withScratch` for every other index need.
+	*/
+	indexPath(kind) {
+		const dir = this.options.isolatedRepoDir;
+		if (dir === void 0 || dir === "") return void 0;
+		return path.join(dir, kind === "scan" ? "dsh-scan.index" : "dsh-scratch.index");
+	}
+	/**
+	* Write a worktree file into the isolated object store and return its blob
+	* hash. `undefined` when the path is absent or unreadable, which the caller
+	* records as a deletion.
+	*/
+	async writeBlob(absPath, signal) {
+		if (!path.isAbsolute(absPath) || absPath.includes("\0")) return void 0;
+		try {
+			if (!fs.statSync(absPath).isFile()) return void 0;
+		} catch {
+			return;
+		}
+		const result = await this.run([
+			"hash-object",
+			"-w",
+			"--",
+			absPath
+		], signal);
+		if (result.code !== 0) return void 0;
+		const hash = result.stdout.trim();
+		return isHash(hash) ? hash : void 0;
+	}
+	/** `write-tree` from an explicit index file. */
+	async writeTree(indexFile, signal) {
+		const result = await this.run(["write-tree"], signal, indexFile);
+		if (result.code !== 0) throw new Error(`git write-tree failed: ${result.stderr.trim()}`);
+		const tree = result.stdout.trim();
+		if (!isHash(tree)) throw new Error(`git write-tree returned invalid tree hash: ${tree}`);
+		return tree;
+	}
+	/** Reset an index file to a tree-ish (`read-tree`; `--empty` when omitted). */
+	async readTree(indexFile, treeish, signal) {
+		const args = treeish === void 0 || treeish === "" ? ["read-tree", "--empty"] : ["read-tree", treeish];
+		const result = await this.run(args, signal, indexFile);
+		if (result.code !== 0) throw new Error(`git read-tree failed: ${result.stderr.trim()}`);
+	}
+	/**
+	* Register many index entries in a single git process (`update-index
+	* --index-info`). An entry without `blob` removes the path.
+	*/
+	async updateIndexInfo(indexFile, entries, signal) {
+		if (entries.length === 0) return;
+		if (entries.every((entry) => !/[\n\t]/.test(entry.path))) {
+			const lines = entries.map((entry) => entry.blob === void 0 ? `0 ${ZERO_SHA}\t${entry.path}\n` : `${entry.mode ?? "100644"} ${entry.blob}\t${entry.path}\n`).join("");
+			const result = await this.run(["update-index", "--index-info"], signal, indexFile, void 0, lines);
+			if (result.code !== 0) throw new Error(`git update-index --index-info failed: ${result.stderr.trim()}`);
+			return;
+		}
+		for (const entry of entries) {
+			const args = entry.blob === void 0 ? [
+				"update-index",
+				"--force-remove",
+				"--",
+				entry.path
+			] : [
+				"update-index",
+				"--add",
+				"--cacheinfo",
+				`${entry.mode ?? "100644"},${entry.blob},${entry.path}`
+			];
+			const result = await this.run(args, signal, indexFile);
+			if (result.code !== 0) throw new Error(`git update-index failed for ${entry.path}: ${result.stderr.trim()}`);
+		}
+	}
+	/**
+	* Apply a patch to an index only (never the worktree). The caller follows
+	* with `checkoutIndex` to materialize the result. This is the forward-only
+	* primitive behind hunk undo and patch replay.
+	*/
+	async applyCached(indexFile, patch, options = {}, signal) {
+		if (patch.trim() === "") return {
+			ok: true,
+			stderr: ""
+		};
+		const args = [
+			"apply",
+			"--cached",
+			"--whitespace=nowarn"
+		];
+		if (options.unidiffZero === true) args.push("--unidiff-zero");
+		if (options.threeWay === true) args.push("--3way");
+		const result = await this.run(args, signal, indexFile, void 0, patch);
+		return {
+			ok: result.code === 0,
+			stderr: result.stderr.trim()
+		};
+	}
+	/**
+	* Stage specific worktree paths into an index, including ignored ones
+	* (`-f`). A tree-vs-worktree diff only sees paths present in the index, so
+	* files created after the baseline (and ignored files) must be staged before
+	* the diff, which is also what keeps the diff bounded to session paths.
+	*/
+	async stagePaths(indexFile, relPaths, signal) {
+		const existing = [];
+		for (const rel of new Set(relPaths)) {
+			this.assertSafeRelPath(rel);
+			try {
+				if (fs.statSync(path.resolve(this.cwd, rel)).isFile()) existing.push(rel);
+			} catch {}
+		}
+		if (existing.length === 0) return;
+		const chunkSize = Math.max(1, this.options.restoreChunkSize);
+		for (let start = 0; start < existing.length; start += chunkSize) {
+			const chunk = existing.slice(start, start + chunkSize);
+			const result = await this.run([
+				"add",
+				"-f",
+				"--",
+				...chunk
+			], signal, indexFile);
+			if (result.code !== 0) throw new Error(`git add -f failed for ${chunk.join(", ")}: ${result.stderr.trim()}`);
+		}
+	}
+	/** Write index entries from an index file into the worktree. */
+	async checkoutIndex(indexFile, relPaths, signal) {
+		const unique = [...new Set(relPaths.map((item) => this.normalizeRelPath(item)))];
+		if (unique.length === 0) return;
+		const chunkSize = Math.max(1, this.options.restoreChunkSize);
+		for (let start = 0; start < unique.length; start += chunkSize) {
+			const chunk = unique.slice(start, start + chunkSize);
+			const result = await this.run([
+				"checkout-index",
+				"-f",
+				"--",
+				...chunk
+			], signal, indexFile);
+			if (result.code !== 0) throw new Error(`git checkout-index failed for ${chunk.join(", ")}: ${result.stderr.trim()}`);
+		}
+	}
+	/**
+	* The raw patch between two tree-ish values, or between a tree-ish and the
+	* worktree when `to` is omitted. Output keeps its `diff --git` headers so it
+	* can be fed straight back to `applyCached`. For the worktree form
+	* `indexFile` must be populated from `from` (see `readTree`), otherwise git
+	* reports every path as deleted.
+	*/
+	async diffPatch(from, to, relPaths, options = {}) {
+		for (const rel of relPaths) this.assertSafeRelPath(rel);
+		const args = [
+			"diff",
+			"--no-renames",
+			"--full-index",
+			`--unified=${Math.max(0, options.context ?? 3)}`,
+			from
+		];
+		if (to !== void 0 && to !== "") args.push(to);
+		if (relPaths.length > 0) args.push("--", ...relPaths);
+		const result = await this.run(args, options.signal, options.indexFile);
+		if (result.code !== 0) throw new Error(`git diff failed: ${result.stderr.trim()}`);
+		return result.stdout;
+	}
+	/**
+	* Per-commit patches for many commits in one process: each commit hash on
+	* stdin produces its own diff against its first parent, prefixed by a line
+	* containing the commit hash. This is the batched form of the per-call patch
+	* list (docs/git-only-plan.md §3).
+	*/
+	async diffTreePatches(commits, options = {}) {
+		const result = /* @__PURE__ */ new Map();
+		const hashes = commits.filter((commit) => isHash(commit));
+		if (hashes.length === 0) return result;
+		const run = await this.run([
+			"diff-tree",
+			"-p",
+			"--no-renames",
+			"--full-index",
+			`--unified=${Math.max(0, options.context ?? 3)}`,
+			"--stdin"
+		], options.signal, void 0, void 0, `${hashes.join("\n")}\n`);
+		if (run.code !== 0) throw new Error(`git diff-tree --stdin failed: ${run.stderr.trim()}`);
+		let current;
+		let lines = [];
+		const flush = () => {
+			if (current !== void 0) result.set(current, lines.join("\n"));
+			lines = [];
+		};
+		for (const line of run.stdout.split("\n")) {
+			if (isHash(line)) {
+				flush();
+				current = line;
+				continue;
+			}
+			if (current !== void 0) lines.push(line);
+		}
+		flush();
+		return result;
+	}
+	/** Create a commit object for a tree (no worktree or index involved). */ async commitTree(tree, parents, message, options = {}, signal) {
+		if (!isHash(tree)) throw new Error("commit-tree requires a valid tree hash");
+		if (!await this.ensureIsolated(signal)) throw new Error("rollback: isolated snapshot repository is unavailable");
+		const when = Math.floor((options.timestamp ?? Date.now()) / 1e3);
+		const env = {
+			...this.baseEnv,
+			GIT_AUTHOR_NAME: "dsh",
+			GIT_AUTHOR_EMAIL: "dsh@local",
+			GIT_COMMITTER_NAME: "dsh",
+			GIT_COMMITTER_EMAIL: "dsh@local",
+			GIT_AUTHOR_DATE: `${when} +0000`,
+			GIT_COMMITTER_DATE: `${when} +0000`
+		};
+		const args = ["commit-tree", tree];
+		for (const parent of parents) if (isHash(parent)) args.push("-p", parent);
+		const result = await spawnGit(this.cwd, args, env, this.options.spawnTimeoutMs, signal, this.options.isolatedRepoDir, void 0, message);
+		if (result.code !== 0) throw new Error(`git commit-tree failed: ${result.stderr.trim()}`);
+		const commit = result.stdout.trim();
+		if (!isHash(commit)) throw new Error(`git commit-tree returned invalid hash: ${commit}`);
+		return commit;
+	}
+	/** Resolve a ref to its object hash, or undefined when it does not exist. */
+	async readRef(ref, signal) {
+		const result = await this.run([
+			"rev-parse",
+			"--verify",
+			"--quiet",
+			ref
+		], signal);
+		if (result.code !== 0) return void 0;
+		const hash = result.stdout.trim();
+		return isHash(hash) ? hash : void 0;
+	}
+	/**
+	* Move a ref. With `expectedOld` this is a compare-and-swap: the update
+	* fails (returns false) unless the ref currently points at `expectedOld`,
+	* which makes concurrent accepts safe without a lock.
+	*/
+	async updateRef(ref, sha, expectedOld, signal) {
+		if (!isHash(sha)) throw new Error("update-ref requires a valid object hash");
+		const args = [
+			"update-ref",
+			ref,
+			sha
+		];
+		if (expectedOld !== void 0) args.push(expectedOld);
+		return (await this.run(args, signal)).code === 0;
+	}
+	/** Refs under a prefix, in refname order. */
+	async listRefs(prefix, signal) {
+		const result = await this.run([
+			"for-each-ref",
+			"--format=%(refname)%00%(objectname)",
+			prefix
+		], signal);
+		if (result.code !== 0) return [];
+		const out = [];
+		for (const line of result.stdout.split("\n")) {
+			if (line === "") continue;
+			const [ref, sha] = line.split("\0");
+			if (ref === void 0 || sha === void 0 || !isHash(sha)) continue;
+			out.push({
+				ref,
+				sha
+			});
+		}
+		return out;
+	}
+	/**
+	* Refs under a prefix with their commit messages in the same process
+	* (`for-each-ref --format=…%(contents)`), used by the ref-backed journal.
+	*/
+	async listRefsDetailed(prefix, signal) {
+		const result = await this.run([
+			"for-each-ref",
+			"--format=%(refname)%00%(objectname)%00%(contents)",
+			prefix
+		], signal);
+		if (result.code !== 0) return [];
+		const out = [];
+		for (const line of result.stdout.split("\n")) {
+			if (line === "") continue;
+			const parts = line.split("\0");
+			const ref = parts[0];
+			const sha = parts[1];
+			if (ref === void 0 || sha === void 0 || !isHash(sha)) continue;
+			out.push({
+				ref,
+				sha,
+				contents: parts.slice(2).join("\0")
+			});
+		}
+		return out;
+	}
+	/**
+	* Refs under a prefix with commit metadata in one process: refname, object
+	* hash, tree hash, committer time and message. Backs the turn-point list.
+	*/
+	async listRefsWithMeta(prefix, signal) {
+		const result = await this.run([
+			"for-each-ref",
+			"--format=%(refname)%00%(objectname)%00%(tree)%00%(creatordate:unix)%00%(contents)",
+			prefix
+		], signal);
+		if (result.code !== 0) return [];
+		const out = [];
+		for (const line of result.stdout.split("\n")) {
+			if (line === "") continue;
+			const parts = line.split("\0");
+			const ref = parts[0];
+			const sha = parts[1];
+			if (ref === void 0 || sha === void 0 || !isHash(sha)) continue;
+			out.push({
+				ref,
+				sha,
+				tree: (parts[2] ?? "").trim(),
+				createdAt: Number(parts[3] ?? "0") || 0,
+				contents: parts.slice(4).join("\0")
+			});
+		}
+		return out;
+	}
+	/**
+	* Parentless ancestors of a revision (`git rev-list --max-parents=0`), i.e.
+	* the root commit(s) of its history. Used to recover the session chain base
+	* of chains created before `refs/dsh/base` existed.
+	*/
+	async roots(rev, signal) {
+		if (!isHash(rev)) return [];
+		const result = await this.run([
+			"rev-list",
+			"--max-parents=0",
+			rev
+		], signal);
+		if (result.code !== 0) return [];
+		return result.stdout.split("\n").map((line) => line.trim()).filter(isHash);
+	}
+	/** The tree hash a revision points at (`rev-parse <rev>^{tree}`). */
+	async treeOf(rev, signal) {
+		const result = await this.run([
+			"rev-parse",
+			"--verify",
+			`${rev}^{tree}`
+		], signal);
+		const tree = result.stdout.trim();
+		if (result.code !== 0 || !isHash(tree)) throw new Error(`git rev-parse ${rev}^{tree} failed: ${result.stderr.trim()}`);
+		return tree;
+	}
+	/** Delete a ref (best-effort; missing refs are not an error). */
+	async deleteRefs(refs, signal) {
+		if (refs.length === 0) return;
+		await this.run(["update-ref", "--stdin"], signal, void 0, void 0, refs.map((ref) => `delete ${ref}\n`).join(""));
+	}
+	/**
+	* Build any number of commits in one process. The caller assembles the
+	* fast-import stream; blobs must already exist in the isolated repo (see
+	* `writeBlob`), so this is the freeze step of the per-call chain.
+	*/
+	async fastImport(stream, signal) {
+		if (stream.trim() === "") return;
+		if (!await this.ensureIsolated(signal)) throw new Error("rollback: isolated snapshot repository is unavailable");
+		const payload = stream.endsWith("\n") ? stream : `${stream}\n`;
+		const result = await spawnGit(this.cwd, ["fast-import", "--quiet"], this.baseEnv, this.options.spawnTimeoutMs, signal, this.options.isolatedRepoDir, void 0, payload);
+		if (result.code !== 0) throw new Error(`git fast-import failed: ${result.stderr.trim()}`);
+	}
 	async restorePaths(tree, relPaths, signal) {
 		if (!isHash(tree)) throw new Error("restore requires a valid tree hash");
 		const unique = [...new Set(relPaths.map((item) => this.normalizeRelPath(item)))];
@@ -564,24 +1175,18 @@ var GitProvider = class {
 		for (const sub of ["rebase-merge", "rebase-apply"]) if (fs.existsSync(path.join(dir, sub))) return true;
 		return false;
 	}
-	/**
-	* All snapshot object operations run against the isolated repo.
-	* `alternateObjectDirs` borrows additional object stores read-only (git
-	* alternates), used to diff against tree objects captured by other
-	* sessions into their own isolated repos.
-	*/
-	async run(args, signal, indexFile, alternateObjectDirs) {
+	/** Every snapshot object operation runs against the isolated repo. */
+	async run(args, signal, indexFile, _unused, input) {
 		if (!await this.ensureIsolated(signal)) return {
 			code: 128,
 			stdout: "",
 			stderr: "rollback: isolated snapshot repository is unavailable"
 		};
-		const env = indexFile === void 0 && alternateObjectDirs === void 0 ? this.baseEnv : {
+		const env = indexFile === void 0 ? this.baseEnv : {
 			...this.baseEnv,
-			...indexFile === void 0 ? {} : { GIT_INDEX_FILE: indexFile },
-			...alternateObjectDirs === void 0 || alternateObjectDirs.length === 0 ? {} : { GIT_ALTERNATE_OBJECT_DIRECTORIES: alternateObjectDirs.join(path.delimiter) }
+			GIT_INDEX_FILE: indexFile
 		};
-		return spawnGit(this.cwd, args, env, this.options.spawnTimeoutMs, signal, this.options.isolatedRepoDir, this.cwd);
+		return spawnGit(this.cwd, args, env, this.options.spawnTimeoutMs, signal, this.options.isolatedRepoDir, this.cwd, input);
 	}
 	/** Read-only queries against the project's own repo (head, fences). */
 	async runProject(args, signal) {
@@ -625,14 +1230,6 @@ var GitProvider = class {
 	async createTempIndex() {
 		const dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "dsh-rollback-index-"));
 		return path.join(dir, "index");
-	}
-	ledgerRelativePath() {
-		const ledger = this.options.ledgerDir;
-		if (ledger === void 0 || ledger === "") return void 0;
-		const abs = path.resolve(ledger);
-		const rel = path.relative(this.cwd, abs);
-		if (rel === "" || rel === ".." || rel.startsWith(`..${path.sep}`)) return void 0;
-		return rel.split(path.sep).join("/");
 	}
 };
 function parseDiffTreeZ(stdout) {
@@ -834,986 +1431,709 @@ function buildFileChange(cwd, entry, hunks, truncated, binary) {
 	};
 }
 //#endregion
-//#region lib/types/host/snapshot.js
-/**
-* Encode an arbitrary string as one filesystem-safe path segment, mirroring
-* the JSONL session persistence layout (`@deepseek-ai/dsh-session-persistence-jsonl`):
-* safe code units stay literal, everything else becomes `~XXXX`.
-*/
-function encodeSessionSegment(raw) {
-	if (raw === ".") return "~002E";
-	if (raw === "..") return "~002E~002E";
-	let out = "";
-	for (let i = 0; i < raw.length; i += 1) {
-		const code = raw.charCodeAt(i);
-		const ch = String.fromCharCode(code);
-		if (ch !== "~" && /^[A-Za-z0-9._-]$/.test(ch)) out += ch;
-		else out += `~${code.toString(16).toUpperCase().padStart(4, "0")}`;
+//#region lib/types/host/hunk-undo.js
+/** Split a multi-file patch into per-file sections with complete hunks. */
+function splitPatchFiles(patch) {
+	const files = [];
+	for (const section of splitDiffSections(patch)) {
+		const parsed = splitPatchFile(section);
+		if (parsed !== void 0) files.push(parsed);
 	}
-	return out;
+	return files;
 }
-/**
-* The readable per-project directory key, mirroring the JSONL persistence
-* layout: separators become `-`, unsafe units `~XXXX`, bounded and wrapped
-* in `--…--`.
-*/
-function projectDirKey(cwd) {
-	let readable = "";
-	let separatorRun = false;
-	for (let i = 0; i < cwd.length; i += 1) {
-		const code = cwd.charCodeAt(i);
-		const ch = String.fromCharCode(code);
-		if (ch === "/" || ch === "\\" || ch === ":") {
-			if (!separatorRun) readable += "-";
-			separatorRun = true;
-		} else if (ch !== "~" && /^[A-Za-z0-9._-]$/.test(ch)) {
-			readable += ch;
-			separatorRun = false;
-		} else {
-			readable += `~${code.toString(16).toUpperCase().padStart(4, "0")}`;
-			separatorRun = false;
-		}
-	}
-	return `--${(readable.replace(/^-+/, "") || "root").slice(0, 251)}--`;
-}
-/**
-* The on-disk directory DSH owns for one session, mirroring the JSONL
-* persistence backend: `<DSH_HOME>/sessions/<projectKey(cwd)>/<sessionId>`.
-* Session-local artifacts placed here are removed together with the session.
-*/
-function sessionDirFor(dshHome, cwd, sessionId) {
-	const project = cwd === void 0 || cwd === "" ? "_no-cwd" : projectDirKey(cwd);
-	return path.join(dshHome, "sessions", project, encodeSessionSegment(sessionId));
-}
-/** The isolated bare snapshot repo for one session, inside its session dir. */
-function sessionSnapshotRepo(dshHome, cwd, sessionId) {
-	return path.join(sessionDirFor(dshHome, cwd, sessionId), "rollback.git");
-}
-function resolveDshHome() {
-	const configured = process.env.DSH_HOME;
-	return configured !== void 0 && configured !== "" ? configured : path.join(os.homedir(), ".dsh");
-}
-function changeLedgerRoot() {
-	return path.join(resolveDshHome(), "change-ledger");
-}
-function manifestsPath() {
-	return path.join(changeLedgerRoot(), "v1", "manifests.json");
-}
-function journalsPath() {
-	return path.join(changeLedgerRoot(), "v1", "journals.json");
-}
-function locksDir() {
-	return path.join(changeLedgerRoot(), "locks");
-}
-async function readJsonFile(file, fallback) {
-	try {
-		const raw = await fs.promises.readFile(file, "utf8");
-		return JSON.parse(raw);
-	} catch {
-		return fallback;
-	}
-}
-async function writeJsonFileAtomic(file, value) {
-	await fs.promises.mkdir(path.dirname(file), { recursive: true });
-	const tmp = `${file}.${process.pid}.${Date.now().toString(36)}.tmp`;
-	await fs.promises.writeFile(tmp, JSON.stringify(value, null, 2), "utf8");
-	await fs.promises.rename(tmp, file);
-}
-var SnapshotManager = class {
-	options;
-	ctx;
-	manifests = [];
-	loaded = false;
-	writeTail = Promise.resolve();
-	domainStorePromise;
-	dshHome;
-	/** In-flight isolated repo inits, keyed by repo dir (dedupe across providers). */
-	isolatedInit = /* @__PURE__ */ new Map();
-	constructor(options, ctx) {
-		this.options = options;
-		this.ctx = ctx;
-		this.dshHome = options.dshHome ?? resolveDshHome();
-	}
-	get ledgerDir() {
-		return this.options.ledgerDir;
-	}
-	/**
-	* Provider bound to one session's isolated snapshot repo (kept inside the
-	* session's own directory, so deleting the session removes the objects).
-	* `sessionId` undefined degrades to ledger-only coverage.
-	*/
-	providerFor(cwd, sessionId) {
-		const isolatedRepoDir = sessionId === void 0 || sessionId === "" ? void 0 : sessionSnapshotRepo(this.dshHome, cwd, sessionId);
-		const isolatedRepoInit = isolatedRepoDir === void 0 ? void 0 : this.ensureIsolatedRepo(isolatedRepoDir);
-		return new GitProvider(cwd, {
-			spawnTimeoutMs: this.options.spawnTimeoutMs,
-			maxDiffHunksPerFile: this.options.maxDiffHunksPerFile,
-			maxDiffBytesPerFile: this.options.maxDiffBytesPerFile,
-			restoreChunkSize: this.options.restoreChunkSize,
-			ledgerDir: this.options.ledgerDir,
-			isolatedRepoDir,
-			isolatedRepoInit
-		});
-	}
-	/**
-	* Objects directory of one session's isolated snapshot repo, when it exists
-	* on disk. Used to borrow foreign snapshot trees read-only (git alternates)
-	* for cross-session window diffs; undefined when the session store was
-	* removed together with its session.
-	*/
-	sessionObjectsDir(cwd, sessionId) {
-		const objects = path.join(sessionSnapshotRepo(this.dshHome, cwd, sessionId), "objects");
-		return fs.existsSync(objects) ? objects : void 0;
-	}
-	ensureIsolatedRepo(dir) {
-		const existing = this.isolatedInit.get(dir);
-		if (existing !== void 0) return existing;
-		const init = spawnGit(process.cwd(), [
-			"init",
-			"--bare",
-			"--quiet",
-			dir
-		], process.env, this.options.spawnTimeoutMs).then((result) => result.code === 0).catch(() => false);
-		this.isolatedInit.set(dir, init);
-		init.then((ok) => {
-			if (!ok) this.isolatedInit.delete(dir);
-		});
-		return init;
-	}
-	/** Capture the pre-step baseline. Failures are caught by the caller and never block the agent. */
-	async capture(session, turn) {
-		const cwd = session.header.cwd;
-		if (cwd === void 0 || cwd === "") return void 0;
-		await this.load();
-		if (this.manifests.some((item) => item.sessionId === session.id && item.turn === turn)) return void 0;
-		const provider = this.providerFor(cwd, session.id);
-		const head = await provider.head().catch(() => void 0);
-		let tree;
-		let materialized = false;
-		let mode = "ledger";
-		if (await provider.available().catch(() => false)) {
-			const captured = await provider.captureTreeInfo().catch(() => void 0);
-			if (captured !== void 0) {
-				tree = captured.tree;
-				materialized = captured.materialized;
-			}
-			if (tree === void 0) tree = await provider.captureTree().catch(() => void 0);
-			if (tree !== void 0) mode = "git";
-		}
-		if (tree === void 0) mode = "ledger";
-		const manifest = {
-			snapshotId: `${session.id}:${turn}:${Date.now().toString(36)}`,
-			sessionId: session.id,
-			turn,
-			cwd,
-			...tree === void 0 ? {} : { tree },
-			...head === void 0 ? {} : { head },
-			createdAt: Date.now(),
-			mode,
-			...materialized ? { materialized: true } : {},
-			...turnStartSeq(session, turn) === void 0 ? {} : { turnStartSeq: turnStartSeq(session, turn) }
-		};
-		const next = this.manifests.filter((item) => !(item.sessionId === session.id && item.turn === turn));
-		next.push(manifest);
-		this.enqueuePersist(trimManifests(next, this.options.maxSnapshotsPerSession));
-		return manifest;
-	}
-	/** Exact snapshot first, then the newest earlier snapshot for the same session. */
-	async find(sessionId, targetTurn) {
-		await this.load();
-		const exact = this.manifests.filter((item) => item.sessionId === sessionId && item.turn === targetTurn).sort((a, b) => b.createdAt - a.createdAt)[0];
-		if (exact !== void 0) return {
-			manifest: exact,
-			degraded: false
-		};
-		const earlier = this.manifests.filter((item) => item.sessionId === sessionId && item.turn < targetTurn).sort((a, b) => b.turn - a.turn || b.createdAt - a.createdAt)[0];
-		if (earlier === void 0) return void 0;
-		return {
-			manifest: earlier,
-			degraded: true
-		};
-	}
-	async ensureTreeAvailable(manifest, provider) {
-		if (manifest.tree === void 0) return true;
-		return provider.treeExists(manifest.tree);
-	}
-	snapshotInfo(manifest, degraded) {
-		return {
-			id: manifest.snapshotId,
-			turn: manifest.turn,
-			createdAt: manifest.createdAt,
-			...degraded ? { degraded: true } : {}
-		};
-	}
-	async listForSession(sessionId) {
-		await this.load();
-		return this.manifests.filter((item) => item.sessionId === sessionId).sort((a, b) => b.turn - a.turn || b.createdAt - a.createdAt);
-	}
-	/** All manifests captured in one workspace (any session), oldest first. */
-	async listForWorkspace(cwd) {
-		await this.load();
-		const resolved = path.resolve(cwd);
-		return this.manifests.filter((item) => path.resolve(item.cwd) === resolved).sort((a, b) => a.createdAt - b.createdAt || a.snapshotId.localeCompare(b.snapshotId));
-	}
-	async load() {
-		if (this.loaded) return;
-		this.loaded = true;
-		const store = await this.domainStore();
-		if (store !== void 0) {
-			this.manifests = await store.read();
-			return;
-		}
-		this.manifests = await readJsonFile(manifestsPath(), []);
-	}
-	enqueuePersist(next) {
-		this.manifests = next;
-		this.writeTail = this.writeTail.catch(() => void 0).then(async () => {
-			const store = await this.domainStore();
-			if (store !== void 0) await store.write(this.manifests);
-			await writeJsonFileAtomic(manifestsPath(), this.manifests);
-		}).catch(() => void 0);
-	}
-	/** Open the storage-domain table when the Host composition provides one. */
-	domainStore() {
-		this.domainStorePromise ??= this.openDomainStore().catch((error) => {
-			if (this.ctx !== void 0) this.ctx.logger.warn("rollback: storage-domain unavailable, using JSON manifests:", error);
-		});
-		return this.domainStorePromise;
-	}
-	async openDomainStore() {
-		if (this.ctx === void 0) return void 0;
-		const facility = this.ctx.get("storageDomain");
-		if (facility === void 0 || typeof facility.open !== "function") return void 0;
-		const [domainModule, schemaModule] = await Promise.all([import("@deepseek-ai/dsh-storage-domain"), import("@deepseek-ai/schemastery")]);
-		const z = schemaModule.default;
-		const spec = domainModule.defineDomain({
-			name: "rollback",
-			version: 1,
-			tables: { manifests: domainModule.domainTable(z.any()) }
-		});
-		const table = (await facility.open(spec)).table("manifests");
-		return {
-			read: async () => {
-				const value = table.get("manifests");
-				return Array.isArray(value?.items) ? value.items : [];
-			},
-			write: async (value) => table.put("manifests", { items: value })
-		};
-	}
-};
-function trimManifests(manifests, maxPerSession) {
-	const bySession = /* @__PURE__ */ new Map();
-	for (const manifest of manifests) {
-		const list = bySession.get(manifest.sessionId) ?? [];
-		list.push(manifest);
-		bySession.set(manifest.sessionId, list);
-	}
-	const result = [];
-	for (const list of bySession.values()) result.push(...list.slice(-maxPerSession));
-	return result;
-}
-function turnStartSeq(session, turn) {
-	return session.snapshotEvents().find((item) => item.type === "turn/start" && item.data.turn === turn)?.seq;
-}
-function acceptsPath() {
-	return path.join(changeLedgerRoot(), "v1", "accepts.json");
-}
-function trimRecords$1(records, maxPerSession) {
-	const bySession = /* @__PURE__ */ new Map();
-	for (const record of records) {
-		const list = bySession.get(record.sessionId) ?? [];
-		list.push(record);
-		bySession.set(record.sessionId, list);
-	}
-	const result = [];
-	for (const list of bySession.values()) result.push(...list.slice(-maxPerSession));
-	return result;
-}
-function fingerprintMatches(record, fingerprint) {
-	if (record.fingerprint === void 0) return true;
-	if (fingerprint === void 0) return false;
-	if (record.fingerprint.kind === "content" && fingerprint.kind === "content") return record.fingerprint.hash === fingerprint.hash;
-	if (record.fingerprint.kind === "stat" && fingerprint.kind === "stat") {
-		const left = record.fingerprint;
-		const right = fingerprint;
-		if (left.version !== void 0 || right.version !== void 0) {
-			if (left.version !== right.version) return false;
-		}
-		if (left.size !== right.size) return false;
-		if (left.mtimeMs !== right.mtimeMs) return false;
-		return true;
-	}
-	return false;
-}
-/** Exact identity of two accept fingerprints (undefined equals undefined). */
-function fingerprintsEqual(left, right) {
-	if (left === void 0 || right === void 0) return left === right;
-	if (left.kind !== right.kind) return false;
-	if (left.kind === "content" && right.kind === "content") return left.hash === right.hash;
-	if (left.kind === "stat" && right.kind === "stat") {
-		if (left.version !== right.version) return false;
-		if (left.size !== right.size) return false;
-		if (left.mtimeMs !== right.mtimeMs) return false;
-		return true;
-	}
-	return false;
-}
-var AcceptLedger = class {
-	options;
-	records = [];
-	loaded = false;
-	writeTail = Promise.resolve();
-	maxPerSession;
-	maxContentBytes;
-	file;
-	constructor(options = {}) {
-		this.options = options;
-		this.maxPerSession = options.maxAcceptRecordsPerSession ?? 500;
-		this.maxContentBytes = options.maxContentBytes ?? 262144;
-		this.file = options.acceptsFile ?? acceptsPath();
-	}
-	load() {
-		if (this.loaded) return;
-		this.loaded = true;
-		this.records.push(...readJsonFileSync$1(this.file, []));
-	}
-	upsert(record) {
-		this.load();
-		const index = this.records.findIndex((item) => item.sessionId === record.sessionId && item.kind === record.kind && item.key === record.key);
-		if (index >= 0) this.records[index] = record;
-		else this.records.push(record);
-		this.persist();
-	}
-	persist() {
-		const trimmed = trimRecords$1(this.records, this.maxPerSession);
-		this.records.length = 0;
-		this.records.push(...trimmed);
-		this.writeTail = this.writeTail.catch(() => void 0).then(async () => writeJsonFileAtomic(this.file, this.records)).catch(() => void 0);
-	}
-	acceptFile(sessionId, filePath, fingerprint, content) {
-		this.load();
-		const stored = content !== void 0 && Buffer.byteLength(content, "utf8") <= this.maxContentBytes ? content : void 0;
-		const existing = this.records.find((item) => item.sessionId === sessionId && item.kind === "file" && item.key === filePath);
-		if (existing !== void 0 && existing.content === stored && fingerprintsEqual(existing.fingerprint, fingerprint)) return;
-		this.upsert({
-			sessionId,
-			kind: "file",
-			key: filePath,
-			...fingerprint === void 0 ? {} : { fingerprint },
-			...stored === void 0 ? {} : { content: stored },
-			createdAt: Date.now()
-		});
-	}
-	acceptModification(sessionId, modificationId) {
-		this.load();
-		if (this.records.some((item) => item.sessionId === sessionId && item.kind === "modification" && item.key === modificationId)) return;
-		this.upsert({
-			sessionId,
-			kind: "modification",
-			key: modificationId,
-			createdAt: Date.now()
-		});
-	}
-	/** File accept record; cheap existence/identity check before fingerprinting the file. */
-	fileRecord(sessionId, filePath) {
-		this.load();
-		return this.records.find((item) => item.sessionId === sessionId && item.kind === "file" && item.key === filePath);
-	}
-	fileAccepted(sessionId, filePath, fingerprint) {
-		this.load();
-		const record = this.records.find((item) => item.sessionId === sessionId && item.kind === "file" && item.key === filePath);
-		if (record === void 0) return false;
-		return fingerprintMatches(record, fingerprint);
-	}
-	/** Bounded text content captured at accept time (diff baseline for later changes). */
-	acceptedContent(sessionId, filePath) {
-		this.load();
-		return this.records.find((item) => item.sessionId === sessionId && item.kind === "file" && item.key === filePath)?.content;
-	}
-	modificationAccepted(sessionId, modificationId) {
-		this.load();
-		return this.records.some((item) => item.sessionId === sessionId && item.kind === "modification" && item.key === modificationId);
-	}
-	acceptedFiles(sessionId) {
-		this.load();
-		return this.records.filter((item) => item.sessionId === sessionId && item.kind === "file").map((item) => item.key);
-	}
-	acceptedModifications(sessionId) {
-		this.load();
-		return this.records.filter((item) => item.sessionId === sessionId && item.kind === "modification").map((item) => item.key);
-	}
-	list(sessionId) {
-		this.load();
-		return sessionId === void 0 ? [...this.records] : this.records.filter((item) => item.sessionId === sessionId);
-	}
-	/** Await pending persistence (tests and graceful shutdown paths). */
-	async flush() {
-		this.load();
-		await this.writeTail.catch(() => void 0);
-	}
-};
-function readJsonFileSync$1(file, fallback) {
-	try {
-		return JSON.parse(fs.readFileSync(file, "utf8"));
-	} catch {
-		return fallback;
-	}
-}
-//#endregion
-//#region lib/types/host/ledger.js
-function jsonSafe(value) {
-	try {
-		const text = JSON.stringify(value);
-		return text === void 0 ? void 0 : text;
-	} catch {
-		return;
-	}
-}
-function safePathKey(target) {
-	return target.targetKey;
-}
-function normalizeLf(text) {
-	return text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
-}
-/**
-* Whole-file hunk for a file created after the baseline: `oldText: null`
-* plus the bounded text content, so the modification list can render the
-* new file as a diff. Binary or oversized files return no hunks.
-*/
-async function createdFileHunks(abs, maxBytes) {
-	try {
-		const stat = await fs.promises.stat(abs);
-		if (!stat.isFile() || stat.size > maxBytes) return [];
-		const content = await fs.promises.readFile(abs, "utf8");
-		if (content.includes("\0")) return [];
-		return wholeFileHunk(null, content);
-	} catch {
-		return [];
-	}
-}
-/** Compute a whole-file diff hunk between two text snapshots. */
-function wholeFileHunk(before, after) {
-	if (before === null) return [{
-		oldText: null,
-		newText: after,
-		newLine: 1,
-		endLine: countLines(after)
-	}];
-	if (before === after) return [];
-	return [{
-		oldText: before,
-		newText: after,
-		oldLine: 1,
-		newLine: 1,
-		endLine: countLines(after)
-	}];
-}
-/** Context lines kept around each changed region, like `git diff`'s default. */
-const DIFF_CONTEXT = 3;
-/** Guard against pathological LCS tables; larger middles fall back to one whole-file hunk. */
-const DIFF_MAX_LCS_CELLS = 1e6;
-/**
-* Line-level diff between two text snapshots, split into git-style hunks
-* (with context) so per-hunk CodeLens buttons and precise change anchors
-* work for ledger-tracked files too. `firstChanged*Line` marks the first
-* line that actually differs inside each hunk.
-*/
-function lineDiffHunks(before, after) {
-	if (before === after) return [];
-	if (before === "" || after === "") return wholeFileHunk(before, after);
-	const beforeLines = before.split("\n");
-	const afterLines = after.split("\n");
-	let prefix = 0;
-	while (prefix < beforeLines.length && prefix < afterLines.length && beforeLines[prefix] === afterLines[prefix]) prefix += 1;
-	let suffix = 0;
-	while (suffix < beforeLines.length - prefix && suffix < afterLines.length - prefix && beforeLines[beforeLines.length - 1 - suffix] === afterLines[afterLines.length - 1 - suffix]) suffix += 1;
-	const midBefore = beforeLines.slice(prefix, beforeLines.length - suffix);
-	const midAfter = afterLines.slice(prefix, afterLines.length - suffix);
-	if (midBefore.length === 0 && midAfter.length === 0) return [];
-	if (midBefore.length * midAfter.length > DIFF_MAX_LCS_CELLS) return [{
-		oldText: before,
-		newText: after,
-		oldLine: 1,
-		newLine: 1,
-		endLine: countLines(after),
-		firstChangedOldLine: prefix + 1,
-		firstChangedNewLine: prefix + 1
-	}];
-	const n = midBefore.length;
-	const m = midAfter.length;
-	const stride = m + 1;
-	const dp = new Int32Array((n + 1) * stride);
-	for (let i = n - 1; i >= 0; i -= 1) for (let j = m - 1; j >= 0; j -= 1) dp[i * stride + j] = midBefore[i] === midAfter[j] ? dp[(i + 1) * stride + j + 1] + 1 : Math.max(dp[(i + 1) * stride + j], dp[i * stride + j + 1]);
-	const ops = [];
-	let oldCursor = 1;
-	let newCursor = 1;
-	for (let k = 0; k < prefix; k += 1) {
-		ops.push({
-			type: "keep",
-			oldLine: oldCursor,
-			newLine: newCursor
-		});
-		oldCursor += 1;
-		newCursor += 1;
-	}
-	let i = 0;
-	let j = 0;
-	while (i < n || j < m) if (i < n && j < m && midBefore[i] === midAfter[j]) {
-		ops.push({
-			type: "keep",
-			oldLine: oldCursor,
-			newLine: newCursor
-		});
-		i += 1;
-		j += 1;
-		oldCursor += 1;
-		newCursor += 1;
-	} else if (j >= m || i < n && dp[(i + 1) * stride + j] >= dp[i * stride + j + 1]) {
-		ops.push({
-			type: "del",
-			oldLine: oldCursor,
-			newLine: newCursor
-		});
-		i += 1;
-		oldCursor += 1;
-	} else {
-		ops.push({
-			type: "ins",
-			oldLine: oldCursor,
-			newLine: newCursor
-		});
-		j += 1;
-		newCursor += 1;
-	}
-	for (let k = 0; k < suffix; k += 1) {
-		ops.push({
-			type: "keep",
-			oldLine: oldCursor,
-			newLine: newCursor
-		});
-		oldCursor += 1;
-		newCursor += 1;
-	}
+function splitPatchFile(section) {
+	const lines = section.split("\n");
+	while (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
+	if (lines.length === 0) return void 0;
+	const path = diffGitPath(lines[0] ?? "");
+	if (path === void 0) return void 0;
+	const firstHunk = lines.findIndex((line) => line.startsWith("@@ "));
+	const header = `${(firstHunk < 0 ? lines : lines.slice(0, firstHunk)).join("\n")}\n`;
 	const hunks = [];
-	let firstChange = -1;
-	let lastChange = -1;
-	const flush = (first, last) => {
-		const hunkStart = Math.max(0, first - DIFF_CONTEXT);
-		const hunkEnd = Math.min(ops.length - 1, last + DIFF_CONTEXT);
-		const oldLines = [];
-		const newLines = [];
-		let hunkOldLine = 0;
-		let hunkNewLine = 0;
-		let firstChangedOld;
-		let firstChangedNew;
-		for (let k = hunkStart; k <= hunkEnd; k += 1) {
-			const op = ops[k];
-			if (op.type !== "ins") {
-				oldLines.push(beforeLines[op.oldLine - 1] ?? "");
-				if (hunkOldLine === 0) hunkOldLine = op.oldLine;
-				if (k >= first && firstChangedOld === void 0) firstChangedOld = op.oldLine;
-			}
-			if (op.type !== "del") {
-				newLines.push(afterLines[op.newLine - 1] ?? "");
-				if (hunkNewLine === 0) hunkNewLine = op.newLine;
-				if (k >= first && firstChangedNew === void 0) firstChangedNew = op.newLine;
-			}
-		}
-		const newCount = newLines.length;
-		hunks.push({
-			oldText: oldLines.join("\n"),
-			newText: newLines.join("\n"),
-			oldLine: hunkOldLine,
-			newLine: hunkNewLine,
-			...newCount > 0 ? { endLine: hunkNewLine + newCount - 1 } : {},
-			...firstChangedOld === void 0 ? {} : { firstChangedOldLine: firstChangedOld },
-			...firstChangedNew === void 0 ? {} : { firstChangedNewLine: firstChangedNew }
-		});
+	if (firstHunk >= 0) {
+		let current = [];
+		for (const line of lines.slice(firstHunk)) if (line.startsWith("@@ ")) {
+			if (current.length > 0) hunks.push(`${current.join("\n")}\n`);
+			current = [line];
+		} else current.push(line);
+		if (current.length > 0) hunks.push(`${current.join("\n")}\n`);
+	}
+	const binary = /Binary files .* differ|GIT binary patch/.test(section);
+	const status = header.includes("new file mode") ? "added" : header.includes("deleted file mode") ? "deleted" : binary ? "binary" : "modified";
+	const index = /^index ([0-9a-f]+)\.\.([0-9a-f]+)/m.exec(header);
+	return {
+		path,
+		status,
+		header,
+		hunks,
+		...index?.[1] === void 0 || /^0+$/.test(index[1]) ? {} : { oldBlob: index[1] },
+		...index?.[2] === void 0 || /^0+$/.test(index[2]) ? {} : { newBlob: index[2] }
 	};
-	for (let k = 0; k < ops.length; k += 1) {
-		if (ops[k].type === "keep") continue;
-		if (firstChange >= 0 && k - lastChange - 1 > 2 * DIFF_CONTEXT) {
-			flush(firstChange, lastChange);
-			firstChange = -1;
-		}
-		if (firstChange < 0) firstChange = k;
-		lastChange = k;
-	}
-	if (firstChange >= 0) flush(firstChange, lastChange);
-	return hunks;
 }
-function countLines(text) {
-	if (text === "") return 1;
-	return text.split("\n").length;
+/** Stable identity of one hunk block, used to bind a selection across refreshes. */
+function hunkFingerprint(hunk) {
+	return createHash("sha256").update(hunk).digest("hex").slice(0, 32);
 }
-/** Open turn/step for a session, derived from the durable log boundaries. */
-function sessionTurnPosition(events) {
-	let turn = 0;
-	let step = 0;
-	let seq = -1;
-	for (const event of events) {
-		seq = event.seq;
-		if (event.type === "turn/start") turn = event.data.turn;
-		if (event.type === "step/start") step = event.data.step;
-	}
-	return turn > 0 ? {
-		turn,
-		step,
-		seq
-	} : void 0;
-}
-/** Persistence file for ledger records (JSON fallback next to the manifests). */
-function ledgerRecordsPath() {
-	return path.join(changeLedgerRoot(), "v1", "ledger.json");
-}
-function readJsonFileSync(file, fallback) {
-	try {
-		return JSON.parse(fs.readFileSync(file, "utf8"));
-	} catch {
-		return fallback;
-	}
-}
-function trimRecords(records, maxPerSession) {
-	const bySession = /* @__PURE__ */ new Map();
-	for (const record of records) {
-		const list = bySession.get(record.sessionId) ?? [];
-		list.push(record);
-		bySession.set(record.sessionId, list);
-	}
-	const result = [];
-	for (const list of bySession.values()) result.push(...list.slice(-maxPerSession));
-	return result;
-}
-var ChangeLedger = class {
-	ctx;
-	options;
-	records = [];
-	pending = /* @__PURE__ */ new Map();
-	writeTail = Promise.resolve();
-	maxLedgerRecordsPerSession;
-	ledgerFile;
-	constructor(ctx, options) {
-		this.ctx = ctx;
-		this.options = options;
-		this.maxLedgerRecordsPerSession = options.maxLedgerRecordsPerSession ?? 500;
-		this.ledgerFile = options.ledgerFile ?? ledgerRecordsPath();
-		this.records.push(...readJsonFileSync(this.ledgerFile, []));
-	}
-	get ledgerMaxTextBytes() {
-		return this.options.ledgerMaxTextBytes;
-	}
-	/** Prepend listener for fs/write-intent; must call next() so the policy slot stays intact. */
-	async captureWriteBefore(target, actor, next) {
-		await this.captureBefore("write", target, actor);
-		return await next();
-	}
-	/** Prepend listener for fs/edit-intent; must call next() so the policy slot stays intact. */
-	async captureEditBefore(target, actor, next) {
-		await this.captureBefore("edit", target, actor);
-		return await next();
-	}
-	/** Record a successful fs observation against a pending write/edit capture. */
-	observe(target, observation, actor) {
-		if (observation.kind !== "present") return;
-		const key = safePathKey(target);
-		const list = this.pending.get(key);
-		if (list === void 0 || list.length === 0) return;
-		const index = list.findIndex((item) => actor?.callId !== void 0 && item.modificationId === actor.callId);
-		const selected = index >= 0 ? list[index] : list[list.length - 1];
-		if (selected === void 0) return;
-		if (index >= 0) list.splice(index, 1);
-		else list.pop();
-		if (list.length === 0) this.pending.delete(key);
-		const session = this.ctx.sessions?.get(selected.sessionId) ?? selected.session;
-		const sessionEvents = session === void 0 ? void 0 : session.snapshotEvents();
-		const position = sessionEvents === void 0 ? void 0 : this.positionForCall(sessionEvents, selected.modificationId);
-		const fallback = sessionEvents === void 0 ? void 0 : sessionTurnPosition(sessionEvents);
-		const turn = position?.turn ?? fallback?.turn ?? 0;
-		const step = position?.step ?? fallback?.step ?? 0;
-		const seq = position?.seq ?? fallback?.seq ?? -1;
-		const argsRaw = selected.actorArguments === void 0 ? void 0 : jsonSafe(selected.actorArguments);
-		this.records.push({
-			modificationId: selected.modificationId,
-			toolName: selected.toolName,
-			path: selected.path,
-			sessionId: selected.sessionId,
-			turn,
-			step,
-			seq,
-			...argsRaw === void 0 || argsRaw.length > this.options.ledgerMaxTextBytes ? {} : { argsRaw },
-			beforeExisted: selected.beforeExisted,
-			...selected.beforeVersion === void 0 ? {} : { beforeVersion: selected.beforeVersion },
-			...selected.beforeContent === void 0 ? {} : { beforeContent: selected.beforeContent },
-			...selected.beforeBinary === true ? { beforeBinary: true } : {},
-			observedVersion: observation.version,
-			createdAt: Date.now()
-		});
-		this.enqueuePersist();
-	}
-	list(sessionId) {
-		return sessionId === void 0 ? [...this.records] : this.records.filter((record) => record.sessionId === sessionId);
-	}
-	/** Workspace-relative paths with records in this session. */
-	pathsForSession(sessionId, cwd) {
-		const result = /* @__PURE__ */ new Set();
-		for (const record of this.list(sessionId)) {
-			const rel = relPathWithin(cwd, record.path);
-			if (rel !== void 0) result.add(rel);
-		}
-		return result;
-	}
-	/** Workspace-relative paths with records in any session other than this one. */
-	foreignPathsForSession(sessionId, cwd) {
-		const result = /* @__PURE__ */ new Set();
-		for (const record of this.records) {
-			if (record.sessionId === sessionId) continue;
-			const rel = relPathWithin(cwd, record.path);
-			if (rel !== void 0) result.add(rel);
-		}
-		return result;
-	}
-	listForTurn(sessionId, turn) {
-		return this.records.filter((record) => record.sessionId === sessionId && record.turn === turn).sort((a, b) => a.seq - b.seq || a.createdAt - b.createdAt);
-	}
-	/** Earliest before-image for one path during the target turn. */
-	baselineForTurn(sessionId, turn, filePath) {
-		return this.listForTurn(sessionId, turn).filter((record) => samePath(record.path, filePath))[0];
-	}
-	/** All records for one path in a session, oldest first. */
-	recordsForPath(sessionId, filePath) {
-		return this.list(sessionId).filter((record) => samePath(record.path, filePath)).sort((a, b) => a.seq - b.seq || a.createdAt - b.createdAt);
-	}
-	/** Earliest record for one path across the whole session. */
-	earliestForSessionPath(sessionId, filePath) {
-		return this.recordsForPath(sessionId, filePath)[0];
-	}
-	/**
-	* File-level changes for every ledger-covered path of a session, using the
-	* earliest record per path as the baseline (the session modification list).
-	*/
-	async buildSessionFileChanges(sessionId, cwd, mode) {
-		const result = [];
-		const seen = /* @__PURE__ */ new Set();
-		for (const record of this.list(sessionId)) {
-			const rel = relPathWithin(cwd, record.path);
-			if (rel === void 0 || seen.has(rel)) continue;
-			seen.add(rel);
-			const baseline = this.earliestForSessionPath(sessionId, record.path);
-			if (baseline === void 0) continue;
-			const change = await this.fileChangeForBaseline(cwd, rel, baseline, mode);
-			if (change !== void 0) result.push(change);
-		}
-		return result;
-	}
-	/** All modifications for a path at or after one record, newest first. */
-	laterModifications(sessionId, filePath, after) {
-		return this.list(sessionId).filter((record) => samePath(record.path, filePath) && record.createdAt > after.createdAt).sort((a, b) => b.createdAt - a.createdAt);
-	}
-	recordById(sessionId, modificationId) {
-		return this.records.find((record) => record.sessionId === sessionId && record.modificationId === modificationId);
-	}
-	/** Await pending persistence (tests and graceful shutdown paths). */
-	async flush() {
-		await this.writeTail.catch(() => void 0);
-	}
-	enqueuePersist() {
-		const trimmed = trimRecords(this.records, this.maxLedgerRecordsPerSession);
-		this.records.length = 0;
-		this.records.push(...trimmed);
-		this.writeTail = this.writeTail.catch(() => void 0).then(async () => {
-			await writeJsonFileAtomic(this.ledgerFile, this.records);
-		}).catch((error) => {
-			this.ctx.logger.warn("rollback ledger persist failed:", error);
-		});
-	}
-	/** Build file-level changes for ledger-covered paths that git snapshots cannot see. */
-	async buildFileChanges(sessionId, turn, cwd, mode) {
-		const result = [];
-		const seen = /* @__PURE__ */ new Set();
-		for (const record of this.listForTurn(sessionId, turn)) {
-			const rel = relPathWithin(cwd, record.path);
-			if (rel === void 0 || seen.has(rel)) continue;
-			seen.add(rel);
-			const change = await this.fileChangeForBaseline(cwd, rel, record, mode);
-			if (change !== void 0) result.push(change);
-		}
-		return result;
-	}
-	async fileChangeForBaseline(cwd, rel, baseline, mode) {
-		try {
-			const target = await this.ctx.fs.resolve(rel, { cwd });
-			const currentInfo = await this.ctx.fs.stat(target);
-			if (!baseline.beforeExisted) {
-				if (currentInfo === void 0) return void 0;
-				const hunks = await createdFileHunks(this.ctx.fs.processPath(target), this.options.ledgerMaxTextBytes);
-				return {
-					path: rel,
-					absolutePath: this.ctx.fs.processPath(target),
-					status: mode === "ignored" ? "ignored" : "created",
-					source: "ledger",
-					restorable: false,
-					createdAfterSnapshot: true,
-					...hunks.length > 0 ? { hunks } : {}
-				};
-			}
-			if (currentInfo === void 0) return {
-				path: rel,
-				absolutePath: path.resolve(cwd, rel),
-				status: "deleted",
-				source: "ledger",
-				restorable: baseline.beforeContent !== void 0,
-				...baseline.beforeContent !== void 0 ? { hunks: wholeFileHunk(baseline.beforeContent, "") } : {}
-			};
-			if (baseline.beforeContent === void 0) return {
-				path: rel,
-				absolutePath: this.ctx.fs.processPath(target),
-				status: mode === "ignored" ? "ignored" : "binary",
-				source: "ledger",
-				restorable: false,
-				binary: true
-			};
-			const current = await this.readText(target);
-			if (current === void 0) return {
-				path: rel,
-				absolutePath: this.ctx.fs.processPath(target),
-				status: mode === "ignored" ? "ignored" : "binary",
-				source: "ledger",
-				restorable: false,
-				binary: true
-			};
-			if (current === baseline.beforeContent) return void 0;
-			return {
-				path: rel,
-				absolutePath: this.ctx.fs.processPath(target),
-				status: mode === "ignored" ? "ignored" : "modified",
-				source: "ledger",
-				restorable: true,
-				hunks: lineDiffHunks(baseline.beforeContent, current)
-			};
-		} catch {
-			return;
-		}
-	}
-	/** Restore one ledger-covered path through ctx.fs, bypassing the tool waterfall. */
-	async restoreLedgerPath(cwd, rel, baseline, createdPolicy, sandboxPolicy) {
-		const target = await this.ctx.fs.resolve(rel, { cwd });
-		if (!baseline.beforeExisted) {
-			if (createdPolicy !== "delete") return "kept";
-			if (await this.ctx.fs.stat(target) === void 0) return "deleted";
-			fs.rmSync(this.ctx.fs.processPath(target), { force: true });
-			return "deleted";
-		}
-		const info = await this.ctx.fs.stat(target);
-		if (baseline.beforeContent === void 0) return "unsupported";
-		await this.ctx.fs.writeText(target, baseline.beforeContent, info === void 0 ? { kind: "createIfAbsent" } : {
-			kind: "replaceIfVersion",
-			version: info.version
-		}, void 0, sandboxPolicy);
-		return "restored";
-	}
-	async readCurrentForGuard(cwd, rel) {
-		try {
-			const target = await this.ctx.fs.resolve(rel, { cwd });
-			const info = await this.ctx.fs.stat(target);
-			if (info === void 0) return { existed: false };
-			const content = info.type === "file" && (info.size ?? 0) <= this.options.ledgerMaxTextBytes ? await this.readText(target) : void 0;
-			return {
-				existed: true,
-				version: info.version,
-				size: info.size,
-				...content === void 0 ? {} : { content }
-			};
-		} catch {
-			return { existed: false };
-		}
-	}
-	async restoreGuardFile(cwd, rel, guard, sandboxPolicy) {
-		const target = await this.ctx.fs.resolve(rel, { cwd });
-		if (!guard.existed) {
-			if (await this.ctx.fs.stat(target) !== void 0) fs.rmSync(this.ctx.fs.processPath(target), { force: true });
-			return;
-		}
-		if (guard.content === void 0) return;
-		const info = await this.ctx.fs.stat(target);
-		await this.ctx.fs.writeText(target, guard.content, info === void 0 ? { kind: "createIfAbsent" } : {
-			kind: "replaceIfVersion",
-			version: info.version
-		}, void 0, sandboxPolicy);
-	}
-	async captureBefore(toolName, target, actor) {
-		const filePath = this.ctx.fs.processPath(target);
-		const modificationId = actor?.callId;
-		const agentSession = actor?.agent?.session;
-		if (actor === void 0 || modificationId === void 0 || agentSession === void 0) return;
-		const session = attributionSession(this.ctx, agentSession);
-		let info;
-		let beforeContent;
-		let beforeBinary = false;
-		try {
-			info = await this.ctx.fs.stat(target);
-			if (info !== void 0 && info.type === "file" && (info.size ?? 0) <= this.options.ledgerMaxTextBytes) beforeContent = await this.ctx.fs.readText(target);
-			else if (info !== void 0 && info.type === "file") beforeBinary = true;
-		} catch {
-			try {
-				info = await this.ctx.fs.stat(target);
-				if (info !== void 0) beforeBinary = true;
-			} catch {
-				info = void 0;
-			}
-		}
-		const pending = {
-			modificationId,
-			toolName,
-			path: filePath,
-			sessionId: session.id,
-			session,
-			...actor.arguments === void 0 ? {} : { actorArguments: actor.arguments },
-			beforeExisted: info !== void 0,
-			...info?.version === void 0 ? {} : { beforeVersion: info.version },
-			...beforeContent === void 0 ? {} : { beforeContent },
-			...beforeBinary ? { beforeBinary: true } : {}
+/** Per-file views with display hunks, fingerprints and truncation limits. */
+function patchFileViews(patch, maxHunks, maxBytes) {
+	return splitPatchFiles(patch).map((file) => {
+		const parsed = parseDiffHunks(file.header + file.hunks.join(""), maxHunks, maxBytes);
+		const fingerprints = file.hunks.slice(0, parsed.hunks.length).map(hunkFingerprint);
+		return {
+			...file,
+			view: parsed.hunks,
+			fingerprints,
+			truncated: parsed.truncated || file.hunks.length > parsed.hunks.length,
+			binary: parsed.binary || file.status === "binary"
 		};
-		const key = safePathKey(target);
-		const list = this.pending.get(key) ?? [];
-		list.push(pending);
-		this.pending.set(key, list);
-	}
-	positionForCall(events, callId) {
-		for (const event of [...events].reverse()) {
-			if (event.type !== "tool/call") continue;
-			const data = event.data;
-			if (data.callId === callId) return {
-				turn: data.turn ?? 0,
-				step: data.step ?? 0,
-				seq: event.seq
+	});
+}
+/**
+* Undo the selected hunks of one file. The worktree is only written after the
+* forward complement applied cleanly to the index.
+*/
+async function applyHunkUndo(provider, scratchIndex, options) {
+	const rel = provider.normalizeRelPath(options.path);
+	await provider.readTree(scratchIndex, options.acceptedCommit);
+	const file = splitPatchFiles(await provider.diffPatch(options.acceptedCommit, void 0, [rel], {
+		context: options.context,
+		indexFile: scratchIndex
+	})).find((item) => item.path === rel);
+	if (file === void 0 || file.hunks.length === 0) return {
+		ok: true,
+		undone: 0
+	};
+	if (file.status === "binary") return {
+		ok: false,
+		undone: 0,
+		reason: "binary"
+	};
+	const undo = new Set(options.undo.filter((index) => index >= 0 && index < file.hunks.length));
+	if (undo.size === 0) return {
+		ok: true,
+		undone: 0
+	};
+	const keep = file.hunks.filter((_, index) => !undo.has(index));
+	if (keep.length === 0) {
+		if (file.status === "added") {
+			await fs.promises.rm(provider.absolutePath(rel), { force: true });
+			return {
+				ok: true,
+				undone: undo.size
 			};
 		}
+		await provider.checkoutIndex(scratchIndex, [rel]);
+		return {
+			ok: true,
+			undone: undo.size
+		};
 	}
-	async readText(target) {
-		try {
-			return await this.ctx.fs.readText(target);
-		} catch {
-			return;
-		}
-	}
-};
-function samePath(left, right) {
-	return path.resolve(left) === path.resolve(right);
-}
-function relPathWithin(cwd, abs) {
-	const rel = path.relative(cwd, abs);
-	if (rel === ".." || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)) return void 0;
-	return rel.split(path.sep).join("/");
-}
-//#endregion
-//#region lib/types/host/errors.js
-function ok(value) {
+	const unidiffZero = options.context === 0;
+	const combined = file.header + keep.join("");
+	let applied = await provider.applyCached(scratchIndex, combined, { unidiffZero });
+	if (!applied.ok) applied = await provider.applyCached(scratchIndex, combined, {
+		unidiffZero,
+		threeWay: true
+	});
+	if (!applied.ok) return {
+		ok: false,
+		undone: 0,
+		reason: applied.stderr || "hunk-conflict"
+	};
+	await provider.checkoutIndex(scratchIndex, [rel]);
 	return {
 		ok: true,
-		value
+		undone: undo.size
 	};
 }
-function fail(code, message, fields = {}) {
+/**
+* Rebuild a file as "accepted + every call except the skipped one", applying
+* each call's patch forward in order. A step that no longer applies on its own
+* falls back to a three-way merge (all pre-images are in the object store).
+*/
+async function replayPatches(provider, scratchIndex, base, steps, skip) {
+	await provider.readTree(scratchIndex, base);
+	const paths = /* @__PURE__ */ new Set();
+	for (let index = 0; index < steps.length; index += 1) {
+		if (skip.has(index)) continue;
+		const step = steps[index];
+		if (step.patch.trim() === "") continue;
+		let applied = await provider.applyCached(scratchIndex, step.patch);
+		if (!applied.ok) applied = await provider.applyCached(scratchIndex, step.patch, { threeWay: true });
+		if (!applied.ok) return {
+			ok: false,
+			reason: applied.stderr || "patch-conflict",
+			failedStep: index
+		};
+		paths.add(provider.normalizeRelPath(step.path));
+	}
+	if (paths.size > 0) await provider.checkoutIndex(scratchIndex, [...paths]);
+	return { ok: true };
+}
+//#endregion
+//#region lib/types/host/session-changes.js
+var SessionChangeManager = class {
+	ctx;
+	snapshots;
+	tracker;
+	accepts;
+	safety;
+	options;
+	bound = /* @__PURE__ */ new Map();
+	constructor(ctx, snapshots, tracker, accepts, safety, options) {
+		this.ctx = ctx;
+		this.snapshots = snapshots;
+		this.tracker = tracker;
+		this.accepts = accepts;
+		this.safety = safety;
+		this.options = options;
+	}
+	async sessionChanges(sessionId) {
+		const live = this.liveSession(sessionId);
+		if (!live.ok) return live;
+		const session = live.value;
+		const cwd = session.header.cwd ?? "";
+		if (cwd === "") return failure("session-not-live", `session "${sessionId}" has no workspace cwd`, { sessionId });
+		const warnings = [];
+		const provider = this.snapshots.providerFor(cwd, sessionId);
+		if (!await provider.available().catch(() => false)) return failure("rollback-failed", "the isolated git snapshot repository is unavailable for this workspace", { sessionId });
+		await this.tracker.flush(sessionId);
+		const sessionBase = await this.seedTree(sessionId, cwd);
+		if (sessionBase === void 0) warnings.push("this session has no chain base, so already-accepted files cannot be listed");
+		const accepted = await this.accepts.ensure(cwd, sessionId, sessionBase, { requireSeed: true });
+		if (accepted === void 0) {
+			if (sessionBase === void 0) return ok(this.emptyValue(session, warnings));
+			return failure("rollback-failed", "no accepted baseline could be established for this session", { sessionId });
+		}
+		const trackedPaths = [...new Set((await this.tracker.loadCalls(cwd, sessionId)).map((call) => call.path))];
+		const allViews = patchFileViews(await provider.withScratch(async (scratch) => {
+			await provider.readTree(scratch, accepted);
+			await provider.stagePaths(scratch, trackedPaths);
+			return provider.diffPatch(accepted, void 0, [], {
+				context: this.options.diffContextLines,
+				indexFile: scratch
+			});
+		}), this.options.maxDiffHunksPerFile, this.options.maxDiffBytesPerFile);
+		const sessionPaths = new Set(trackedPaths);
+		const views = allViews.filter((view) => sessionPaths.has(view.path));
+		const nestedRoots = await this.nestedRoots(provider);
+		const probe = /* @__PURE__ */ new Map();
+		const changes = views.map((view) => {
+			probe.set(view.path, view.newBlob);
+			const nested = nestedRoots.some((root) => view.path === root || view.path.startsWith(`${root}/`));
+			const created = view.status === "added";
+			return {
+				path: view.path,
+				absolutePath: provider.absolutePath(view.path),
+				status: created ? "created" : view.status === "deleted" ? "deleted" : view.binary ? "binary" : "modified",
+				source: "git",
+				restorable: !view.binary && !nested,
+				accepted: false,
+				...created ? { createdAfterSnapshot: true } : {},
+				...view.binary ? { binary: true } : {},
+				...view.truncated ? { truncated: true } : {},
+				...nested ? { nested: true } : {},
+				...view.view.length > 0 ? { hunks: view.view } : {}
+			};
+		});
+		const { items: modifications, latestBlob, attributable } = await this.modifications(session, cwd, provider, accepted, views);
+		const ownPending = /* @__PURE__ */ new Set();
+		for (const change of changes) if (!(attributable.get(change.path) === true && latestBlob.get(change.path) !== probe.get(change.path))) ownPending.add(change.path);
+		const acceptedRows = await this.acceptedRows(cwd, provider, sessionBase, accepted, changes, ownPending, warnings);
+		const acceptedPaths = new Set(acceptedRows.map((row) => row.path));
+		for (const change of changes) if (acceptedPaths.has(change.path) && !ownPending.has(change.path)) change.foreign = true;
+		attachToolCalls(changes, modifications);
+		for (const rel of this.tracker.oversizedPaths(sessionId)) if (!probe.has(rel)) warnings.push(`"${rel}" exceeds maxBlobBytes and is only rollback-able at turn granularity`);
+		if (this.tracker.baseDegraded(sessionId)) warnings.push("the call chain baseline was captured after the session started; the first write to each path has no caller-level patch");
+		const listId = crypto.randomUUID();
+		this.bound.set(listId, {
+			listId,
+			sessionId,
+			cwd,
+			accepted,
+			...sessionBase === void 0 ? {} : { sessionBase },
+			probe,
+			changes,
+			createdAt: Date.now()
+		});
+		while (this.bound.size > 32) {
+			const oldest = this.bound.keys().next().value;
+			if (oldest === void 0) break;
+			this.bound.delete(oldest);
+		}
+		const allChanges = [...changes, ...acceptedRows];
+		return ok({
+			listId,
+			baseline: {
+				turn: sessionStartTurn(session),
+				createdAt: Date.now(),
+				mode: "git"
+			},
+			changes: allChanges,
+			modifications,
+			acceptedFiles: acceptedRows.map((row) => row.path),
+			acceptedModifications: modifications.filter((item) => item.accepted === true).map((item) => item.modificationId),
+			warnings: [...new Set(warnings)]
+		});
+	}
+	async acceptFile(request) {
+		const bound = this.requireBound(request.listId, request.sessionId);
+		if (!bound.ok) return bound;
+		const rel = safeRel(this.snapshots.providerFor(bound.value.cwd, bound.value.sessionId), request.path);
+		if (rel === void 0) return failure("path-not-in-snapshot", `path "${request.path}" is not a valid workspace path`, { sessionId: request.sessionId });
+		const accepted = await this.accepts.acceptPaths(bound.value.cwd, bound.value.sessionId, [rel], {
+			message: "accept file",
+			...bound.value.sessionBase === void 0 ? {} : { seedTree: bound.value.sessionBase }
+		});
+		if (!accepted.ok) return failure("rollback-failed", `accepting "${rel}" failed`, {
+			sessionId: request.sessionId,
+			detail: accepted.reason
+		});
+		return ok(await this.acceptValue(bound.value, [rel]));
+	}
+	async acceptModification(request) {
+		const bound = this.requireBound(request.listId, request.sessionId);
+		if (!bound.ok) return bound;
+		const provider = this.snapshots.providerFor(bound.value.cwd, bound.value.sessionId);
+		const located = await this.locatePatch(bound.value, provider, request.modificationId);
+		if (located === void 0) return failure("rollback-failed", `patch "${request.modificationId}" is no longer known`, { sessionId: request.sessionId });
+		const accepted = await this.accepts.acceptPatch(bound.value.cwd, bound.value.sessionId, located.call.path, located.patch, {
+			...bound.value.sessionBase === void 0 ? {} : { seedTree: bound.value.sessionBase },
+			...located.view?.oldBlob === void 0 ? {} : { beforeBlob: located.view.oldBlob },
+			...located.view?.newBlob === void 0 ? {} : { afterBlob: located.view.newBlob }
+		});
+		if (!accepted.ok) return failure("patch-conflict", `accepting patch "${request.modificationId}" failed`, {
+			sessionId: request.sessionId,
+			detail: accepted.reason,
+			paths: [located.call.path]
+		});
+		return ok(await this.acceptValue(bound.value, [located.call.path]));
+	}
+	async acceptAll(request) {
+		const bound = this.requireBound(request.listId, request.sessionId);
+		if (!bound.ok) return bound;
+		const paths = bound.value.changes.map((change) => change.path);
+		const accepted = await this.accepts.acceptPaths(bound.value.cwd, bound.value.sessionId, paths, {
+			message: "accept all",
+			...bound.value.sessionBase === void 0 ? {} : { seedTree: bound.value.sessionBase }
+		});
+		if (!accepted.ok) return failure("rollback-failed", "accepting the modification list failed", {
+			sessionId: request.sessionId,
+			detail: accepted.reason
+		});
+		return ok({
+			acceptedFiles: paths,
+			acceptedModifications: await this.acceptedPatchIds(bound.value, paths)
+		});
+	}
+	async undoFile(request) {
+		const bound = this.requireBound(request.listId, request.sessionId);
+		if (!bound.ok) return bound;
+		const provider = this.snapshots.providerFor(bound.value.cwd, bound.value.sessionId);
+		const rel = safeRel(provider, request.path);
+		if (rel === void 0) return failure("path-not-in-snapshot", `path "${request.path}" is not a valid workspace path`, { sessionId: request.sessionId });
+		const outcome = await this.withUndo(bound.value, [rel], async () => {
+			if (await this.accepts.acceptedBlob(bound.value.cwd, bound.value.sessionId, rel) === void 0) {
+				await fs.promises.rm(provider.absolutePath(rel), { force: true });
+				return {
+					deleted: [rel],
+					acceptedPaths: [rel]
+				};
+			}
+			await provider.restorePaths(bound.value.accepted, [rel]);
+			return {
+				restored: [rel],
+				acceptedPaths: [rel]
+			};
+		});
+		if (!outcome.ok) return outcome;
+		return ok({
+			guardId: outcome.guardId,
+			restored: outcome.run.restored ?? [],
+			deleted: outcome.run.deleted ?? [],
+			kept: outcome.run.kept ?? [],
+			skipped: outcome.run.skipped ?? [],
+			acceptedFiles: outcome.run.acceptedPaths
+		});
+	}
+	async undoModification(request) {
+		const bound = this.requireBound(request.listId, request.sessionId);
+		if (!bound.ok) return bound;
+		const provider = this.snapshots.providerFor(bound.value.cwd, bound.value.sessionId);
+		const located = await this.locatePatch(bound.value, provider, request.modificationId);
+		if (located === void 0) return failure("rollback-failed", `patch "${request.modificationId}" is no longer known`, { sessionId: request.sessionId });
+		const rel = located.call.path;
+		let results = [];
+		const outcome = await this.withUndo(bound.value, [rel], async () => {
+			const chain = (await this.tracker.loadCalls(bound.value.cwd, bound.value.sessionId)).filter((call) => call.path === rel && call.commit !== void 0);
+			const acceptedBlob = await this.accepts.acceptedBlob(bound.value.cwd, bound.value.sessionId, rel);
+			const steps = [];
+			const ids = [];
+			for (const call of chain) {
+				const blob = await this.callBlob(provider, call);
+				if (blob !== void 0 && blob === acceptedBlob) continue;
+				steps.push({
+					path: rel,
+					patch: await this.callPatch(provider, call)
+				});
+				ids.push(call.callId);
+			}
+			const skip = ids.indexOf(request.modificationId);
+			if (skip < 0) {
+				results = [{
+					modificationId: request.modificationId,
+					path: rel,
+					status: "restored"
+				}];
+				return { acceptedPaths: [] };
+			}
+			const replay = await provider.withScratch((scratch) => replayPatches(provider, scratch, bound.value.accepted, steps, new Set([skip])));
+			if (!replay.ok) {
+				results = [{
+					modificationId: request.modificationId,
+					path: rel,
+					status: "conflict",
+					...replay.reason === void 0 ? {} : { detail: replay.reason }
+				}];
+				return { acceptedPaths: [] };
+			}
+			results = [{
+				modificationId: request.modificationId,
+				path: rel,
+				status: "restored"
+			}];
+			return {
+				restored: [rel],
+				acceptedPaths: [rel]
+			};
+		});
+		if (!outcome.ok) return outcome;
+		return ok({
+			guardId: outcome.guardId,
+			modificationResults: results,
+			acceptedModifications: await this.acceptedPatchIds(bound.value, outcome.run.acceptedPaths)
+		});
+	}
+	async undoHunks(request) {
+		const bound = this.requireBound(request.listId, request.sessionId);
+		if (!bound.ok) return bound;
+		const provider = this.snapshots.providerFor(bound.value.cwd, bound.value.sessionId);
+		const rel = safeRel(provider, request.path);
+		if (rel === void 0) return failure("path-not-in-snapshot", `path "${request.path}" is not a valid workspace path`, { sessionId: request.sessionId });
+		let undone = 0;
+		let conflict;
+		const outcome = await this.withUndo(bound.value, [rel], async () => {
+			const applied = await provider.withScratch((scratch) => applyHunkUndo(provider, scratch, {
+				acceptedCommit: bound.value.accepted,
+				path: rel,
+				undo: request.hunks,
+				context: this.options.diffContextLines
+			}));
+			if (!applied.ok) {
+				conflict = applied.reason ?? "hunk-conflict";
+				return { acceptedPaths: [] };
+			}
+			undone = applied.undone;
+			return {
+				restored: [rel],
+				acceptedPaths: [rel]
+			};
+		});
+		if (!outcome.ok) return outcome;
+		if (conflict !== void 0) return failure("hunk-conflict", `undoing hunks of "${rel}" failed`, {
+			sessionId: request.sessionId,
+			detail: conflict,
+			paths: [rel]
+		});
+		return ok({
+			guardId: outcome.guardId,
+			undone,
+			acceptedFiles: outcome.run.acceptedPaths,
+			acceptedModifications: await this.acceptedPatchIds(bound.value, outcome.run.acceptedPaths)
+		});
+	}
+	async undoAll(request) {
+		const bound = this.requireBound(request.listId, request.sessionId);
+		if (!bound.ok) return bound;
+		const provider = this.snapshots.providerFor(bound.value.cwd, bound.value.sessionId);
+		const paths = bound.value.changes.map((change) => provider.normalizeRelPath(change.path));
+		const outcome = await this.withUndo(bound.value, paths, async () => {
+			const restored = [];
+			const deleted = [];
+			for (const rel of paths) if (await this.accepts.acceptedBlob(bound.value.cwd, bound.value.sessionId, rel) === void 0) {
+				await fs.promises.rm(provider.absolutePath(rel), { force: true });
+				deleted.push(rel);
+			} else restored.push(rel);
+			if (restored.length > 0) await provider.restorePaths(bound.value.accepted, restored);
+			return {
+				restored,
+				deleted,
+				acceptedPaths: paths
+			};
+		});
+		if (!outcome.ok) return outcome;
+		return ok({
+			guardId: outcome.guardId,
+			restored: outcome.run.restored ?? [],
+			deleted: outcome.run.deleted ?? [],
+			kept: outcome.run.kept ?? [],
+			skipped: outcome.run.skipped ?? [],
+			acceptedFiles: outcome.run.acceptedPaths
+		});
+	}
+	/**
+	* Shared undo skeleton: verify the listed worktree state is unchanged, take
+	* the workspace lock, fence, flush the session, guard the affected paths, run
+	* the mutation, journal it, and auto-accept the result.
+	*/
+	async withUndo(bound, paths, run) {
+		const live = this.liveSession(bound.sessionId);
+		if (!live.ok) return live;
+		const provider = this.snapshots.providerFor(bound.cwd, bound.sessionId);
+		const unique = [...new Set(paths)];
+		for (const rel of unique) {
+			const expected = bound.probe.get(rel);
+			if (await provider.fileHash(rel).catch(() => void 0) !== expected) return failure("workspace-changed", `"${rel}" changed after the list was read; refresh and try again`, {
+				sessionId: bound.sessionId,
+				paths: [rel]
+			});
+		}
+		await this.safety.acquire(bound.cwd);
+		let journalId;
+		try {
+			await this.safety.assertFences(this.ctx, bound.cwd, provider);
+			await this.ctx.sessions.flush(live.value);
+			const guard = await this.safety.captureGuard(provider, {
+				cwd: bound.cwd,
+				sessionId: bound.sessionId
+			}, unique);
+			journalId = await this.safety.journalStart(provider, guard, unique);
+			try {
+				const result = await run();
+				await this.safety.journalUpdate(provider, journalId, "completed");
+				if (result.acceptedPaths.length > 0) await this.accepts.acceptPaths(bound.cwd, bound.sessionId, result.acceptedPaths, {
+					message: "auto accept after undo",
+					...bound.sessionBase === void 0 ? {} : { seedTree: bound.sessionBase }
+				});
+				return {
+					ok: true,
+					guardId: guard.guardId,
+					run: result
+				};
+			} catch (error) {
+				await this.safety.restoreGuard(provider, guard, unique).catch(() => void 0);
+				await this.safety.journalUpdate(provider, journalId, "rolled-back");
+				return failure("rollback-failed", error instanceof Error ? error.message : "rollback failed", {
+					sessionId: bound.sessionId,
+					paths: unique
+				});
+			}
+		} catch (error) {
+			if (journalId !== void 0) await this.safety.journalUpdate(provider, journalId, "interrupted").catch(() => void 0);
+			return failure("rollback-failed", error instanceof Error ? error.message : "rollback failed", { sessionId: bound.sessionId });
+		} finally {
+			await this.safety.release().catch(() => void 0);
+		}
+	}
+	requireBound(listId, sessionId) {
+		const bound = this.bound.get(listId);
+		if (bound === void 0 || bound.sessionId !== sessionId) return failure("workspace-changed", "the modification list is stale; refresh it and try again", { sessionId });
+		return {
+			ok: true,
+			value: bound
+		};
+	}
+	liveSession(sessionId) {
+		const session = this.ctx.sessions.get(sessionId);
+		if (session === void 0) return failure("session-not-found", `unknown session "${sessionId}"`, { sessionId });
+		const cwd = session.header?.cwd;
+		if (cwd === void 0 || cwd === "") return failure("session-not-live", `session "${sessionId}" has no workspace cwd`, { sessionId });
+		return {
+			ok: true,
+			value: session
+		};
+	}
+	/**
+	* Turn-start tree of this session, used to seed the accepted baseline. Read
+	* from the persisted `refs/dsh/base` rather than the in-memory anchor: after
+	* a host restart that anchor is gone or has been re-pointed at the chain tip,
+	* which would silently drop every already-accepted file from the list.
+	*/
+	async seedTree(sessionId, cwd) {
+		const base = await this.tracker.readBase(cwd, sessionId).catch(() => void 0);
+		if (base === void 0) return void 0;
+		return this.snapshots.providerFor(cwd, sessionId).treeOf(base).catch(() => void 0);
+	}
+	/** A list with nothing to show (no chain, no accept baseline yet). */
+	emptyValue(session, warnings) {
+		return {
+			listId: crypto.randomUUID(),
+			baseline: {
+				turn: sessionStartTurn(session),
+				createdAt: Date.now(),
+				mode: "git"
+			},
+			changes: [],
+			modifications: [],
+			acceptedFiles: [],
+			acceptedModifications: [],
+			warnings: [...new Set(warnings)]
+		};
+	}
+	/**
+	* Accepted rows: paths whose accepted content differs from the session
+	* baseline, i.e. what this session accepted. One diff process; hunks are
+	* intentionally omitted (the accepted group is a file list).
+	*
+	* Suppression is per *attribution*, not per path: only paths this session
+	* itself re-wrote after accepting (`ownPending`) leave the accepted group.
+	* A path touched by another session keeps its accepted row and is reported
+	* through `warnings`, instead of silently masquerading as a change of ours.
+	*/
+	async acceptedRows(cwd, provider, sessionBase, accepted, changes, ownPending, warnings) {
+		if (sessionBase === void 0) return [];
+		const acceptedTree = await provider.treeOf(accepted).catch(() => void 0);
+		if (acceptedTree === void 0) {
+			warnings.push("the accepted baseline tree could not be read; already-accepted files are not listed");
+			return [];
+		}
+		if (acceptedTree === sessionBase) return [];
+		const entries = await provider.diffEntries(sessionBase, acceptedTree).catch(() => void 0);
+		if (entries === void 0) {
+			warnings.push("the accepted-file list could not be computed from the snapshot repository");
+			return [];
+		}
+		const foreign = changes.filter((change) => !ownPending.has(change.path) && entries.some((entry) => entry.path === change.path)).map((change) => change.path);
+		if (foreign.length > 0) warnings.push(`already-accepted path(s) changed outside this session's tool chain: ${summarize(foreign)}`);
+		return entries.filter((entry) => !ownPending.has(entry.path)).map((entry) => ({
+			path: entry.path,
+			absolutePath: provider.absolutePath(entry.path),
+			status: entry.status === "A" ? "created" : entry.status === "D" ? "deleted" : "modified",
+			source: "git",
+			restorable: true,
+			accepted: true
+		}));
+	}
+	async nestedRoots(provider) {
+		return (await provider.listNestedRepos().catch(() => [])).map((repo) => repo.rel).filter((rel) => rel !== "");
+	}
+	/**
+	* Per-call patches of the session chain, with hunks and accept state. Also
+	* reports, per path, the post-image blob of the *newest* call and whether that
+	* call has a usable post-image — the caller uses it to attribute the worktree
+	* content to this session (or to somebody else).
+	*/
+	async modifications(session, cwd, provider, accepted, views) {
+		const calls = await this.tracker.loadCalls(cwd, session.id);
+		if (calls.length === 0) return {
+			items: [],
+			latestBlob: /* @__PURE__ */ new Map(),
+			attributable: /* @__PURE__ */ new Map()
+		};
+		const commits = calls.map((call) => call.commit).filter((commit) => commit !== void 0);
+		const patches = commits.length > 0 ? await provider.diffTreePatches(commits, { context: this.options.diffContextLines }).catch(() => /* @__PURE__ */ new Map()) : /* @__PURE__ */ new Map();
+		const acceptedBlobs = /* @__PURE__ */ new Map();
+		for (const rel of new Set(calls.map((call) => call.path))) acceptedBlobs.set(rel, await provider.blobHash(accepted, rel).catch(() => void 0));
+		const byPath = /* @__PURE__ */ new Map();
+		for (const call of calls) {
+			const list = byPath.get(call.path) ?? [];
+			list.push(call);
+			byPath.set(call.path, list);
+		}
+		const latestBlob = /* @__PURE__ */ new Map();
+		const attributable = /* @__PURE__ */ new Map();
+		const result = [];
+		for (const call of calls) {
+			const view = patchFileViews(call.commit === void 0 ? "" : patches.get(call.commit) ?? "", this.options.maxDiffHunksPerFile, this.options.maxDiffBytesPerFile).find((item) => item.path === call.path);
+			const blob = await this.callBlob(provider, call);
+			const acceptedBlob = acceptedBlobs.get(call.path);
+			const later = (byPath.get(call.path) ?? []).filter((item) => item.seq > call.seq).map((item) => item.callId);
+			latestBlob.set(call.path, blob);
+			attributable.set(call.path, call.deleted === true || blob !== void 0 || call.commit !== void 0);
+			result.push({
+				modificationId: call.callId,
+				toolName: call.toolName === "write" ? "write" : "edit",
+				path: call.path,
+				turn: call.turn,
+				step: call.step,
+				seq: call.seq,
+				hunks: view?.view ?? [],
+				restorable: call.commit === void 0 || call.oversized === true ? "unsupported" : view?.status === "added" ? "file-only" : "merge",
+				accepted: acceptedBlob !== void 0 && blob !== void 0 && blob === acceptedBlob,
+				...call.superseded === true ? { reason: "the path was rewritten before this call could be recorded" } : {},
+				...call.deleted === true ? { reason: "this call removed the file" } : {},
+				...view?.status === "added" ? { createdFile: true } : {},
+				...later.length > 0 ? { laterModificationIds: later } : {}
+			});
+		}
+		return {
+			items: result.sort((a, b) => a.seq - b.seq || a.turn - b.turn || a.step - b.step),
+			latestBlob,
+			attributable
+		};
+	}
+	async locatePatch(bound, provider, modificationId) {
+		const call = (await this.tracker.loadCalls(bound.cwd, bound.sessionId)).find((item) => item.callId === modificationId);
+		if (call === void 0) return void 0;
+		const patch = await this.callPatch(provider, call);
+		const view = patchFileViews(patch, this.options.maxDiffHunksPerFile, this.options.maxDiffBytesPerFile).find((item) => item.path === call.path);
+		return {
+			call,
+			patch,
+			...view === void 0 ? {} : { view }
+		};
+	}
+	async callBlob(provider, call) {
+		if (call.blob !== void 0) return call.blob;
+		if (call.deleted === true || call.commit === void 0) return void 0;
+		return provider.blobHash(call.commit, call.path).catch(() => void 0);
+	}
+	async callPatch(provider, call) {
+		if (call.commit === void 0) return "";
+		const result = await provider.run([
+			"diff-tree",
+			"-p",
+			"--no-renames",
+			"--full-index",
+			`--unified=${this.options.diffContextLines}`,
+			`${call.commit}^`,
+			call.commit,
+			"--",
+			call.path
+		]);
+		return result.code === 0 ? result.stdout : "";
+	}
+	async acceptValue(bound, paths) {
+		const provider = this.snapshots.providerFor(bound.cwd, bound.sessionId);
+		const acceptedFiles = [];
+		for (const rel of paths) {
+			const acceptedBlob = await this.accepts.acceptedBlob(bound.cwd, bound.sessionId, rel);
+			const current = await provider.fileHash(rel).catch(() => void 0);
+			if (acceptedBlob !== void 0 && acceptedBlob === current) acceptedFiles.push(rel);
+		}
+		return {
+			acceptedFiles,
+			acceptedModifications: await this.acceptedPatchIds(bound, paths)
+		};
+	}
+	/** Patch ids whose post-image already equals the accepted content. */
+	async acceptedPatchIds(bound, paths) {
+		const provider = this.snapshots.providerFor(bound.cwd, bound.sessionId);
+		const ids = [];
+		const calls = await this.tracker.loadCalls(bound.cwd, bound.sessionId);
+		for (const rel of [...new Set(paths)]) {
+			const acceptedBlob = await this.accepts.acceptedBlob(bound.cwd, bound.sessionId, rel);
+			if (acceptedBlob === void 0) continue;
+			for (const call of calls) {
+				if (call.path !== rel) continue;
+				if (await this.callBlob(provider, call) === acceptedBlob) ids.push(call.callId);
+			}
+		}
+		return ids;
+	}
+};
+/** Failure-only result, so control flow narrows without the `ok: true` branch. */
+function failure(code, message, fields = {}) {
 	return {
 		ok: false,
 		error: {
@@ -1823,352 +2143,50 @@ function fail(code, message, fields = {}) {
 		}
 	};
 }
-//#endregion
-//#region lib/types/host/boundary.js
-function resolveBoundary(session, messageId) {
-	let assistant;
-	for (const event of session.snapshotEvents()) {
-		if (event.type !== "assistant/message") continue;
-		if (event.data.message.id === messageId) assistant = event;
-	}
-	if (assistant === void 0) return { failure: {
-		code: "message-not-found",
-		message: `assistant message "${messageId}" was not found in session "${session.id}"`,
-		sessionId: session.id,
-		messageId
-	} };
-	return resolveForTurn(session, assistant.data.turn, { assistantEvent: assistant });
-}
-/**
-* Resolve the rollback boundary of a turn by its number. Works for unfinished
-* turns (a stopped/interrupted assistant message never emits `turn/end`): the
-* rollback target is the turn-start snapshot and the fork anchor is the last
-* completed turn end before it.
-*/
-function resolveBoundaryForTurn(session, turn) {
-	const turnStart = session.snapshotEvents().find((event) => event.type === "turn/start" && event.data.turn === turn);
-	if (turnStart === void 0) return { failure: {
-		code: "turn-not-found",
-		message: `turn ${turn} has no turn/start in session "${session.id}"`,
-		sessionId: session.id
-	} };
-	return resolveForTurn(session, turn, { turnStartSeq: turnStart.seq });
-}
-function resolveForTurn(session, targetTurn, extras) {
-	const events = session.snapshotEvents();
-	const turnStart = events.find((event) => event.type === "turn/start" && event.data.turn === targetTurn);
-	const anchor = findPreviousTurnEnd(events, turnStart?.seq ?? Number.MAX_SAFE_INTEGER);
-	return { boundary: {
-		targetTurn,
-		...anchor === void 0 ? {} : { forkAtSeq: anchor.seq },
-		forkAvailable: anchor !== void 0,
-		...extras,
-		...turnStart === void 0 ? {} : { turnStartSeq: turnStart.seq }
-	} };
-}
-function findPreviousTurnEnd(events, beforeSeq) {
-	let found;
-	for (const event of events) {
-		if (event.seq >= beforeSeq) break;
-		if (event.type === "turn/end") found = event;
-	}
-	return found;
-}
-function boundaryInfo(boundary) {
-	return {
-		targetTurn: boundary.targetTurn,
-		...boundary.forkAtSeq === void 0 ? {} : { forkAtSeq: boundary.forkAtSeq },
-		forkAvailable: boundary.forkAvailable
-	};
-}
-//#endregion
-//#region lib/types/host/fs-policy.js
-const SANDBOX_MODES = new Set([
-	"read-only",
-	"workspace-write",
-	"danger-full-access"
-]);
-/**
-* Resolve the per-call fs sandbox policy for one live session. Prefers the
-* composition's `sandboxPolicy` service (which honours session mode
-* overrides); falls back to workspace-write bounded by the session cwd.
-*/
-function sandboxPolicyFor(ctx, session) {
-	let service;
+function safeRel(provider, input) {
 	try {
-		service = ctx.get("sandboxPolicy");
+		return provider.normalizeRelPath(input);
 	} catch {
-		service = void 0;
-	}
-	if (service !== void 0 && typeof service.resolve === "function") try {
-		const resolved = service.resolve({ session });
-		if (resolved !== void 0 && typeof resolved.mode === "string" && SANDBOX_MODES.has(resolved.mode) && typeof resolved.workspaceRoot === "string" && resolved.workspaceRoot !== "") return {
-			mode: resolved.mode,
-			workspaceRoot: resolved.workspaceRoot
-		};
-	} catch {}
-	const cwd = session.header.cwd;
-	if (cwd === void 0 || cwd === "") return void 0;
-	return {
-		mode: "workspace-write",
-		workspaceRoot: cwd
-	};
-}
-/**
-* Policy for restoration paths without a live session (startup reconciliation
-* of interrupted journals): the guard's recorded cwd is the honest boundary.
-*/
-function sandboxPolicyForCwd(cwd) {
-	if (cwd === "") return void 0;
-	return {
-		mode: "workspace-write",
-		workspaceRoot: cwd
-	};
-}
-//#endregion
-//#region lib/types/host/modification.js
-/**
-* Undo one write/edit tool modification with a three-way reverse merge:
-* base = after (A), ours = current (B), theirs = before (O).
-*/
-async function restoreModification(ctx, ledger, cwd, record, deleteCreatedPolicy, timeoutMs, sandboxPolicy) {
-	const before = record.beforeContent;
-	if (record.beforeExisted && before === void 0) return {
-		status: "unsupported",
-		detail: "no bounded text before-image for this modification"
-	};
-	let target;
-	let current;
-	let currentInfo;
-	try {
-		target = await ctx.fs.resolve(record.path, { cwd });
-		currentInfo = await ctx.fs.stat(target);
-		if (currentInfo !== void 0) current = await ctx.fs.readText(target);
-	} catch {
-		if (currentInfo !== void 0 && currentInfo.type === "file" && (currentInfo.size ?? 0) > ledger.ledgerMaxTextBytes) return {
-			status: "unsupported",
-			detail: "current file is too large for modification-level merge"
-		};
-		return {
-			status: "failed",
-			detail: "current file could not be read"
-		};
-	}
-	const rebuilt = rebuildAfter(record);
-	if (!rebuilt.ok) return {
-		status: "unsupported",
-		detail: rebuilt.detail
-	};
-	const after = normalizeLf(rebuilt.value.after);
-	const currentLf = current === void 0 ? void 0 : normalizeLf(current);
-	if (!record.beforeExisted || rebuilt.value.created) {
-		if (current === void 0) return {
-			status: "restored",
-			detail: "created file is already absent"
-		};
-		if (currentLf !== after) return {
-			status: "conflict",
-			detail: "the created file was modified after the write; use whole-file restore or delete explicitly"
-		};
-		if (!deleteCreatedPolicy) return {
-			status: "conflict",
-			detail: "undoing file creation requires createdPolicy=delete"
-		};
-		try {
-			fs.rmSync(ctx.fs.processPath(target), { force: true });
-			return {
-				status: "restored",
-				deleted: true,
-				detail: "created file deleted"
-			};
-		} catch (error) {
-			return {
-				status: "failed",
-				detail: `failed to delete created file: ${String(error)}`
-			};
-		}
-	}
-	if (current === void 0) return {
-		status: "conflict",
-		detail: "the file no longer exists; its creation was not produced by this modification"
-	};
-	const beforeLf = normalizeLf(before ?? "");
-	const normalizedCurrent = normalizeLf(current);
-	if (normalizedCurrent === beforeLf) return {
-		status: "restored",
-		detail: "file already matches the pre-modification state"
-	};
-	const merged = await mergeFiles(normalizedCurrent, after, beforeLf, timeoutMs);
-	if (!merged.ok) return {
-		status: "conflict",
-		detail: merged.detail ?? "three-way merge conflict"
-	};
-	try {
-		const style = current.includes("\r\n") ? "\r\n" : "\n";
-		const output = merged.value.split("\n").join(style);
-		await ctx.fs.writeText(target, output, currentInfo === void 0 ? { kind: "createIfAbsent" } : {
-			kind: "replaceIfVersion",
-			version: currentInfo.version
-		}, void 0, sandboxPolicy);
-		if (normalizeLf(await ctx.fs.readText(target)) !== merged.value) return {
-			status: "failed",
-			detail: "post-write verification failed"
-		};
-		return { status: "restored" };
-	} catch (error) {
-		return {
-			status: "failed",
-			detail: String(error)
-		};
+		return;
 	}
 }
-async function mergeFiles(current, base, other, timeoutMs) {
-	const dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "dsh-rollback-merge-"));
-	const currentFile = path.join(dir, "B");
-	const baseFile = path.join(dir, "A");
-	const otherFile = path.join(dir, "O");
-	try {
-		await Promise.all([
-			fs.promises.writeFile(currentFile, current, "utf8"),
-			fs.promises.writeFile(baseFile, base, "utf8"),
-			fs.promises.writeFile(otherFile, other, "utf8")
-		]);
-		const result = await spawnGit(dir, [
-			"merge-file",
-			"-p",
-			"B",
-			"A",
-			"O"
-		], process.env, timeoutMs);
-		if (result.code !== 0) return {
-			ok: false,
-			detail: result.stderr.trim() || "git merge-file reported a conflict"
-		};
-		return {
-			ok: true,
-			value: normalizeLf(result.stdout)
-		};
-	} finally {
-		fs.rmSync(dir, {
-			recursive: true,
-			force: true
-		});
+/** Short, bounded path list for a warning message. */
+function summarize(paths, max = 3) {
+	const shown = paths.slice(0, max).join(", ");
+	return paths.length > max ? `${shown}, … (+${paths.length - max})` : shown;
+}
+/** Attach per-path tool-call patch lists to the file rows. */
+function attachToolCalls(changes, modifications) {
+	for (const change of changes) {
+		const calls = modifications.filter((item) => item.path === change.path);
+		if (calls.length === 0) continue;
+		change.toolCalls = calls.map((item) => ({
+			callId: item.modificationId,
+			toolName: item.toolName,
+			turn: item.turn,
+			step: item.step,
+			seq: item.seq,
+			hunks: item.hunks
+		}));
 	}
 }
-function rebuildAfter(record) {
-	if (record.argsRaw === void 0) return {
-		ok: false,
-		detail: "tool arguments were not captured for this modification"
-	};
-	let args;
-	try {
-		args = JSON.parse(record.argsRaw);
-	} catch {
-		return {
-			ok: false,
-			detail: "tool arguments are not valid JSON"
-		};
-	}
-	if (typeof args !== "object" || args === null) return {
-		ok: false,
-		detail: "tool arguments are malformed"
-	};
-	const value = args;
-	if (record.toolName === "write") {
-		const content = value.content;
-		if (typeof content !== "string") return {
-			ok: false,
-			detail: "write content argument is unavailable"
-		};
-		return {
-			ok: true,
-			value: {
-				after: content,
-				created: !record.beforeExisted
-			}
-		};
-	}
-	const oldString = firstString(value, "old_string", "oldString");
-	const newString = firstString(value, "new_string", "newString");
-	const replaceAll = firstBoolean(value, "replace_all", "replaceAll") ?? false;
-	if (oldString === void 0 || newString === void 0) return {
-		ok: false,
-		detail: "edit old_string/new_string/replace_all arguments are unavailable"
-	};
-	const before = record.beforeContent ?? "";
-	const matches = countMatches(before, oldString);
-	if (matches === 0 || !replaceAll && matches !== 1) return {
-		ok: false,
-		detail: `edit arguments do not match the captured before-image (${matches} matches)`
-	};
-	return {
-		ok: true,
-		value: {
-			after: before.split(oldString).join(newString),
-			created: false
-		}
-	};
+/** The turn the session started at (first `turn/start`). */
+function sessionStartTurn(session) {
+	return (session.snapshotEvents().find((item) => item.type === "turn/start")?.data)?.turn ?? 0;
 }
-function firstString(value, snake, camel) {
-	const candidate = value[snake] ?? value[camel];
-	return typeof candidate === "string" ? candidate : void 0;
-}
-function firstBoolean(value, snake, camel) {
-	const candidate = value[snake] ?? value[camel];
-	return typeof candidate === "boolean" ? candidate : void 0;
-}
-function countMatches(text, needle) {
-	if (needle === "") return 0;
-	let count = 0;
-	let index = text.indexOf(needle);
-	while (index !== -1) {
-		count += 1;
-		index = text.indexOf(needle, index + needle.length);
-	}
-	return count;
-}
-//#endregion
-//#region lib/types/host/providers/ledger-fallback.js
-/**
-* Ledger fallback provider: ignored tool writes and non-git workspaces.
-* Git diff entries win for a path; ledger entries fill the paths git cannot see.
-*/
-var LedgerProvider = class {
-	ctx;
-	ledger;
-	constructor(ctx, ledger) {
-		this.ctx = ctx;
-		this.ledger = ledger;
-	}
-	async mergeChanges(sessionId, turn, cwd, gitChanges, gitAvailable) {
-		const warnings = [];
-		const ledgerChanges = await this.ledger.buildFileChanges(sessionId, turn, cwd, gitAvailable ? "ignored" : "fallback");
-		const byPath = /* @__PURE__ */ new Map();
-		for (const change of gitChanges) byPath.set(change.path, change);
-		for (const change of ledgerChanges) {
-			if (byPath.has(change.path)) continue;
-			byPath.set(change.path, change);
-		}
-		if (!gitAvailable) warnings.push("git snapshotting is unavailable for this workspace; only tool write/edit modifications captured by the ledger can be restored");
-		return {
-			changes: [...byPath.values()],
-			warnings
-		};
-	}
-};
 //#endregion
 //#region lib/types/host/restore.js
 var RollbackRestore = class {
 	ctx;
 	snapshots;
-	ledger;
+	tracker;
 	safety;
 	options;
 	prepared = /* @__PURE__ */ new Map();
-	constructor(ctx, snapshots, ledger, safety, options) {
+	constructor(ctx, snapshots, tracker, safety, options) {
 		this.ctx = ctx;
 		this.snapshots = snapshots;
-		this.ledger = ledger;
+		this.tracker = tracker;
 		this.safety = safety;
 		this.options = options;
 	}
@@ -2202,7 +2220,7 @@ var RollbackRestore = class {
 	async prepareWithBoundary(base, boundary, messageId) {
 		const { session, cwd } = base;
 		const sessionId = session.id;
-		const found = await this.snapshots.find(sessionId, boundary.targetTurn);
+		const found = await this.snapshots.find(cwd, sessionId, boundary.targetTurn);
 		if (found === void 0) return fail("snapshot-unavailable", `no rollback snapshot is available for turn ${boundary.targetTurn}`, {
 			sessionId,
 			messageId
@@ -2247,12 +2265,9 @@ var RollbackRestore = class {
 					...diff.hunks.length > 0 ? { hunks: diff.hunks } : {}
 				});
 			}
-		} else if (found.manifest.tree !== void 0) warnings.push("the isolated snapshot store is unavailable; only ledger-covered paths are shown");
-		const merged = await new LedgerProvider(this.ctx, this.ledger).mergeChanges(sessionId, found.manifest.turn, cwd, changes, gitAvailable && found.manifest.tree !== void 0);
-		changes = merged.changes;
-		warnings.push(...merged.warnings);
-		const modifications = this.buildModifications(sessionId, found.manifest.turn, cwd, session.snapshotEvents());
-		this.attachToolCalls(changes, modifications);
+		} else if (found.manifest.tree !== void 0) warnings.push("the isolated snapshot store is unavailable; only the tracked call chain is available");
+		const modifications = await this.buildModifications(session, cwd, found.manifest.turn, provider);
+		attachToolCalls(changes, modifications);
 		const prepareId = crypto.randomUUID();
 		const prepared = {
 			prepareId,
@@ -2315,14 +2330,16 @@ var RollbackRestore = class {
 			acquired = true;
 			await this.safety.assertFences(this.ctx, prepared.cwd, provider);
 			await this.ctx.sessions.flush(session);
-			const policy = sandboxPolicyFor(this.ctx, session);
-			if (request.scope === "modifications") return await this.executeModifications(prepared, request, provider, guardTree, affected, policy, () => this.finishGuard(prepared, guardId, journalId));
+			if (request.scope === "modifications") return await this.executeModifications(prepared, request, provider, affected);
 			const selected = await this.selectFilePaths(prepared, request, provider);
 			if (!selected.ok) return selected;
 			for (const item of selected.value.all) affected.add(item);
-			const ledgerPaths = selected.value.ledger.map((item) => item.rel);
-			guardId = (await this.safety.captureGuard(this.ctx, provider, prepared.cwd, guardTree, ledgerPaths, this.ledger, prepared.sessionId)).guardId;
-			journalId = (await this.safety.journalStart(guardId, selected.value.all)).id;
+			const guard = await this.safety.captureGuard(provider, {
+				cwd: prepared.cwd,
+				sessionId: prepared.sessionId
+			}, selected.value.all);
+			guardId = guard.guardId;
+			journalId = await this.safety.journalStart(provider, guard, selected.value.all);
 			const restored = [];
 			const kept = [];
 			const deleted = [];
@@ -2346,25 +2363,7 @@ var RollbackRestore = class {
 						deleted.push(item.rel);
 					} else kept.push(item.rel);
 				}
-				for (const item of selected.value.ledger) {
-					const baseline = this.ledger.baselineForTurn(request.sessionId, prepared.snapshot.turn, item.abs ?? item.rel);
-					if (baseline === void 0) {
-						if (request.createdPolicy === "delete") {
-							const abs = item.abs ?? provider.absolutePath(item.rel);
-							if (fs.existsSync(abs)) {
-								fs.rmSync(abs, { force: true });
-								deleted.push(item.rel);
-							} else skipped.push(item.rel);
-						} else kept.push(item.rel);
-						continue;
-					}
-					const outcome = await this.ledger.restoreLedgerPath(prepared.cwd, item.rel, baseline, request.createdPolicy ?? "keep", policy);
-					if (outcome === "restored") restored.push(item.rel);
-					else if (outcome === "deleted") deleted.push(item.rel);
-					else if (outcome === "kept") kept.push(item.rel);
-					else skipped.push(item.rel);
-				}
-				await this.safety.journalUpdate(journalId, "completed");
+				await this.safety.journalUpdate(provider, journalId, "completed");
 				return ok({
 					guardId,
 					restored,
@@ -2377,8 +2376,8 @@ var RollbackRestore = class {
 					} : {}
 				});
 			} catch (error) {
-				await this.safety.rollbackGuard(this.ctx, provider, this.ledger, guardId, selected.value.all, policy).catch(() => void 0);
-				await this.safety.journalUpdate(journalId, "rolled-back").catch(() => void 0);
+				await this.safety.restoreGuard(provider, guard, selected.value.all).catch(() => void 0);
+				await this.safety.journalUpdate(provider, journalId, "rolled-back").catch(() => void 0);
 				return fail(error instanceof Error && error.message.startsWith("verification failed") ? "verification-failed" : "rollback-failed", String(error), {
 					sessionId: request.sessionId,
 					messageId: request.messageId,
@@ -2397,7 +2396,7 @@ var RollbackRestore = class {
 		const cwd = live.value.header.cwd ?? process.cwd();
 		const lock = await this.safety.readLock(cwd);
 		return ok({
-			journal: await this.safety.listJournals(cwd),
+			journal: await this.safety.listJournals(this.snapshots.providerFor(cwd, sessionId)),
 			...lock === void 0 ? {} : { lock }
 		});
 	}
@@ -2485,17 +2484,9 @@ var RollbackRestore = class {
 		}
 		const all = [];
 		const git = [];
-		const ledger = [];
 		for (const change of changes) {
 			const rel = change.path;
 			all.push(rel);
-			if (change.source === "ledger") {
-				ledger.push({
-					rel,
-					abs: change.absolutePath
-				});
-				continue;
-			}
 			let inSnapshot = false;
 			if (prepared.snapshot.tree !== void 0) inSnapshot = (await provider.pathsInTree(prepared.snapshot.tree, rel)).includes(rel);
 			git.push({
@@ -2505,71 +2496,113 @@ var RollbackRestore = class {
 		}
 		return ok({
 			all,
-			git,
-			ledger
+			git
 		});
 	}
-	buildModifications(sessionId, turn, cwd, events) {
-		return buildModificationsFromRecords(cwd, events, this.ledger.listForTurn(sessionId, turn), (record) => this.ledger.laterModifications(sessionId, record.path, record), turn);
+	/** Per-call patches of one turn, read from the tracked commit chain. */
+	async buildModifications(session, cwd, turn, provider) {
+		const calls = (await this.tracker.loadCalls(cwd, session.id)).filter((call) => call.turn === turn);
+		if (calls.length === 0) return [];
+		const commits = calls.map((call) => call.commit).filter((commit) => commit !== void 0);
+		const patches = commits.length > 0 ? await provider.diffTreePatches(commits, { context: 3 }).catch(() => /* @__PURE__ */ new Map()) : /* @__PURE__ */ new Map();
+		const result = [];
+		for (const call of calls) {
+			const view = patchFileViews(call.commit === void 0 ? "" : patches.get(call.commit) ?? "", this.options.maxDiffHunksPerFile, this.options.maxDiffBytesPerFile).find((item) => item.path === call.path);
+			result.push({
+				modificationId: call.callId,
+				toolName: call.toolName === "write" ? "write" : "edit",
+				path: call.path,
+				turn: call.turn,
+				step: call.step,
+				seq: call.seq,
+				hunks: view?.view ?? [],
+				restorable: call.commit === void 0 || call.oversized === true ? "unsupported" : view?.status === "added" ? "file-only" : "merge",
+				...view?.status === "added" ? { createdFile: true } : {}
+			});
+		}
+		return result.sort((a, b) => a.seq - b.seq || a.turn - b.turn || a.step - b.step);
 	}
-	attachToolCalls(changes, modifications) {
-		attachToolCallsToChanges(changes, modifications);
-	}
-	async executeModifications(prepared, request, provider, guardTree, affected, policy, _finish) {
+	/**
+	* `scope='modifications'`: rebuild each affected file as "turn-start state +
+	* every call of the turn except the selected ones", applied forward in call
+	* order (docs/git-only-plan.md §2.7).
+	*/
+	async executeModifications(prepared, request, provider, affected) {
 		const ids = request.modificationIds ?? [];
 		if (ids.length === 0) return fail("rollback-failed", "scope=modifications requires modificationIds");
-		const selected = ids.map((id) => this.ledger.recordById(request.sessionId, id)).filter((record) => record !== void 0);
-		if (selected.length === 0) return fail("rollback-failed", "none of the requested modifications are available", {
+		const calls = await this.tracker.loadCalls(prepared.cwd, request.sessionId);
+		const selected = new Set(ids);
+		if (!calls.some((call) => selected.has(call.callId))) return fail("rollback-failed", "none of the requested modifications are available", {
 			sessionId: request.sessionId,
 			messageId: request.messageId
 		});
 		const byPath = /* @__PURE__ */ new Map();
-		for (const record of selected) {
-			if (record.turn !== prepared.snapshot.turn) continue;
-			const rel = path.relative(prepared.cwd, record.path);
-			if (rel === ".." || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)) continue;
-			const list = byPath.get(rel) ?? [];
-			list.push(record);
-			byPath.set(rel, list);
+		for (const call of calls) {
+			if (call.turn !== prepared.snapshot.turn || call.commit === void 0) continue;
+			const list = byPath.get(call.path) ?? [];
+			list.push(call);
+			byPath.set(call.path, list);
 		}
-		const paths = [...byPath.keys()];
-		for (const item of paths) affected.add(item);
-		const guard = await this.safety.captureGuard(this.ctx, provider, prepared.cwd, guardTree, paths, this.ledger, prepared.sessionId);
-		const journalId = (await this.safety.journalStart(guard.guardId, paths)).id;
+		const paths = [...byPath.entries()].filter(([, chain]) => chain.some((call) => selected.has(call.callId))).map(([rel]) => rel);
+		if (paths.length === 0) return fail("rollback-failed", "none of the requested modifications belong to this turn", {
+			sessionId: request.sessionId,
+			messageId: request.messageId
+		});
+		for (const rel of paths) affected.add(rel);
+		const guard = await this.safety.captureGuard(provider, {
+			cwd: prepared.cwd,
+			sessionId: prepared.sessionId
+		}, paths);
+		const journalId = await this.safety.journalStart(provider, guard, paths);
 		const results = [];
 		const restoredPaths = [];
+		const failedPaths = [];
 		try {
-			for (const [rel, records] of byPath) {
-				records.sort((a, b) => b.seq - a.seq || b.createdAt - a.createdAt);
-				const fileGuard = await this.ledger.readCurrentForGuard(prepared.cwd, rel);
-				let failed = false;
-				for (const record of records) {
-					const outcome = await restoreModification(this.ctx, this.ledger, prepared.cwd, record, request.createdPolicy === "delete", this.options.spawnTimeoutMs, policy);
-					results.push({
-						modificationId: record.modificationId,
-						path: rel,
-						status: outcome.status,
-						...outcome.detail === void 0 ? {} : { detail: outcome.detail }
-					});
-					if (outcome.status === "conflict" || outcome.status === "failed" || outcome.status === "unsupported") {
-						failed = true;
-						break;
+			await provider.withScratch(async (scratch) => {
+				for (const rel of paths) {
+					const chain = (byPath.get(rel) ?? []).slice().sort((a, b) => a.seq - b.seq);
+					const steps = [];
+					const skips = /* @__PURE__ */ new Set();
+					for (let index = 0; index < chain.length; index += 1) {
+						const call = chain[index];
+						steps.push({
+							path: rel,
+							patch: await this.callPatch(provider, call)
+						});
+						if (selected.has(call.callId)) skips.add(index);
 					}
+					const replay = await replayPatches(provider, scratch, `${chain[0].commit}^`, steps, skips);
+					for (const call of chain) {
+						const isSelected = selected.has(call.callId);
+						results.push({
+							modificationId: call.callId,
+							path: rel,
+							status: !isSelected ? "restored" : replay.ok ? "restored" : "conflict",
+							...replay.ok || !isSelected || replay.reason === void 0 ? {} : { detail: replay.reason }
+						});
+					}
+					if (replay.ok) restoredPaths.push(rel);
+					else failedPaths.push(rel);
 				}
-				if (failed) {
-					for (const record of records) {
-						const existing = results.find((item) => item.modificationId === record.modificationId);
-						if (existing !== void 0 && existing.status === "restored") existing.status = "conflict";
-					}
-					await this.ledger.restoreGuardFile(prepared.cwd, rel, fileGuard, policy).catch(() => void 0);
-				} else restoredPaths.push(rel);
+			});
+			if (failedPaths.length > 0) {
+				await this.safety.restoreGuard(provider, guard, failedPaths).catch(() => void 0);
+				await this.safety.journalUpdate(provider, journalId, "rolled-back");
+				return ok({
+					guardId: guard.guardId,
+					restored: restoredPaths,
+					kept: [],
+					deleted: [],
+					skipped: failedPaths,
+					modificationResults: results
+				});
 			}
-			await this.safety.journalUpdate(journalId, "completed");
+			await this.safety.journalUpdate(provider, journalId, "completed");
 			return ok({
 				guardId: guard.guardId,
 				restored: restoredPaths,
 				kept: [],
-				deleted: results.filter((item) => item.status === "restored" && item.detail?.includes("deleted")).map((item) => item.path),
+				deleted: [],
 				skipped: [],
 				modificationResults: results,
 				...request.scope === "turn" ? prepared.boundary.forkAtSeq !== void 0 ? { forkAnchor: prepared.boundary.forkAtSeq } : {
@@ -2578,8 +2611,8 @@ var RollbackRestore = class {
 				} : {}
 			});
 		} catch (error) {
-			await this.safety.rollbackGuard(this.ctx, provider, this.ledger, guard.guardId, paths, policy).catch(() => void 0);
-			await this.safety.journalUpdate(journalId, "rolled-back").catch(() => void 0);
+			await this.safety.restoreGuard(provider, guard, paths).catch(() => void 0);
+			await this.safety.journalUpdate(provider, journalId, "rolled-back").catch(() => void 0);
 			return fail("rollback-failed", String(error), {
 				sessionId: request.sessionId,
 				messageId: request.messageId,
@@ -2587,18 +2620,36 @@ var RollbackRestore = class {
 			});
 		}
 	}
+	/** One call's forward patch (`<commit>^` → `<commit>`), path-limited. */
+	async callPatch(provider, call) {
+		if (call.commit === void 0) return "";
+		const result = await provider.run([
+			"diff-tree",
+			"-p",
+			"--no-renames",
+			"--full-index",
+			"--unified=3",
+			`${call.commit}^`,
+			call.commit,
+			"--",
+			call.path
+		]);
+		return result.code === 0 ? result.stdout : "";
+	}
 	async executeFailure(error, request, prepared, guardId, journalId, affected) {
 		const message = error instanceof Error ? error.message : String(error);
 		const code = message.includes("workspace lock timeout") ? "lock-timeout" : message.includes("running agent") ? "agent-running" : message.includes("git operation") ? "git-operation-in-progress" : "rollback-failed";
 		let guardRolledBack = guardId === "";
 		if (guardId !== "" && affected.size > 0) try {
 			const provider = this.snapshots.providerFor(prepared.cwd, prepared.sessionId);
-			const liveSession = this.ctx.sessions.get(request.sessionId);
-			const policy = liveSession === void 0 ? sandboxPolicyForCwd(prepared.cwd) : sandboxPolicyFor(this.ctx, liveSession);
-			await this.safety.rollbackGuard(this.ctx, provider, this.ledger, guardId, [...affected], policy);
+			const guard = await this.safety.loadGuard(provider, guardId);
+			if (guard !== void 0) await this.safety.restoreGuard(provider, guard, [...affected]);
 			guardRolledBack = true;
 		} catch {}
-		if (journalId !== void 0) await this.safety.journalUpdate(journalId, guardRolledBack ? "rolled-back" : "interrupted").catch(() => void 0);
+		if (journalId !== void 0) {
+			const provider = this.snapshots.providerFor(prepared.cwd, prepared.sessionId);
+			await this.safety.journalUpdate(provider, journalId, guardRolledBack ? "rolled-back" : "interrupted").catch(() => void 0);
+		}
 		return fail(code, message, {
 			sessionId: request.sessionId,
 			messageId: request.messageId,
@@ -2607,125 +2658,6 @@ var RollbackRestore = class {
 	}
 	finishGuard(_prepared, _guardId, _journalId) {}
 };
-function parseRecordArgs(raw) {
-	if (raw === void 0) return {};
-	try {
-		const parsed = JSON.parse(raw);
-		return typeof parsed === "object" && parsed !== null ? parsed : {};
-	} catch {
-		return {};
-	}
-}
-/** Reusable modification builder: ledger records + log-only write/edit events. */
-function buildModificationsFromRecords(cwd, events, records, later, turn) {
-	const recorded = new Set(records.map((item) => item.modificationId));
-	const result = [];
-	for (const event of events) {
-		if (event.type !== "tool/call") continue;
-		const data = event.data;
-		if (turn !== void 0 && data.turn !== turn) continue;
-		if (data.callId === void 0 || data.name !== "write" && data.name !== "edit") continue;
-		if (recorded.has(data.callId)) continue;
-		const args = parseRecordArgs(data.arguments);
-		const filePath = typeof args.file_path === "string" ? args.file_path : typeof args.filePath === "string" ? args.filePath : void 0;
-		if (filePath === void 0) continue;
-		const rel = path.relative(cwd, filePath);
-		if (rel === ".." || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)) continue;
-		const toolResult = events.find((candidate) => candidate.type === "tool/result" && candidate.data.turn === data.turn && resultEventCallId(candidate) === data.callId);
-		result.push({
-			modificationId: data.callId,
-			toolName: data.name,
-			path: rel.split(path.sep).join("/"),
-			turn: data.turn ?? 0,
-			step: data.step ?? 0,
-			seq: event.seq,
-			hunks: sessionLogHunks(toolResult, args),
-			restorable: "unsupported",
-			reason: "no live ledger before-image for this modification"
-		});
-		recorded.add(data.callId);
-	}
-	for (const record of records) {
-		const rel = path.relative(cwd, record.path);
-		if (rel === ".." || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)) continue;
-		result.push({
-			modificationId: record.modificationId,
-			toolName: record.toolName,
-			path: rel.split(path.sep).join("/"),
-			turn: record.turn,
-			step: record.step,
-			seq: record.seq,
-			hunks: recordHunks(record),
-			restorable: record.beforeExisted ? record.beforeContent !== void 0 ? "merge" : "unsupported" : "file-only",
-			...record.beforeExisted && record.beforeContent === void 0 ? { reason: "no bounded text before-image" } : {},
-			...!record.beforeExisted ? {
-				createdFile: true,
-				reason: "file was created by this modification; undoing it requires delete confirmation"
-			} : {},
-			laterModificationIds: later(record).map((item) => item.modificationId)
-		});
-	}
-	return result.sort((a, b) => a.seq - b.seq || a.turn - b.turn || a.step - b.step);
-}
-/** Attach per-path tool-call patch lists onto file-level changes. */
-function attachToolCallsToChanges(changes, modifications) {
-	for (const change of changes) {
-		const calls = modifications.filter((item) => item.path === change.path);
-		if (calls.length === 0) continue;
-		change.toolCalls = calls.map((item) => ({
-			callId: item.modificationId,
-			toolName: item.toolName,
-			turn: item.turn,
-			step: item.step,
-			seq: item.seq,
-			hunks: item.hunks
-		}));
-	}
-}
-function resultEventCallId(event) {
-	if (event.type !== "tool/result") return void 0;
-	return event.data.message?.source?.callId;
-}
-function sessionLogHunks(event, args) {
-	if (event !== void 0 && event.type === "tool/result") {
-		const diffs = event.data.meta?.diffs;
-		if (diffs !== void 0 && diffs.length > 0) return diffs.map((item) => ({
-			oldText: typeof item.oldText === "string" ? item.oldText : null,
-			newText: typeof item.newText === "string" ? item.newText : "",
-			...item.path === void 0 ? {} : { path: item.path }
-		})).filter((item) => item.newText !== "");
-	}
-	if (typeof args.content === "string") return [{
-		oldText: null,
-		newText: args.content
-	}];
-	const oldString = typeof args.old_string === "string" ? args.old_string : typeof args.oldString === "string" ? args.oldString : void 0;
-	const newString = typeof args.new_string === "string" ? args.new_string : typeof args.newString === "string" ? args.newString : "";
-	return oldString === void 0 ? [] : [{
-		oldText: oldString,
-		newText: newString
-	}];
-}
-function recordHunks(record) {
-	let args = {};
-	if (record.argsRaw !== void 0) try {
-		const parsed = JSON.parse(record.argsRaw);
-		if (typeof parsed === "object" && parsed !== null) args = parsed;
-	} catch {}
-	if (record.toolName === "write") {
-		const content = typeof args.content === "string" ? args.content : "";
-		return wholeFileHunk(record.beforeExisted ? record.beforeContent ?? null : null, content);
-	}
-	const oldString = typeof args.old_string === "string" ? args.old_string : typeof args.oldString === "string" ? args.oldString : void 0;
-	const newString = typeof args.new_string === "string" ? args.new_string : typeof args.newString === "string" ? args.newString : "";
-	if (oldString === void 0) return [];
-	return [{
-		oldText: oldString,
-		newText: newString,
-		oldLine: 1,
-		newLine: 1
-	}];
-}
 async function pickBridgeEndpoint(abs) {
 	const bridgesFile = process.env.DSHUI_BRIDGES_FILE;
 	let best = null;
@@ -2764,21 +2696,666 @@ function isAlive$1(pid) {
 	}
 }
 //#endregion
+//#region lib/types/host/tracking.js
+/**
+* Per-call tracking: one write/edit tool call becomes one commit on
+* `refs/dsh/head`, built entirely from git objects (docs/git-only-plan.md §2.2,
+* §2.3).
+*
+* The hot path is a single `git hash-object -w` per call; the blob hash and the
+* call metadata stay in memory until `flush()` freezes them into the chain with
+* one `git fast-import`. Nothing is written to JSON, and no ref moves per call —
+* so the former per-modification ledger rewrite (and its write amplification)
+* is gone.
+*
+* Known limitation: two *concurrent* calls writing the same path can be hashed
+* out of order, so the earlier call may record the later call's content. This
+* cannot be repaired after the fact (the intermediate content is already gone);
+* it only affects which of the two patches appears to carry the change, never
+* the final state.
+*/
+const CHAIN_HEAD_REF = "refs/dsh/head";
+/**
+* The session's *list* base: the tree captured at its first turn start. Unlike
+* `head` this ref never moves, so the accepted-file list can be diffed against
+* it after a host restart, when the in-memory anchor (`track.base`) is either
+* gone or has been re-pointed at the chain tip.
+*/
+const CHAIN_BASE_REF = "refs/dsh/base";
+const DEFAULT_MAX_CALLS = 500;
+/** key=value lines recorded in each commit message (parsed back by `loadCalls`). */
+function encodeMessage(call) {
+	return [
+		`callId=${call.callId}`,
+		`tool=${call.toolName}`,
+		`turn=${call.turn}`,
+		`step=${call.step}`,
+		`seq=${call.seq}`,
+		`paths=${call.path}`,
+		...call.deleted === true ? ["deleted=1"] : [],
+		""
+	].join("\n");
+}
+function decodeMessage(commit, message) {
+	const fields = /* @__PURE__ */ new Map();
+	for (const line of message.split("\n")) {
+		const index = line.indexOf("=");
+		if (index <= 0) continue;
+		fields.set(line.slice(0, index), line.slice(index + 1));
+	}
+	const callId = fields.get("callId");
+	const callPath = fields.get("paths");
+	if (callId === void 0 || callPath === void 0) return void 0;
+	const deleted = fields.get("deleted") === "1";
+	return {
+		callId,
+		toolName: fields.get("tool") ?? "unknown",
+		path: callPath,
+		turn: Number(fields.get("turn") ?? "0") || 0,
+		step: Number(fields.get("step") ?? "0") || 0,
+		seq: Number(fields.get("seq") ?? "-1"),
+		timestamp: 0,
+		...deleted ? { deleted: true } : {},
+		commit
+	};
+}
+var CallTracker = class {
+	ctx;
+	snapshots;
+	options;
+	tracks = /* @__PURE__ */ new Map();
+	maxCalls;
+	constructor(ctx, snapshots, options) {
+		this.ctx = ctx;
+		this.snapshots = snapshots;
+		this.options = options;
+		this.maxCalls = Math.max(1, options.maxCallsPerSession ?? DEFAULT_MAX_CALLS);
+	}
+	/**
+	* Record one observed write/edit. Synchronous by contract (`fs/observed` is a
+	* synchronous event); the blob write runs on the session's serial queue.
+	*/
+	observe(target, observation, actor) {
+		const callId = actor?.callId;
+		const toolName = actor?.name;
+		const agentSession = actor?.agent?.session;
+		if (callId === void 0 || agentSession === void 0) return;
+		if (toolName !== "write" && toolName !== "edit") return;
+		const session = attributionSession(this.ctx, agentSession);
+		const cwd = session.header?.cwd;
+		if (cwd === void 0 || cwd === "") return;
+		const abs = this.ctx.fs.processPath(target);
+		const rel = path.relative(cwd, abs);
+		if (rel === "" || rel === ".." || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)) return;
+		const relPath = rel.split(path.sep).join("/");
+		const track = this.track(session.id, cwd);
+		if (this.isInsideNestedRepo(track, abs)) return;
+		const position = positionForCall(session, callId);
+		const fallback = sessionTurnPosition(session);
+		const observed = statIdentity(abs);
+		const call = {
+			callId,
+			toolName,
+			path: relPath,
+			turn: position?.turn ?? fallback?.turn ?? 0,
+			step: position?.step ?? fallback?.step ?? 0,
+			seq: position?.seq ?? fallback?.seq ?? -1,
+			timestamp: Date.now(),
+			...observed === void 0 ? { deleted: true } : { identity: observed.key }
+		};
+		track.calls.push(call);
+		this.trim(track);
+		const kind = observation.kind;
+		track.queue = track.queue.then(async () => {
+			if (kind === "absent") return;
+			const current = statIdentity(abs);
+			if (current === void 0) {
+				call.superseded = true;
+				delete call.deleted;
+				return;
+			}
+			if (observed !== void 0 && current.key !== observed.key) {
+				call.superseded = true;
+				return;
+			}
+			if (current.size > this.options.maxBlobBytes) {
+				call.oversized = true;
+				return;
+			}
+			const blob = await this.snapshots.providerFor(cwd, session.id).writeBlob(abs).catch(() => void 0);
+			if (blob === void 0) call.deleted = true;
+			else call.blob = blob;
+		}).catch(() => void 0);
+	}
+	/** Wait for every queued hash of one session (used before asserting on blobs). */
+	async settle(sessionId) {
+		await this.tracks.get(sessionId)?.queue.catch(() => void 0);
+	}
+	/**
+	* Ensure the session's chain base exists, capturing the full worktree once.
+	* Called at turn start (before any tool call) and lazily as a fallback. When
+	* calls were already recorded the base is post-write and `baseDegraded` is
+	* set: the first call on each path then has no caller-level baseline.
+	*/
+	async ensureBase(sessionId, cwd) {
+		const track = this.track(sessionId, cwd);
+		if (track.base !== void 0 && track.head !== void 0) return track.head;
+		const provider = this.snapshots.providerFor(cwd, sessionId);
+		if (!await provider.available().catch(() => false)) return void 0;
+		return this.createBase(track, provider);
+	}
+	/** True when the chain base was captured after calls were already recorded. */
+	baseDegraded(sessionId) {
+		return this.tracks.get(sessionId)?.baseDegraded === true;
+	}
+	/**
+	* Freeze every pending call into `refs/dsh/head` with one fast-import. Returns
+	* the chain head commit, or undefined when git is unavailable.
+	*/
+	async flush(sessionId) {
+		const track = this.tracks.get(sessionId);
+		if (track === void 0) return void 0;
+		await track.queue.catch(() => void 0);
+		const pending = track.calls.filter((call) => call.commit === void 0);
+		if (pending.length === 0) return track.head;
+		const provider = this.snapshots.providerFor(track.cwd, track.sessionId);
+		if (!await provider.available().catch(() => false)) return track.head;
+		const base = track.head ?? track.base ?? await this.createBase(track, provider);
+		if (base === void 0) return void 0;
+		const committed = pending.filter((call) => call.blob !== void 0 || call.deleted === true);
+		if (committed.length === 0) return base;
+		const lines = [];
+		let parent = base;
+		committed.forEach((call, index) => {
+			const message = encodeMessage(call);
+			const length = Buffer.byteLength(message, "utf8");
+			lines.push("commit refs/dsh/head");
+			lines.push(`mark :${index + 1}`);
+			lines.push(`committer dsh <dsh@local> ${Math.floor(call.timestamp / 1e3)} +0000`);
+			lines.push(`data ${length}`);
+			lines.push(message);
+			lines.push(`from ${parent}`);
+			lines.push(call.deleted === true || call.blob === void 0 ? `D ${call.path}` : `M 100644 ${call.blob} ${call.path}`);
+			lines.push("");
+			parent = `:${index + 1}`;
+		});
+		await provider.fastImport(lines.join("\n"));
+		const head = await provider.readRef(CHAIN_HEAD_REF);
+		if (head === void 0) return base;
+		const list = await provider.run([
+			"rev-list",
+			"--reverse",
+			`${base}..${head}`
+		]);
+		const commits = list.code === 0 ? list.stdout.split("\n").filter(Boolean) : [];
+		committed.forEach((call, index) => {
+			const commit = commits[index];
+			if (commit !== void 0) call.commit = commit;
+		});
+		track.head = head;
+		return head;
+	}
+	/** Freeze every session with pending calls (turn end / shutdown best-effort). */
+	async flushAll() {
+		for (const sessionId of [...this.tracks.keys()]) await this.flush(sessionId).catch(() => void 0);
+	}
+	/** Calls of the current process, oldest first (frozen entries carry `commit`). */
+	calls(sessionId) {
+		return this.tracks.get(sessionId)?.calls ?? [];
+	}
+	/** Session base commit (the chain's first parent), when known. */
+	base(sessionId) {
+		return this.tracks.get(sessionId)?.base;
+	}
+	/**
+	* The session's list base (`refs/dsh/base`), which is the chain *root* no
+	* matter how the in-memory anchor was set. Chains created before the ref
+	* existed are backfilled once from the parentless root of `refs/dsh/head`.
+	* Returns undefined when the session has no chain at all.
+	*/
+	async readBase(cwd, sessionId) {
+		const provider = this.snapshots.providerFor(cwd, sessionId);
+		if (!await provider.available().catch(() => false)) return this.tracks.get(sessionId)?.base;
+		const stored = await provider.readRef(CHAIN_BASE_REF);
+		if (stored !== void 0) return stored;
+		const head = await provider.readRef("refs/dsh/head") ?? this.tracks.get(sessionId)?.head;
+		if (head === void 0) return this.tracks.get(sessionId)?.base;
+		const roots = await provider.roots(head).catch(() => []);
+		const root = roots[roots.length - 1];
+		if (root === void 0) return void 0;
+		await provider.updateRef(CHAIN_BASE_REF, root).catch(() => false);
+		return root;
+	}
+	head(sessionId) {
+		return this.tracks.get(sessionId)?.head;
+	}
+	/** Paths touched by this session's calls (hashed form, forward slashes). */
+	pathsForSession(sessionId) {
+		return new Set(this.calls(sessionId).map((call) => call.path));
+	}
+	/** Paths seen but not captured because they exceeded `maxBlobBytes`. */
+	oversizedPaths(sessionId) {
+		return new Set(this.calls(sessionId).filter((call) => call.oversized === true).map((call) => call.path));
+	}
+	/**
+	* Cold read: rebuild the call list from the commit chain, so patch identity
+	* survives a process restart for everything already frozen (unfrozen calls
+	* are intentionally lost — docs/git-only-plan.md §4.4).
+	*/
+	async loadCalls(cwd, sessionId) {
+		const live = this.tracks.get(sessionId);
+		if (live !== void 0) {
+			if (!live.calls.some((call) => call.commit === void 0) && live.calls.length > 0) return live.calls;
+		}
+		const provider = this.snapshots.providerFor(cwd, sessionId);
+		if (!await provider.available().catch(() => false)) return live?.calls ?? [];
+		const log = await provider.run([
+			"log",
+			"--format=%H%x00%ct%x00%B%x1e",
+			CHAIN_HEAD_REF
+		]);
+		if (log.code !== 0) return live?.calls ?? [];
+		const calls = [];
+		for (const record of log.stdout.split("")) {
+			const parts = record.split("\0");
+			if (parts.length < 3) continue;
+			const commit = (parts[0] ?? "").trim();
+			const timestamp = Number(parts[1] ?? "0") * 1e3;
+			const call = decodeMessage(commit, parts[2] ?? "");
+			if (call === void 0) continue;
+			call.timestamp = timestamp;
+			calls.push(call);
+		}
+		calls.reverse();
+		if (live !== void 0 && calls.length > 0) {
+			for (const call of live.calls) if (call.commit !== void 0 && !calls.some((item) => item.callId === call.callId)) calls.push(call);
+		}
+		return calls;
+	}
+	/** Forget in-memory state (session close / tests). */
+	reset(sessionId) {
+		if (sessionId === void 0) this.tracks.clear();
+		else this.tracks.delete(sessionId);
+	}
+	track(sessionId, cwd) {
+		const existing = this.tracks.get(sessionId);
+		if (existing !== void 0 && path.resolve(existing.cwd) === path.resolve(cwd)) return existing;
+		const created = {
+			sessionId,
+			cwd,
+			calls: [],
+			queue: Promise.resolve(),
+			nestedCache: /* @__PURE__ */ new Map()
+		};
+		this.tracks.set(sessionId, created);
+		return created;
+	}
+	/** Session base commit: a full worktree capture, committed once per session. */
+	async createBase(track, provider) {
+		const existing = await provider.readRef(CHAIN_HEAD_REF);
+		if (existing !== void 0) {
+			track.base = existing;
+			track.head = existing;
+			if (await provider.readRef("refs/dsh/base") === void 0) {
+				const roots = await provider.roots(existing).catch(() => []);
+				const root = roots[roots.length - 1];
+				if (root !== void 0) await provider.updateRef(CHAIN_BASE_REF, root).catch(() => false);
+			}
+			return existing;
+		}
+		if (track.calls.length > 0) track.baseDegraded = true;
+		const tree = await provider.captureTree().catch(() => void 0);
+		if (tree === void 0) return void 0;
+		const commit = await provider.commitTree(tree, [], `dsh base\nsession=${track.sessionId}\n`);
+		await provider.updateRef(CHAIN_HEAD_REF, commit);
+		await provider.updateRef(CHAIN_BASE_REF, commit).catch(() => false);
+		track.base = commit;
+		track.head = commit;
+		return commit;
+	}
+	/**
+	* A path inside an embedded git repository is invisible to `git add -f`
+	* (git exits 0 but records nothing), so callers-level patches would silently
+	* vanish. Reject those paths; nested repositories stay covered by the
+	* materialized turn snapshots (docs/git-only-plan.md §4.3).
+	*/
+	isInsideNestedRepo(track, absPath) {
+		let dir = path.dirname(absPath);
+		const root = path.resolve(track.cwd);
+		for (let depth = 0; depth < 64; depth += 1) {
+			const resolved = path.resolve(dir);
+			if (resolved === root || !resolved.startsWith(root)) return false;
+			const cached = track.nestedCache.get(resolved);
+			if (cached === true) return true;
+			if (cached === void 0) {
+				let hasGit = false;
+				try {
+					const stat = fs.lstatSync(path.join(resolved, ".git"));
+					hasGit = stat.isDirectory() || stat.isFile();
+				} catch {
+					hasGit = false;
+				}
+				track.nestedCache.set(resolved, hasGit);
+				if (hasGit) return true;
+			}
+			const parent = path.dirname(resolved);
+			if (parent === resolved) return false;
+			dir = parent;
+		}
+		return false;
+	}
+	trim(track) {
+		const overflow = track.calls.length - this.maxCalls;
+		if (overflow > 0) track.calls.splice(0, overflow);
+	}
+};
+/**
+* Cheap synchronous identity of a file, captured when the observation arrives.
+* Re-checked before hashing so a call whose content was already replaced by a
+* later call is dropped instead of mis-attributed.
+*/
+function statIdentity(abs) {
+	try {
+		const stat = fs.statSync(abs);
+		if (!stat.isFile()) return void 0;
+		return {
+			key: `${stat.size}:${stat.mtimeMs}:${stat.ino}`,
+			size: stat.size
+		};
+	} catch {
+		return;
+	}
+}
+/** The session-log position of a tool call (turn/step/seq). */
+function positionForCall(session, callId) {
+	const events = session.snapshotEvents();
+	for (let index = events.length - 1; index >= 0; index -= 1) {
+		const event = events[index];
+		if (event === void 0 || event.type !== "tool/call") continue;
+		const data = event.data;
+		if (data.callId !== callId) continue;
+		return {
+			turn: data.turn ?? 0,
+			step: data.step ?? 0,
+			seq: event.seq
+		};
+	}
+}
+/** Fallback coordinates: the session's currently open turn/step. */
+function sessionTurnPosition(session) {
+	let turn = 0;
+	let step = 0;
+	let seq = -1;
+	for (const event of session.snapshotEvents()) {
+		seq = event.seq;
+		if (event.type === "turn/start") turn = event.data.turn;
+		if (event.type === "step/start") step = event.data.step;
+	}
+	return turn > 0 ? {
+		turn,
+		step,
+		seq
+	} : void 0;
+}
+//#endregion
+//#region lib/types/host/snapshot.js
+/**
+* Encode an arbitrary string as one filesystem-safe path segment, mirroring
+* the JSONL session persistence layout (`@deepseek-ai/dsh-session-persistence-jsonl`):
+* safe code units stay literal, everything else becomes `~XXXX`.
+*/
+function encodeSessionSegment(raw) {
+	if (raw === ".") return "~002E";
+	if (raw === "..") return "~002E~002E";
+	let out = "";
+	for (let i = 0; i < raw.length; i += 1) {
+		const code = raw.charCodeAt(i);
+		const ch = String.fromCharCode(code);
+		if (ch !== "~" && /^[A-Za-z0-9._-]$/.test(ch)) out += ch;
+		else out += `~${code.toString(16).toUpperCase().padStart(4, "0")}`;
+	}
+	return out;
+}
+/**
+* The readable per-project directory key, mirroring the JSONL persistence
+* layout: separators become `-`, unsafe units `~XXXX`, bounded and wrapped
+* in `--…--`.
+*/
+function projectDirKey(cwd) {
+	let readable = "";
+	let separatorRun = false;
+	for (let i = 0; i < cwd.length; i += 1) {
+		const code = cwd.charCodeAt(i);
+		const ch = String.fromCharCode(code);
+		if (ch === "/" || ch === "\\" || ch === ":") {
+			if (!separatorRun) readable += "-";
+			separatorRun = true;
+		} else if (ch !== "~" && /^[A-Za-z0-9._-]$/.test(ch)) {
+			readable += ch;
+			separatorRun = false;
+		} else {
+			readable += `~${code.toString(16).toUpperCase().padStart(4, "0")}`;
+			separatorRun = false;
+		}
+	}
+	return `--${(readable.replace(/^-+/, "") || "root").slice(0, 251)}--`;
+}
+/**
+* The on-disk directory DSH owns for one session, mirroring the JSONL
+* persistence backend: `<DSH_HOME>/sessions/<projectKey(cwd)>/<sessionId>`.
+* Session-local artifacts placed here are removed together with the session.
+*/
+function sessionDirFor(dshHome, cwd, sessionId) {
+	const project = cwd === void 0 || cwd === "" ? "_no-cwd" : projectDirKey(cwd);
+	return path.join(dshHome, "sessions", project, encodeSessionSegment(sessionId));
+}
+/** The isolated bare snapshot repo for one session, inside its session dir. */
+function sessionSnapshotRepo(dshHome, cwd, sessionId) {
+	return path.join(sessionDirFor(dshHome, cwd, sessionId), "rollback.git");
+}
+function resolveDshHome() {
+	const configured = process.env.DSH_HOME;
+	return configured !== void 0 && configured !== "" ? configured : path.join(os.homedir(), ".dsh");
+}
+function changeLedgerRoot() {
+	return path.join(resolveDshHome(), "change-ledger");
+}
+function manifestsPath() {
+	return path.join(changeLedgerRoot(), "v1", "manifests.json");
+}
+function journalsPath() {
+	return path.join(changeLedgerRoot(), "v1", "journals.json");
+}
+function locksDir() {
+	return path.join(changeLedgerRoot(), "locks");
+}
+async function readJsonFile(file, fallback) {
+	try {
+		const raw = await fs.promises.readFile(file, "utf8");
+		return JSON.parse(raw);
+	} catch {
+		return fallback;
+	}
+}
+async function writeJsonFileAtomic(file, value) {
+	await fs.promises.mkdir(path.dirname(file), { recursive: true });
+	const tmp = `${file}.${process.pid}.${Date.now().toString(36)}.tmp`;
+	await fs.promises.writeFile(tmp, JSON.stringify(value, null, 2), "utf8");
+	await fs.promises.rename(tmp, file);
+}
+const POINTS_PREFIX = "refs/dsh/points/";
+/**
+* Turn-start rollback points, stored as git commits
+* (docs/git-only-plan.md §2.1).
+*
+* `refs/dsh/points/<nnnn>` is a full-worktree commit taken at the start of a
+* turn; everything the old manifest store kept (snapshot ids, JSON files, the
+* storage-domain table) is now a ref. The full `add -A` is the only
+* O(worktree) operation left, and it reuses a persistent index so unchanged
+* files are not re-hashed.
+*/
+var SnapshotManager = class {
+	options;
+	ctx;
+	/** In-memory manifests for the current process (never persisted). */
+	manifests = /* @__PURE__ */ new Map();
+	dshHome;
+	/** In-flight isolated repo inits, keyed by repo dir (dedupe across providers). */
+	isolatedInit = /* @__PURE__ */ new Map();
+	constructor(options, ctx) {
+		this.options = options;
+		this.ctx = ctx;
+		this.dshHome = options.dshHome ?? resolveDshHome();
+	}
+	get ledgerDir() {
+		return this.options.ledgerDir;
+	}
+	/**
+	* Provider bound to one session's isolated snapshot repo (kept inside the
+	* session's own directory, so deleting the session removes the objects).
+	*/
+	providerFor(cwd, sessionId) {
+		const isolatedRepoDir = sessionId === void 0 || sessionId === "" ? void 0 : sessionSnapshotRepo(this.dshHome, cwd, sessionId);
+		const isolatedRepoInit = isolatedRepoDir === void 0 ? void 0 : this.ensureIsolatedRepo(isolatedRepoDir);
+		return new GitProvider(cwd, {
+			spawnTimeoutMs: this.options.spawnTimeoutMs,
+			maxDiffHunksPerFile: this.options.maxDiffHunksPerFile,
+			maxDiffBytesPerFile: this.options.maxDiffBytesPerFile,
+			restoreChunkSize: this.options.restoreChunkSize,
+			isolatedRepoDir,
+			isolatedRepoInit
+		});
+	}
+	ensureIsolatedRepo(dir) {
+		const existing = this.isolatedInit.get(dir);
+		if (existing !== void 0) return existing;
+		const init = spawnGit(process.cwd(), [
+			"init",
+			"--bare",
+			"--quiet",
+			dir
+		], process.env, this.options.spawnTimeoutMs).then((result) => result.code === 0).catch(() => false);
+		this.isolatedInit.set(dir, init);
+		init.then((ok) => {
+			if (!ok) this.isolatedInit.delete(dir);
+		});
+		return init;
+	}
+	/** Capture the turn-start point. Failures never block the agent. */
+	async capture(session, turn) {
+		const cwd = session.header.cwd;
+		if (cwd === void 0 || cwd === "") return void 0;
+		const provider = this.providerFor(cwd, session.id);
+		if (!await provider.available().catch(() => false)) return void 0;
+		const ref = pointRef(turn);
+		if (await provider.readRef(ref) !== void 0) return this.manifestAt(cwd, session.id, turn, provider);
+		const captured = await provider.captureTreeInfo().catch(() => void 0);
+		const tree = captured?.tree;
+		const materialized = captured?.materialized ?? false;
+		if (tree === void 0) return void 0;
+		const message = [
+			"turn point",
+			`session=${session.id}`,
+			`turn=${turn}`,
+			`cwd=${cwd}`,
+			`created=${Date.now()}`,
+			""
+		].join("\n");
+		const commit = await provider.commitTree(tree, [], message);
+		if (!await provider.updateRef(ref, commit)) return void 0;
+		await this.prune(cwd, session.id, provider);
+		const manifest = {
+			snapshotId: `${session.id}:${turn}:${commit.slice(0, 8)}`,
+			sessionId: session.id,
+			turn,
+			cwd,
+			tree,
+			createdAt: Date.now(),
+			mode: "git",
+			...materialized ? { materialized: true } : {}
+		};
+		const list = this.manifests.get(session.id) ?? [];
+		this.manifests.set(session.id, [...list.filter((item) => item.turn !== turn), manifest]);
+		return manifest;
+	}
+	/** Exact point first, then the newest earlier point for the same session. */
+	async find(cwd, sessionId, targetTurn) {
+		const provider = this.providerFor(cwd, sessionId);
+		if (!await provider.available().catch(() => false)) return void 0;
+		const exact = await this.manifestAt(cwd, sessionId, targetTurn, provider);
+		if (exact !== void 0) return {
+			manifest: exact,
+			degraded: false
+		};
+		const earlier = (await this.listPoints(cwd, sessionId, provider)).filter((item) => item.turn < targetTurn).sort((a, b) => b.turn - a.turn)[0];
+		if (earlier === void 0) return void 0;
+		return {
+			manifest: earlier,
+			degraded: true
+		};
+	}
+	async listPoints(cwd, sessionId, provider = this.providerFor(cwd, sessionId)) {
+		return (await provider.listRefsWithMeta(POINTS_PREFIX).catch(() => [])).map((entry) => {
+			const turn = Number(entry.ref.slice(16)) || 0;
+			return {
+				snapshotId: `${sessionId}:${turn}:${entry.sha.slice(0, 8)}`,
+				sessionId,
+				turn,
+				cwd,
+				...entry.tree === "" ? {} : { tree: entry.tree },
+				createdAt: entry.createdAt > 0 ? entry.createdAt * 1e3 : Date.now(),
+				mode: "git"
+			};
+		}).sort((a, b) => a.turn - b.turn);
+	}
+	async ensureTreeAvailable(manifest, provider) {
+		if (manifest.tree === void 0) return true;
+		return provider.treeExists(manifest.tree);
+	}
+	snapshotInfo(manifest, degraded) {
+		return {
+			id: manifest.snapshotId,
+			turn: manifest.turn,
+			createdAt: manifest.createdAt,
+			...degraded ? { degraded: true } : {}
+		};
+	}
+	/** Drop the oldest points beyond `maxSnapshotsPerSession`. */
+	async prune(cwd, sessionId, provider) {
+		const points = await this.listPoints(cwd, sessionId, provider);
+		const overflow = points.length - Math.max(1, this.options.maxSnapshotsPerSession);
+		if (overflow <= 0) return;
+		await provider.deleteRefs(points.slice(0, overflow).map((item) => pointRef(item.turn)));
+	}
+	async manifestAt(cwd, sessionId, turn, provider) {
+		const commit = await provider.readRef(pointRef(turn));
+		if (commit === void 0) return void 0;
+		const tree = await provider.treeOf(commit).catch(() => void 0);
+		return {
+			snapshotId: `${sessionId}:${turn}:${commit.slice(0, 8)}`,
+			sessionId,
+			turn,
+			cwd,
+			...tree === void 0 ? {} : { tree },
+			createdAt: Date.now(),
+			mode: "git"
+		};
+	}
+};
+/** `refs/dsh/points/<nnnn>`: zero padded so ref order equals turn order. */
+function pointRef(turn) {
+	return `${POINTS_PREFIX}${String(Math.max(0, Math.trunc(turn))).padStart(4, "0")}`;
+}
+//#endregion
 //#region lib/types/host/safety.js
-const GUARDS_FILE = "guards.json";
+const GUARDS_PREFIX = "refs/dsh/guards/";
+const JOURNALS_PREFIX = "refs/dsh/journals/";
 var RollbackSafety = class {
 	options;
 	lock;
 	lockFile;
-	journals = [];
-	guards = /* @__PURE__ */ new Map();
-	journalsLoaded = false;
-	writeTail = Promise.resolve();
 	constructor(options) {
 		this.options = options;
-	}
-	get ledgerDir() {
-		return this.options.ledgerDir;
 	}
 	hashWorkspace(cwd) {
 		return crypto.createHash("sha256").update(path.resolve(cwd)).digest("hex").slice(0, 24);
@@ -2830,113 +3407,176 @@ var RollbackSafety = class {
 		}) !== void 0) throw new Error("a running agent shares this workspace; wait for it to become idle");
 		if (await provider.assertNoGitOperation()) throw new Error("a git operation (merge/rebase/cherry-pick/…) is in progress");
 	}
-	async captureGuard(ctx, provider, cwd, tree, ledgerPaths, ledger, sessionId) {
-		const ledgerFiles = [];
-		for (const rel of [...new Set(ledgerPaths)]) {
-			const current = await ledger.readCurrentForGuard(cwd, rel);
-			ledgerFiles.push({
+	/**
+	* Guard the pre-rollback content of `paths` as a git commit, so a failed
+	* rollback can be undone with a plain forward restore.
+	*/
+	async captureGuard(provider, context, paths) {
+		const unique = [...new Set(paths.map((item) => provider.normalizeRelPath(item)))];
+		const head = await provider.readRef(CHAIN_HEAD_REF);
+		const entries = [];
+		for (const rel of unique) {
+			const blob = await provider.writeBlob(provider.absolutePath(rel)).catch(() => void 0);
+			entries.push(blob === void 0 ? { path: rel } : {
 				path: rel,
-				existed: current.existed,
-				...current.version === void 0 ? {} : { version: current.version },
-				...current.size === void 0 ? {} : { size: current.size },
-				...current.content === void 0 ? {} : { content: current.content }
+				blob
 			});
 		}
+		const tree = await provider.withScratch(async (scratch) => {
+			await provider.readTree(scratch, head);
+			await provider.updateIndexInfo(scratch, entries);
+			return provider.writeTree(scratch);
+		});
 		const guardId = `guard-${Date.now().toString(36)}-${crypto.randomUUID().slice(0, 8)}`;
-		const record = {
-			...tree === void 0 ? {} : { tree },
-			ledgerFiles,
-			cwd,
-			...sessionId === void 0 || sessionId === "" ? {} : { sessionId }
-		};
-		this.guards.set(guardId, record);
-		await this.persistGuards();
+		const present = entries.filter((entry) => entry.blob !== void 0).map((entry) => entry.path);
+		const absent = entries.filter((entry) => entry.blob === void 0).map((entry) => entry.path);
+		const message = [
+			"guard",
+			`session=${context.sessionId}`,
+			`cwd=${context.cwd}`,
+			...present.map((item) => `path=${item}`),
+			...absent.map((item) => `absent=${item}`),
+			""
+		].join("\n");
+		const commit = await provider.commitTree(tree, head === void 0 ? [] : [head], message);
+		if (!await provider.updateRef(`refs/dsh/guards/${guardId}`, commit)) throw new Error(`rollback: failed to record guard ${guardId}`);
 		return {
 			guardId,
-			record
+			commit,
+			cwd: context.cwd,
+			sessionId: context.sessionId,
+			present,
+			absent
 		};
 	}
-	async journalStart(guardId, paths) {
-		await this.loadJournals();
-		const entry = {
-			id: `journal-${Date.now().toString(36)}-${crypto.randomUUID().slice(0, 8)}`,
-			phase: "running",
-			paths: [...new Set(paths)],
+	/** Restore the guarded content of the selected paths (all of them by default). */
+	async restoreGuard(provider, guard, paths) {
+		const selected = paths === void 0 ? [...guard.present, ...guard.absent] : [...new Set(paths.map((item) => provider.normalizeRelPath(item)))];
+		const present = selected.filter((rel) => guard.present.includes(rel));
+		const absent = selected.filter((rel) => guard.absent.includes(rel));
+		if (present.length > 0) await provider.restorePaths(guard.commit, present);
+		for (const rel of absent) await fs.promises.rm(provider.absolutePath(rel), { force: true });
+	}
+	async loadGuard(provider, guardId) {
+		const commit = await provider.readRef(`${GUARDS_PREFIX}${guardId}`);
+		if (commit === void 0) return void 0;
+		const message = await commitMessage(provider, commit);
+		const present = [];
+		const absent = [];
+		let cwd = "";
+		let sessionId = "";
+		for (const line of message.split("\n")) if (line.startsWith("path=")) present.push(line.slice(5));
+		else if (line.startsWith("absent=")) absent.push(line.slice(7));
+		else if (line.startsWith("cwd=")) cwd = line.slice(4);
+		else if (line.startsWith("session=")) sessionId = line.slice(8);
+		return {
 			guardId,
+			commit,
+			cwd,
+			sessionId,
+			present,
+			absent
+		};
+	}
+	/** Open a journal entry (`running`) for a rollback about to start. */
+	async journalStart(provider, guard, paths) {
+		const id = `journal-${Date.now().toString(36)}-${crypto.randomUUID().slice(0, 8)}`;
+		await this.writeJournal(provider, id, {
+			id,
+			phase: "running",
+			guardId: guard.guardId,
+			cwd: guard.cwd,
+			sessionId: guard.sessionId,
+			paths: [...new Set(paths)],
 			createdAt: Date.now(),
 			updatedAt: Date.now()
-		};
-		this.journals.unshift(entry);
-		await this.persistJournals();
-		return entry;
+		});
+		return id;
 	}
-	async journalUpdate(id, phase) {
-		await this.loadJournals();
-		const entry = this.journals.find((item) => item.id === id);
-		if (entry === void 0) return;
-		entry.phase = phase;
-		entry.updatedAt = Date.now();
-		await this.persistJournals();
+	async journalUpdate(provider, id, phase) {
+		const ref = `${JOURNALS_PREFIX}${id}`;
+		const current = await provider.readRef(ref);
+		if (current === void 0) return;
+		const record = await this.readJournal(provider, current);
+		if (record === void 0) return;
+		record.phase = phase;
+		await this.writeJournal(provider, id, record);
 	}
-	async listJournals(cwd) {
-		await this.loadJournals();
-		return this.journals.filter((entry) => this.guards.get(entry.guardId ?? "")?.cwd === path.resolve(cwd));
-	}
-	async rollbackGuard(ctx, provider, ledger, guardId, paths, sandboxPolicy) {
-		const guard = this.guards.get(guardId);
-		if (guard === void 0) throw new Error(`guard ${guardId} is no longer available`);
-		const gitPaths = paths.filter((item) => provider.isWithin(item));
-		const ledgerPaths = paths.filter((item) => !provider.isWithin(item) || guard.ledgerFiles.some((file) => file.path === item));
-		if (guard.tree !== void 0 && gitPaths.length > 0) await provider.restorePaths(guard.tree, gitPaths);
-		for (const rel of [...new Set(ledgerPaths)]) {
-			const file = guard.ledgerFiles.find((item) => item.path === rel);
-			if (file !== void 0) await ledger.restoreGuardFile(guard.cwd, rel, file, sandboxPolicy);
+	async listJournals(provider) {
+		const refs = await provider.listRefsDetailed(JOURNALS_PREFIX);
+		const records = [];
+		for (const entry of refs) {
+			const record = parseJournal(entry.contents);
+			if (record !== void 0) records.push({
+				...record,
+				id: entry.ref.slice(18)
+			});
 		}
+		return records;
 	}
-	async loadGuards() {
-		const raw = await readJsonFile(path.join(this.ledgerDir, GUARDS_FILE), {});
-		for (const [id, value] of Object.entries(raw)) if (typeof value === "object" && value !== null && Array.isArray(value.ledgerFiles)) this.guards.set(id, value);
-	}
-	async persistGuards() {
-		const raw = Object.fromEntries(this.guards);
-		this.writeTail = this.writeTail.catch(() => void 0).then(async () => writeJsonFileAtomic(path.join(this.ledgerDir, GUARDS_FILE), raw)).catch(() => void 0);
-	}
-	async loadJournals() {
-		if (this.journalsLoaded) return;
-		this.journalsLoaded = true;
-		const loaded = await readJsonFile(journalsPath(), []);
-		this.journals.splice(0, this.journals.length, ...loaded);
-	}
-	async persistJournals() {
-		this.writeTail = this.writeTail.catch(() => void 0).then(async () => writeJsonFileAtomic(journalsPath(), this.journals)).catch(() => void 0);
-	}
-	/** Reconcile journals left in `running` by a dead owner at startup. */
-	async reconcileRunning(ctx, snapshots, ledger) {
-		await this.loadGuards();
-		await this.loadJournals();
-		for (const entry of this.journals) {
-			if (entry.phase !== "running" || entry.guardId === void 0) continue;
-			const guard = this.guards.get(entry.guardId);
-			if (guard === void 0) {
-				await this.journalUpdate(entry.id, "interrupted");
+	/**
+	* Undo rollbacks that a dead owner left `running`, using the guard commit.
+	* Journals live in the session's isolated repo, so only sessions that still
+	* exist are reconciled (a deleted session takes its guard with it).
+	*/
+	async reconcileRunning(ctx, snapshots) {
+		for (const session of ctx.sessions.list()) {
+			const cwd = session.header?.cwd;
+			if (cwd === void 0 || cwd === "") continue;
+			let records;
+			const provider = snapshots.providerFor(cwd, session.id);
+			try {
+				if (!await provider.available()) continue;
+				records = await this.listJournals(provider);
+			} catch {
 				continue;
 			}
-			const lock = await this.readLock(guard.cwd);
-			if (lock !== void 0 && isAlive(lock.ownerPid) && Date.now() - lock.createdAt <= this.options.lockStaleMs) continue;
-			try {
-				if (guard.sessionId === void 0 || guard.sessionId === "") {
-					ctx.logger.warn(`rollback: journal ${entry.id} has no session id; marking interrupted`);
-					await this.journalUpdate(entry.id, "interrupted");
-					continue;
+			for (const record of records) {
+				if (record.phase !== "running" || record.guardId === void 0) continue;
+				const lock = await this.readLock(record.cwd ?? cwd);
+				if (lock !== void 0 && isAlive(lock.ownerPid) && Date.now() - lock.createdAt <= this.options.lockStaleMs) continue;
+				try {
+					const guard = await this.loadGuard(provider, record.guardId);
+					if (guard === void 0) {
+						await this.journalUpdate(provider, record.id, "interrupted");
+						continue;
+					}
+					await this.restoreGuard(provider, guard, record.paths);
+					await this.journalUpdate(provider, record.id, "rolled-back");
+				} catch (error) {
+					ctx.logger.warn(`rollback reconciliation failed for journal ${record.id}:`, error);
+					await this.journalUpdate(provider, record.id, "interrupted");
 				}
-				const provider = snapshots.providerFor(guard.cwd, guard.sessionId);
-				await this.rollbackGuard(ctx, provider, ledger, entry.guardId, entry.paths, sandboxPolicyForCwd(guard.cwd));
-				await this.journalUpdate(entry.id, "rolled-back");
-			} catch (error) {
-				ctx.logger.warn(`rollback reconciliation failed for journal ${entry.id}:`, error);
-				await this.journalUpdate(entry.id, "interrupted");
 			}
 		}
+	}
+	async writeJournal(provider, id, record) {
+		const ref = `${JOURNALS_PREFIX}${id}`;
+		const previous = await provider.readRef(ref);
+		const tree = previous !== void 0 ? await provider.treeOf(previous) : await this.emptyTree(provider);
+		record.updatedAt = Date.now();
+		const message = [
+			`state=${record.phase}`,
+			`created=${record.createdAt}`,
+			`updated=${record.updatedAt}`,
+			...record.guardId === void 0 ? [] : [`guard=${record.guardId}`],
+			...record.cwd === void 0 ? [] : [`cwd=${record.cwd}`],
+			...record.sessionId === void 0 ? [] : [`session=${record.sessionId}`],
+			...record.paths.map((item) => `path=${item}`),
+			""
+		].join("\n");
+		const commit = await provider.commitTree(tree, previous === void 0 ? [] : [previous], message);
+		await provider.updateRef(ref, commit, previous);
+	}
+	/** The empty tree, used for the first commit of a journal chain. */
+	async emptyTree(provider) {
+		return provider.withScratch(async (scratch) => {
+			await provider.readTree(scratch, void 0);
+			return provider.writeTree(scratch);
+		});
+	}
+	async readJournal(provider, commit) {
+		return parseJournal(await commitMessage(provider, commit));
 	}
 	async isStale(file) {
 		const lock = readLock(file);
@@ -2945,6 +3585,44 @@ var RollbackSafety = class {
 		return Date.now() - lock.createdAt > this.options.lockStaleMs;
 	}
 };
+function parseJournal(message) {
+	let phase;
+	let guardId;
+	let cwd;
+	let sessionId;
+	let createdAt = 0;
+	let updatedAt = 0;
+	const paths = [];
+	for (const line of message.split("\n")) if (line.startsWith("state=")) {
+		const value = line.slice(6);
+		if (value === "running" || value === "completed" || value === "rolled-back" || value === "interrupted") phase = value;
+	} else if (line.startsWith("guard=")) guardId = line.slice(6);
+	else if (line.startsWith("cwd=")) cwd = line.slice(4);
+	else if (line.startsWith("session=")) sessionId = line.slice(8);
+	else if (line.startsWith("created=")) createdAt = Number(line.slice(8)) || 0;
+	else if (line.startsWith("updated=")) updatedAt = Number(line.slice(8)) || 0;
+	else if (line.startsWith("path=")) paths.push(line.slice(5));
+	if (phase === void 0) return void 0;
+	return {
+		id: "",
+		phase,
+		paths,
+		createdAt,
+		updatedAt,
+		...guardId === void 0 ? {} : { guardId },
+		...cwd === void 0 ? {} : { cwd },
+		...sessionId === void 0 ? {} : { sessionId }
+	};
+}
+async function commitMessage(provider, commit) {
+	const result = await provider.run([
+		"log",
+		"-1",
+		"--format=%B",
+		commit
+	]);
+	return result.code === 0 ? result.stdout : "";
+}
 function readLock(file) {
 	try {
 		const parsed = JSON.parse(fs.readFileSync(file, "utf8"));
@@ -2965,716 +3643,6 @@ function isAlive(pid) {
 }
 function delay(ms) {
 	return new Promise((resolve) => setTimeout(resolve, ms));
-}
-//#endregion
-//#region lib/types/host/session-changes.js
-/** Default bound on stored accept-time content; matches the ledger text bound. */
-const DEFAULT_ACCEPT_CONTENT_MAX_BYTES = 256 * 1024;
-/**
-* The session modification list: a live, session-wide diff against the
-* earliest session snapshot merged with ledger-covered tool changes, plus
-* accept markers and per-file / per-patch undo mutations.
-*/
-var SessionChangeManager = class {
-	ctx;
-	snapshots;
-	ledger;
-	safety;
-	accepts;
-	options;
-	bound = /* @__PURE__ */ new Map();
-	constructor(ctx, snapshots, ledger, safety, accepts, options) {
-		this.ctx = ctx;
-		this.snapshots = snapshots;
-		this.ledger = ledger;
-		this.safety = safety;
-		this.accepts = accepts;
-		this.options = options;
-	}
-	/** Bound (bytes) on accept-time content snapshots kept as later diff baselines. */
-	get acceptContentMaxBytes() {
-		return this.options.acceptContentMaxBytes ?? DEFAULT_ACCEPT_CONTENT_MAX_BYTES;
-	}
-	async sessionChanges(sessionId) {
-		const live = this.liveSession(sessionId);
-		if (!live.ok) return live;
-		const session = live.value;
-		const cwd = session.header.cwd;
-		if (cwd === void 0) return fail("session-not-live", `session "${sessionId}" has no workspace cwd`);
-		const manifests = await this.snapshots.listForSession(sessionId);
-		const earliest = manifests[manifests.length - 1];
-		const provider = this.snapshots.providerFor(cwd, sessionId);
-		const gitAvailable = await provider.available();
-		const warnings = [];
-		let preparedTree;
-		let baselineUsable = false;
-		let changes = [];
-		if (earliest !== void 0 && earliest.tree !== void 0 && gitAvailable) if (!await this.snapshots.ensureTreeAvailable(earliest, provider)) warnings.push("the session baseline snapshot objects are no longer available (the session store was removed); only ledger-covered paths are shown");
-		else {
-			baselineUsable = true;
-			preparedTree = await provider.captureTree();
-			const entries = await provider.diffEntries(earliest.tree, preparedTree);
-			const ownWindows = await this.ownWindowPaths(sessionId, cwd, earliest.tree, preparedTree, entries, provider);
-			const ledgerPaths = this.ledger.pathsForSession(sessionId, cwd);
-			const foreignPaths = this.ledger.foreignPathsForSession(sessionId, cwd);
-			const nestedRoots = await this.materializedNestedRoots(provider);
-			const deferredPaths = /* @__PURE__ */ new Set();
-			for (const entry of entries) {
-				if (entry.oldMode === "160000" || entry.newMode === "160000") {
-					warnings.push(entry.oldMode !== "160000" ? `nested git repository "${entry.path}" appeared after the baseline snapshot; it is outside the list scope and will not be deleted or restored` : `nested git repository "${entry.path}" is still tracked as a gitlink; its internal changes are outside the list scope (only tool-written files inside it can be restored)`);
-					continue;
-				}
-				const windowClaimed = ownWindows === void 0 || ownWindows.has(entry.path);
-				const ledgerClaimed = ledgerPaths.has(entry.path);
-				if (!windowClaimed && !ledgerClaimed || foreignPaths.has(entry.path) && !ledgerClaimed) continue;
-				if (entry.status === "A") {
-					const abs = provider.absolutePath(entry.path);
-					const hunks = await createdFileHunks(abs, this.options.maxDiffBytesPerFile);
-					changes.push({
-						path: entry.path,
-						absolutePath: abs,
-						status: "created",
-						source: "git",
-						restorable: false,
-						createdAfterSnapshot: true,
-						...this.isWithinNestedRoots(entry.path, nestedRoots) ? { nested: true } : {},
-						...hunks.length > 0 ? { hunks } : {}
-					});
-					continue;
-				}
-				deferredPaths.add(entry.path);
-				changes.push({
-					path: entry.path,
-					absolutePath: provider.absolutePath(entry.path),
-					status: entry.status === "D" ? "deleted" : entry.status === "T" ? "typechange" : "modified",
-					source: "git",
-					restorable: true,
-					...this.isWithinNestedRoots(entry.path, nestedRoots) ? { nested: true } : {}
-				});
-			}
-			if (deferredPaths.size > 0) {
-				const diffMap = await provider.diffHunksBatched(earliest.tree, preparedTree, [...deferredPaths].sort()).catch(() => void 0);
-				for (const change of changes) {
-					if (!deferredPaths.has(change.path)) continue;
-					const diff = diffMap?.get(change.path) ?? await provider.diffHunks(earliest.tree, preparedTree, change.path);
-					if (diff.binary) {
-						change.binary = true;
-						if (change.status === "modified") change.status = "binary";
-					}
-					if (diff.truncated) change.truncated = true;
-					if (diff.hunks.length > 0) change.hunks = diff.hunks;
-				}
-			}
-		}
-		else if (earliest !== void 0 && earliest.tree !== void 0) warnings.push("workspace is no longer inside a git work tree; only ledger-covered paths are shown");
-		if (earliest === void 0) warnings.push("no session baseline snapshot yet; only ledger-covered tool modifications are listed");
-		const ledgerChanges = await this.ledger.buildSessionFileChanges(sessionId, cwd, gitAvailable && baselineUsable ? "ignored" : "fallback");
-		const byPath = /* @__PURE__ */ new Map();
-		for (const change of changes) byPath.set(change.path, change);
-		for (const change of ledgerChanges) {
-			if (byPath.has(change.path)) continue;
-			byPath.set(change.path, change);
-		}
-		changes = [...byPath.values()];
-		if (!gitAvailable) warnings.push("workspace is not inside a git work tree; only tool write/edit modifications captured by the ledger can be restored");
-		const modifications = buildModificationsFromRecords(cwd, session.snapshotEvents(), this.ledger.list(sessionId), (record) => this.ledger.laterModifications(sessionId, record.path, record));
-		this.attachToolCalls(changes, modifications);
-		for (const change of changes) {
-			const record = this.accepts.fileRecord(sessionId, change.path);
-			change.accepted = record === void 0 ? false : record.fingerprint === void 0 ? true : this.accepts.fileAccepted(sessionId, change.path, await fingerprintOfAbs(change.absolutePath));
-		}
-		for (const modification of modifications) modification.accepted = this.accepts.modificationAccepted(sessionId, modification.modificationId);
-		for (const change of changes) {
-			if (change.accepted === true) continue;
-			const acceptedContent = this.accepts.acceptedContent(sessionId, change.path);
-			if (acceptedContent === void 0) continue;
-			await this.rebaseHunksOnAccepted(change, acceptedContent);
-		}
-		const listId = crypto.randomUUID();
-		this.bound.set(listId, {
-			listId,
-			sessionId,
-			cwd,
-			...baselineUsable && earliest !== void 0 ? { baseline: earliest } : {},
-			...preparedTree === void 0 ? {} : { preparedTree },
-			gitAvailable,
-			changes: changes.filter((change) => change.accepted !== true),
-			createdAt: Date.now()
-		});
-		while (this.bound.size > 32) {
-			const oldest = this.bound.keys().next().value;
-			if (oldest === void 0) break;
-			this.bound.delete(oldest);
-		}
-		return ok({
-			listId,
-			...earliest === void 0 ? {} : { baseline: baselineInfo(earliest, sessionStartTurn(session)) },
-			changes,
-			modifications,
-			acceptedFiles: this.accepts.acceptedFiles(sessionId),
-			acceptedModifications: this.accepts.acceptedModifications(sessionId),
-			warnings: [...new Set(warnings)]
-		});
-	}
-	async acceptFile(request) {
-		const bound = this.bound.get(request.listId);
-		if (bound === void 0 || bound.sessionId !== request.sessionId) return fail("workspace-changed", "the modification list is stale; refresh it and try again", { sessionId: request.sessionId });
-		const live = this.liveSession(request.sessionId);
-		if (!live.ok) return live;
-		const provider = this.snapshots.providerFor(bound.cwd, bound.sessionId);
-		let rel;
-		try {
-			rel = provider.normalizeRelPath(request.path);
-		} catch {
-			return fail("path-not-in-snapshot", `path "${request.path}" is not a valid workspace path`, { sessionId: request.sessionId });
-		}
-		const acceptSnapshot = await acceptSnapshotOf(provider.absolutePath(rel), this.acceptContentMaxBytes);
-		this.accepts.acceptFile(request.sessionId, rel, acceptSnapshot.fingerprint, acceptSnapshot.content);
-		for (const id of this.patchIdsForPath(live.value, bound.cwd, rel)) this.accepts.acceptModification(request.sessionId, id);
-		return ok({
-			acceptedFiles: this.accepts.acceptedFiles(request.sessionId),
-			acceptedModifications: this.accepts.acceptedModifications(request.sessionId)
-		});
-	}
-	async acceptModification(request) {
-		const bound = this.bound.get(request.listId);
-		if (bound === void 0 || bound.sessionId !== request.sessionId) return fail("workspace-changed", "the modification list is stale; refresh it and try again", { sessionId: request.sessionId });
-		const live = this.liveSession(request.sessionId);
-		if (!live.ok) return live;
-		this.accepts.acceptModification(request.sessionId, request.modificationId);
-		const provider = this.snapshots.providerFor(bound.cwd, bound.sessionId);
-		let rel;
-		try {
-			rel = provider.normalizeRelPath(request.path);
-		} catch {
-			rel = void 0;
-		}
-		if (rel !== void 0) {
-			const patchIds = this.patchIdsForPath(live.value, bound.cwd, rel);
-			if (patchIds.length > 0 && patchIds.every((id) => this.accepts.modificationAccepted(request.sessionId, id))) {
-				const acceptSnapshot = await acceptSnapshotOf(provider.absolutePath(rel), this.acceptContentMaxBytes);
-				this.accepts.acceptFile(request.sessionId, rel, acceptSnapshot.fingerprint, acceptSnapshot.content);
-			}
-		}
-		return ok({
-			acceptedFiles: this.accepts.acceptedFiles(request.sessionId),
-			acceptedModifications: this.accepts.acceptedModifications(request.sessionId)
-		});
-	}
-	async undoFile(request) {
-		const bound = this.bound.get(request.listId);
-		if (bound === void 0 || bound.sessionId !== request.sessionId) return fail("workspace-changed", "the modification list is stale; refresh it and try again", { sessionId: request.sessionId });
-		const live = this.liveSession(request.sessionId);
-		if (!live.ok) return live;
-		const session = live.value;
-		const policy = sandboxPolicyFor(this.ctx, session);
-		const provider = this.snapshots.providerFor(bound.cwd, bound.sessionId);
-		let rel;
-		try {
-			rel = provider.normalizeRelPath(request.path);
-		} catch {
-			return fail("path-not-in-snapshot", `path "${request.path}" is not a valid workspace path`, { sessionId: request.sessionId });
-		}
-		let guardId = "";
-		let journalId;
-		let acquired = false;
-		try {
-			if (bound.preparedTree !== void 0) {
-				if (await provider.captureTree() !== bound.preparedTree) return fail("workspace-changed", "the workspace changed after the list was read; refresh it and try again", { sessionId: request.sessionId });
-			}
-			await this.safety.acquire(bound.cwd);
-			acquired = true;
-			await this.safety.assertFences(this.ctx, bound.cwd, provider);
-			await this.ctx.sessions.flush(session);
-			guardId = (await this.safety.captureGuard(this.ctx, provider, bound.cwd, bound.preparedTree, [rel], this.ledger, bound.sessionId)).guardId;
-			journalId = (await this.safety.journalStart(guardId, [rel])).id;
-			const restored = [];
-			const deleted = [];
-			const kept = [];
-			const skipped = [];
-			try {
-				const baseline = bound.baseline;
-				if (baseline !== void 0 && baseline.tree !== void 0) if ((await provider.pathsInTree(baseline.tree, rel)).includes(rel)) {
-					await provider.restorePaths(baseline.tree, [rel]);
-					if (await provider.blobHash(baseline.tree, rel) !== await provider.fileHash(rel)) throw new Error(`verification failed for ${rel}`);
-					restored.push(rel);
-				} else {
-					const abs = provider.absolutePath(rel);
-					if (!fs.existsSync(abs)) skipped.push(rel);
-					else {
-						fs.rmSync(abs, { force: true });
-						deleted.push(rel);
-					}
-				}
-				else {
-					const earliest = this.ledger.earliestForSessionPath(request.sessionId, provider.absolutePath(rel));
-					if (earliest === void 0) throw new Error(`no ledger baseline is available for ${rel}`);
-					const outcome = await this.ledger.restoreLedgerPath(bound.cwd, rel, earliest, "delete", policy);
-					if (outcome === "restored") restored.push(rel);
-					else if (outcome === "deleted") deleted.push(rel);
-					else if (outcome === "kept") kept.push(rel);
-					else skipped.push(rel);
-				}
-				await this.safety.journalUpdate(journalId, "completed");
-				const acceptSnapshot = await acceptSnapshotOf(provider.absolutePath(rel), this.acceptContentMaxBytes);
-				this.accepts.acceptFile(request.sessionId, rel, acceptSnapshot.fingerprint, acceptSnapshot.content);
-				return ok({
-					guardId,
-					restored,
-					deleted,
-					kept,
-					skipped,
-					acceptedFiles: this.accepts.acceptedFiles(request.sessionId)
-				});
-			} catch (error) {
-				await this.safety.rollbackGuard(this.ctx, provider, this.ledger, guardId, [rel], policy).catch(() => void 0);
-				await this.safety.journalUpdate(journalId, "rolled-back").catch(() => void 0);
-				return fail(error instanceof Error && error.message.startsWith("verification failed") ? "verification-failed" : "rollback-failed", String(error), {
-					sessionId: request.sessionId,
-					paths: [rel]
-				});
-			}
-		} catch (error) {
-			return this.mutationFailure(error, request.sessionId, bound, guardId, journalId, [rel], policy);
-		} finally {
-			if (acquired) await this.safety.release();
-		}
-	}
-	async undoModification(request) {
-		const bound = this.bound.get(request.listId);
-		if (bound === void 0 || bound.sessionId !== request.sessionId) return fail("workspace-changed", "the modification list is stale; refresh it and try again", { sessionId: request.sessionId });
-		const live = this.liveSession(request.sessionId);
-		if (!live.ok) return live;
-		const session = live.value;
-		const policy = sandboxPolicyFor(this.ctx, session);
-		const record = this.ledger.recordById(request.sessionId, request.modificationId);
-		if (record === void 0) return fail("rollback-failed", `modification "${request.modificationId}" has no live ledger record; refresh the list and undo at file level instead`, { sessionId: request.sessionId });
-		const provider = this.snapshots.providerFor(bound.cwd, bound.sessionId);
-		let rel;
-		try {
-			rel = provider.normalizeRelPath(path.relative(bound.cwd, record.path));
-		} catch {
-			return fail("path-not-in-snapshot", "the modification path is outside the workspace", { sessionId: request.sessionId });
-		}
-		let guardId = "";
-		let journalId;
-		let acquired = false;
-		try {
-			if (bound.preparedTree !== void 0) {
-				if (await provider.captureTree() !== bound.preparedTree) return fail("workspace-changed", "the workspace changed after the list was read; refresh it and try again", { sessionId: request.sessionId });
-			}
-			await this.safety.acquire(bound.cwd);
-			acquired = true;
-			await this.safety.assertFences(this.ctx, bound.cwd, provider);
-			await this.ctx.sessions.flush(session);
-			const fileGuard = await this.ledger.readCurrentForGuard(bound.cwd, rel);
-			guardId = (await this.safety.captureGuard(this.ctx, provider, bound.cwd, bound.preparedTree, [rel], this.ledger, bound.sessionId)).guardId;
-			journalId = (await this.safety.journalStart(guardId, [rel])).id;
-			try {
-				const outcome = await restoreModification(this.ctx, this.ledger, bound.cwd, record, true, this.options.spawnTimeoutMs, policy);
-				const results = [{
-					modificationId: record.modificationId,
-					path: rel,
-					status: outcome.status,
-					...outcome.detail === void 0 ? {} : { detail: outcome.detail }
-				}];
-				if (outcome.status === "conflict" || outcome.status === "failed" || outcome.status === "unsupported") {
-					await this.ledger.restoreGuardFile(bound.cwd, rel, fileGuard, policy).catch(() => void 0);
-					await this.safety.journalUpdate(journalId, "rolled-back").catch(() => void 0);
-					return fail("rollback-failed", outcome.detail ?? `undo failed with status ${outcome.status}`, {
-						sessionId: request.sessionId,
-						paths: [rel]
-					});
-				}
-				await this.safety.journalUpdate(journalId, "completed");
-				this.accepts.acceptModification(request.sessionId, record.modificationId);
-				const patchIds = this.patchIdsForPath(session, bound.cwd, rel);
-				if (patchIds.length > 0 && patchIds.every((id) => this.accepts.modificationAccepted(request.sessionId, id))) this.accepts.acceptFile(request.sessionId, rel, await fingerprintOfAbs(provider.absolutePath(rel)));
-				return ok({
-					guardId,
-					modificationResults: results,
-					acceptedModifications: this.accepts.acceptedModifications(request.sessionId)
-				});
-			} catch (error) {
-				await this.safety.rollbackGuard(this.ctx, provider, this.ledger, guardId, [rel], policy).catch(() => void 0);
-				await this.safety.journalUpdate(journalId, "rolled-back").catch(() => void 0);
-				return fail("rollback-failed", String(error), {
-					sessionId: request.sessionId,
-					paths: [rel]
-				});
-			}
-		} catch (error) {
-			return this.mutationFailure(error, request.sessionId, bound, guardId, journalId, [rel], policy);
-		} finally {
-			if (acquired) await this.safety.release();
-		}
-	}
-	/**
-	* Paths that changed during this session's own activity windows. Every
-	* snapshot this session captured opens a window that closes at the next
-	* snapshot captured by any session in the same workspace (treeless
-	* manifests extend the window); the last window ends at the current
-	* worktree. Changes outside these windows belong to other sessions and
-	* must not appear in this session's list. Returns undefined when window
-	* attribution is impossible (no own snapshot in the workspace timeline,
-	* or snapshot objects were garbage collected) — partial attribution
-	* would hide the session's own changes, which is worse than showing
-	* foreign ones.
-	*
-	* Window-end trees captured by OTHER sessions live in those sessions'
-	* isolated snapshot repos, invisible to this session's provider. They are
-	* borrowed read-only through git alternates (`GIT_ALTERNATE_OBJECT_
-	* DIRECTORIES`); without this the boundary diff fails and the window
-	* silently extends to the current worktree, leaking later sessions'
-	* changes into this session's list.
-	*
-	* Candidates are walked lazily in timeline order (distinct trees after the
-	* window's snapshot, current worktree last) and the walk stops at the first
-	* reachable boundary, so the common case attempts exactly one diff instead
-	* of materializing — and quadratically deduping — the whole timeline
-	* suffix per window.
-	*/
-	async ownWindowPaths(sessionId, cwd, baselineTree, preparedTree, preparedEntries, provider) {
-		const timeline = await this.snapshots.listForWorkspace(cwd);
-		const objectsDirMemo = /* @__PURE__ */ new Map();
-		const own = /* @__PURE__ */ new Set();
-		let found = false;
-		for (let index = 0; index < timeline.length; index += 1) {
-			const manifest = timeline[index];
-			if (manifest.sessionId !== sessionId || manifest.tree === void 0) continue;
-			found = true;
-			const tried = new Set([manifest.tree]);
-			let entries;
-			let attempted = false;
-			for (let next = index + 1; next < timeline.length; next += 1) {
-				const candidate = timeline[next];
-				const tree = candidate.tree;
-				if (tree === void 0 || tried.has(tree)) continue;
-				tried.add(tree);
-				attempted = true;
-				if (tree === preparedTree && manifest.tree === baselineTree) {
-					entries = preparedEntries;
-					break;
-				}
-				const objects = candidate.sessionId === sessionId || tree === preparedTree ? void 0 : this.foreignObjectDir(cwd, candidate.sessionId, objectsDirMemo);
-				entries = await provider.diffEntries(manifest.tree, tree, void 0, objects === void 0 ? void 0 : [objects]).catch(() => void 0);
-				if (entries !== void 0) break;
-			}
-			if (entries === void 0 && !tried.has(preparedTree)) {
-				attempted = true;
-				entries = manifest.tree === baselineTree ? preparedEntries : await provider.diffEntries(manifest.tree, preparedTree).catch(() => void 0);
-			}
-			if (!attempted) continue;
-			if (entries === void 0) return void 0;
-			for (const entry of entries) own.add(entry.path);
-		}
-		return found ? own : void 0;
-	}
-	/**
-	* Read-only alternate object dir of one foreign session's isolated snapshot
-	* repo, when it still exists on disk. A removed session store leaves its
-	* boundary tree unreachable; the window diff then falls through to the next
-	* reachable end (existing behaviour). Results (including the "gone"
-	* negative) are memoized per listing, so a session with many windows stats
-	* each foreign repo at most once.
-	*/
-	foreignObjectDir(cwd, foreignSessionId, memo) {
-		if (memo.has(foreignSessionId)) return memo.get(foreignSessionId);
-		const objects = this.snapshots.sessionObjectsDir(cwd, foreignSessionId);
-		memo.set(foreignSessionId, objects);
-		return objects;
-	}
-	liveSession(sessionId) {
-		const session = this.ctx.sessions.get(sessionId);
-		if (session === void 0) return fail("session-not-found", `session "${sessionId}" is not live`, { sessionId });
-		return ok(session);
-	}
-	/**
-	* Workspace-relative roots of nested git repositories under the workspace.
-	* Discovery reuses the provider's read-only walk, so displayed nested
-	* files always match what capture would materialize. Empty on failure.
-	*/
-	async materializedNestedRoots(provider) {
-		return (await provider.listNestedRepos().catch(() => [])).map((repo) => repo.rel).filter((rel) => rel !== "");
-	}
-	isWithinNestedRoots(filePath, nestedRoots) {
-		return nestedRoots.some((root) => filePath === root || filePath.startsWith(`${root}/`));
-	}
-	/** Accept every unaccepted file of the bound list (with patch cascades). */
-	async acceptAll(request) {
-		const bound = this.bound.get(request.listId);
-		if (bound === void 0 || bound.sessionId !== request.sessionId) return fail("workspace-changed", "the modification list is stale; refresh it and try again", { sessionId: request.sessionId });
-		const live = this.liveSession(request.sessionId);
-		if (!live.ok) return live;
-		const session = live.value;
-		for (const change of bound.changes) {
-			const acceptSnapshot = await acceptSnapshotOf(change.absolutePath, this.acceptContentMaxBytes);
-			this.accepts.acceptFile(request.sessionId, change.path, acceptSnapshot.fingerprint, acceptSnapshot.content);
-			for (const id of this.patchIdsForPath(session, bound.cwd, change.path)) this.accepts.acceptModification(request.sessionId, id);
-		}
-		return ok({
-			acceptedFiles: this.accepts.acceptedFiles(request.sessionId),
-			acceptedModifications: this.accepts.acceptedModifications(request.sessionId)
-		});
-	}
-	/** Undo every unaccepted file of the bound list back to the session baseline. */
-	async undoAll(request) {
-		const bound = this.bound.get(request.listId);
-		if (bound === void 0 || bound.sessionId !== request.sessionId) return fail("workspace-changed", "the modification list is stale; refresh it and try again", { sessionId: request.sessionId });
-		const live = this.liveSession(request.sessionId);
-		if (!live.ok) return live;
-		const session = live.value;
-		const policy = sandboxPolicyFor(this.ctx, session);
-		const provider = this.snapshots.providerFor(bound.cwd, bound.sessionId);
-		const changes = bound.changes;
-		if (changes.length === 0) return ok({
-			guardId: "",
-			restored: [],
-			deleted: [],
-			kept: [],
-			skipped: [],
-			acceptedFiles: this.accepts.acceptedFiles(request.sessionId)
-		});
-		const rels = changes.map((change) => change.path);
-		const gitChanges = changes.filter((change) => change.source === "git");
-		const ledgerChanges = changes.filter((change) => change.source === "ledger");
-		const baseline = bound.baseline;
-		let guardId = "";
-		let journalId;
-		let acquired = false;
-		try {
-			if (bound.preparedTree !== void 0) {
-				if (await provider.captureTree() !== bound.preparedTree) return fail("workspace-changed", "the workspace changed after the list was read; refresh it and try again", { sessionId: request.sessionId });
-			}
-			await this.safety.acquire(bound.cwd);
-			acquired = true;
-			await this.safety.assertFences(this.ctx, bound.cwd, provider);
-			await this.ctx.sessions.flush(session);
-			guardId = (await this.safety.captureGuard(this.ctx, provider, bound.cwd, bound.preparedTree, ledgerChanges.map((change) => change.path), this.ledger, bound.sessionId)).guardId;
-			journalId = (await this.safety.journalStart(guardId, rels)).id;
-			const restored = [];
-			const deleted = [];
-			const kept = [];
-			const skipped = [];
-			try {
-				if (gitChanges.length > 0) {
-					if (baseline === void 0 || baseline.tree === void 0) throw new Error("no baseline snapshot is available for git-tracked paths");
-					const inSnapshot = [];
-					const created = [];
-					for (const change of gitChanges) if ((await provider.pathsInTree(baseline.tree, change.path)).includes(change.path)) inSnapshot.push(change.path);
-					else created.push(change.path);
-					if (inSnapshot.length > 0) {
-						await provider.restorePaths(baseline.tree, inSnapshot);
-						for (const rel of inSnapshot) {
-							if (await provider.blobHash(baseline.tree, rel) !== await provider.fileHash(rel)) throw new Error(`verification failed for ${rel}`);
-							restored.push(rel);
-						}
-					}
-					for (const rel of created) {
-						const abs = provider.absolutePath(rel);
-						if (!fs.existsSync(abs)) skipped.push(rel);
-						else {
-							fs.rmSync(abs, { force: true });
-							deleted.push(rel);
-						}
-					}
-				}
-				for (const change of ledgerChanges) {
-					const earliest = this.ledger.earliestForSessionPath(request.sessionId, provider.absolutePath(change.path));
-					if (earliest === void 0) throw new Error(`no ledger baseline is available for ${change.path}`);
-					const outcome = await this.ledger.restoreLedgerPath(bound.cwd, change.path, earliest, "delete", policy);
-					if (outcome === "restored") restored.push(change.path);
-					else if (outcome === "deleted") deleted.push(change.path);
-					else if (outcome === "kept") kept.push(change.path);
-					else skipped.push(change.path);
-				}
-				await this.safety.journalUpdate(journalId, "completed");
-				for (const rel of rels) {
-					const acceptSnapshot = await acceptSnapshotOf(provider.absolutePath(rel), this.acceptContentMaxBytes);
-					this.accepts.acceptFile(request.sessionId, rel, acceptSnapshot.fingerprint, acceptSnapshot.content);
-				}
-				return ok({
-					guardId,
-					restored,
-					deleted,
-					kept,
-					skipped,
-					acceptedFiles: this.accepts.acceptedFiles(request.sessionId)
-				});
-			} catch (error) {
-				await this.safety.rollbackGuard(this.ctx, provider, this.ledger, guardId, rels, policy).catch(() => void 0);
-				await this.safety.journalUpdate(journalId, "rolled-back").catch(() => void 0);
-				return fail(error instanceof Error && error.message.startsWith("verification failed") ? "verification-failed" : "rollback-failed", String(error), {
-					sessionId: request.sessionId,
-					paths: rels
-				});
-			}
-		} catch (error) {
-			return this.mutationFailure(error, request.sessionId, bound, guardId, journalId, rels, policy);
-		} finally {
-			if (acquired) await this.safety.release();
-		}
-	}
-	attachToolCalls(changes, modifications) {
-		for (const change of changes) {
-			const calls = modifications.filter((item) => item.path === change.path);
-			if (calls.length === 0) continue;
-			change.toolCalls = calls.map((item) => ({
-				callId: item.modificationId,
-				toolName: item.toolName,
-				turn: item.turn,
-				step: item.step,
-				seq: item.seq,
-				hunks: item.hunks
-			}));
-		}
-	}
-	/** Every write/edit patch id (ledger + session-log only) attributed to a path. */
-	patchIdsForPath(session, cwd, rel) {
-		const ids = /* @__PURE__ */ new Set();
-		const abs = path.resolve(cwd, rel);
-		for (const record of this.ledger.recordsForPath(session.id, abs)) ids.add(record.modificationId);
-		for (const event of session.snapshotEvents()) {
-			if (event.type !== "tool/call") continue;
-			const data = event.data;
-			if (data.callId === void 0 || data.name !== "write" && data.name !== "edit") continue;
-			const args = parseRecordArgs(data.arguments);
-			const filePath = typeof args.file_path === "string" ? args.file_path : typeof args.filePath === "string" ? args.filePath : void 0;
-			if (filePath === void 0) continue;
-			if (path.resolve(cwd, path.relative(cwd, filePath)) !== abs) continue;
-			ids.add(data.callId);
-		}
-		return [...ids];
-	}
-	/**
-	* Re-diff a previously accepted file against the accepted content, so a
-	* second round of changes shows only what happened after acceptance instead
-	* of the whole session diff against the earliest snapshot. Falls back to
-	* the original hunks (git / ledger baseline) when the current file is
-	* missing, binary, oversized, or unreadable.
-	*/
-	async rebaseHunksOnAccepted(change, acceptedContent) {
-		const abs = change.absolutePath;
-		const maxBytes = this.acceptContentMaxBytes;
-		let current;
-		let missing = false;
-		try {
-			const stat = await fs.promises.stat(abs);
-			if (!stat.isFile() || stat.size > maxBytes) return;
-			const data = await fs.promises.readFile(abs);
-			if (data.includes(0)) return;
-			current = data.toString("utf8");
-		} catch (error) {
-			if (error.code === "ENOENT") missing = true;
-			else return;
-		}
-		const hunks = missing ? lineDiffHunks(normalizeLf(acceptedContent), "") : lineDiffHunks(normalizeLf(acceptedContent), normalizeLf(current ?? ""));
-		if (hunks.length === 0) return;
-		const maxHunks = this.options.maxDiffHunksPerFile;
-		if (hunks.length > maxHunks) {
-			change.hunks = hunks.slice(0, maxHunks);
-			change.truncated = true;
-		} else {
-			change.hunks = hunks;
-			delete change.truncated;
-		}
-		delete change.binary;
-		delete change.createdAfterSnapshot;
-		change.status = missing ? "deleted" : "modified";
-	}
-	async mutationFailure(error, sessionId, bound, guardId, journalId, affected, policy) {
-		const message = error instanceof Error ? error.message : String(error);
-		const code = message.includes("workspace lock timeout") ? "lock-timeout" : message.includes("running agent") ? "agent-running" : message.includes("git operation") ? "git-operation-in-progress" : "rollback-failed";
-		let guardRolledBack = guardId === "";
-		if (guardId !== "" && affected.length > 0) try {
-			const provider = this.snapshots.providerFor(bound.cwd, bound.sessionId);
-			await this.safety.rollbackGuard(this.ctx, provider, this.ledger, guardId, affected, policy);
-			guardRolledBack = true;
-		} catch {}
-		if (journalId !== void 0) await this.safety.journalUpdate(journalId, guardRolledBack ? "rolled-back" : "interrupted").catch(() => void 0);
-		return fail(code, message, {
-			sessionId,
-			paths: affected
-		});
-	}
-};
-/**
-* The session's real starting turn: the first `turn/start` this session
-* produced itself. Plain new sessions start at turn 1; forked/resumed
-* sessions inherit seed events (which keep their original seq numbers), so
-* their real start is the first turn/start at or after the seed boundary.
-*/
-function sessionStartTurn(session) {
-	const seedLength = session.inheritedEventCount ?? 0;
-	for (const event of session.snapshotEvents()) if (event.type === "turn/start" && event.seq >= seedLength) return event.data.turn;
-	return 1;
-}
-function baselineInfo(manifest, startTurn) {
-	return {
-		turn: manifest.turn,
-		createdAt: manifest.createdAt,
-		mode: manifest.tree === void 0 ? "ledger" : "git",
-		...manifest.materialized === true ? { materialized: true } : {},
-		...manifest.turn > startTurn ? { degraded: true } : {}
-	};
-}
-/** Content fingerprint of a file; falls back to stat identity for unreadable files. */
-async function fingerprintOfAbs(abs) {
-	try {
-		const data = await fs.promises.readFile(abs);
-		return {
-			kind: "content",
-			hash: crypto.createHash("sha256").update(data).digest("hex")
-		};
-	} catch {
-		try {
-			const stat = await fs.promises.stat(abs);
-			return {
-				kind: "stat",
-				size: stat.size,
-				mtimeMs: stat.mtimeMs
-			};
-		} catch {
-			return;
-		}
-	}
-}
-/**
-* Accept-marker data for a file: the content fingerprint (whole file, so
-* later state changes are detected) plus the bounded text content kept as
-* the diff baseline once the file changes again. Binary or oversized files
-* keep only the fingerprint.
-*/
-async function acceptSnapshotOf(abs, maxBytes) {
-	try {
-		const stat = await fs.promises.stat(abs);
-		if (!stat.isFile()) return { fingerprint: {
-			kind: "stat",
-			size: stat.size,
-			mtimeMs: stat.mtimeMs
-		} };
-		const data = await fs.promises.readFile(abs);
-		const fingerprint = {
-			kind: "content",
-			hash: crypto.createHash("sha256").update(data).digest("hex")
-		};
-		if (data.length <= maxBytes && !data.includes(0)) return {
-			fingerprint,
-			content: data.toString("utf8")
-		};
-		return { fingerprint };
-	} catch {
-		try {
-			const stat = await fs.promises.stat(abs);
-			return { fingerprint: {
-				kind: "stat",
-				size: stat.size,
-				mtimeMs: stat.mtimeMs
-			} };
-		} catch {
-			return { fingerprint: void 0 };
-		}
-	}
 }
 //#endregion
 //#region lib/types/host/service.js
@@ -3719,15 +3687,17 @@ var __esDecorate = function(ctor, descriptorIn, decorators, contextIn, initializ
 const DEFAULT_ROLLBACK_CONFIG = {
 	enabled: true,
 	snapshotOnPreStep: true,
-	ledgerMaxTextBytes: 256 * 1024,
-	maxLedgerRecordsPerSession: 500,
 	maxSnapshotsPerSession: 200,
 	maxDiffHunksPerFile: 20,
 	maxDiffBytesPerFile: 256 * 1024,
 	restoreChunkSize: 64,
 	guardRetentionMs: 720 * 60 * 60 * 1e3,
 	lockStaleMs: 600 * 1e3,
-	spawnTimeoutMs: 60 * 1e3
+	spawnTimeoutMs: 60 * 1e3,
+	trackingEnabled: true,
+	maxBlobBytes: 8 * 1024 * 1024,
+	maxTrackedCallsPerSession: 500,
+	diffContextLines: 3
 };
 let RollbackService = (() => {
 	let _classSuper = TypertRemoteService;
@@ -3744,6 +3714,7 @@ let RollbackService = (() => {
 	let _undoAll_decorators;
 	let _undoFile_decorators;
 	let _undoModification_decorators;
+	let _undoHunks_decorators;
 	return class RollbackService extends _classSuper {
 		static {
 			const _metadata = typeof Symbol === "function" && Symbol.metadata ? Object.create(_classSuper[Symbol.metadata] ?? null) : void 0;
@@ -3759,6 +3730,7 @@ let RollbackService = (() => {
 			_undoAll_decorators = [Remote];
 			_undoFile_decorators = [Remote];
 			_undoModification_decorators = [Remote];
+			_undoHunks_decorators = [Remote];
 			__esDecorate(this, null, _prepare_decorators, {
 				kind: "method",
 				name: "prepare",
@@ -3891,6 +3863,17 @@ let RollbackService = (() => {
 				},
 				metadata: _metadata
 			}, null, _instanceExtraInitializers);
+			__esDecorate(this, null, _undoHunks_decorators, {
+				kind: "method",
+				name: "undoHunks",
+				static: false,
+				private: false,
+				access: {
+					has: (obj) => "undoHunks" in obj,
+					get: (obj) => obj.undoHunks
+				},
+				metadata: _metadata
+			}, null, _instanceExtraInitializers);
 			if (_metadata) Object.defineProperty(this, Symbol.metadata, {
 				enumerable: true,
 				configurable: true,
@@ -3901,11 +3884,11 @@ let RollbackService = (() => {
 		host = __runInitializers(this, _instanceExtraInitializers);
 		config;
 		snapshots;
-		ledger;
 		safety;
-		accepts;
+		acceptBase;
 		restore;
 		sessionChangeManager;
+		tracker;
 		constructor(ctx, config = {}) {
 			super(ctx, "rollback");
 			this.host = ctx;
@@ -3922,28 +3905,27 @@ let RollbackService = (() => {
 				maxDiffBytesPerFile: this.config.maxDiffBytesPerFile,
 				restoreChunkSize: this.config.restoreChunkSize
 			}, this.host);
-			this.ledger = new ChangeLedger(this.host, {
-				ledgerMaxTextBytes: this.config.ledgerMaxTextBytes,
-				maxLedgerRecordsPerSession: this.config.maxLedgerRecordsPerSession
-			});
 			this.safety = new RollbackSafety({
 				lockStaleMs: this.config.lockStaleMs,
 				guardRetentionMs: this.config.guardRetentionMs,
-				ledgerDir,
 				lockTimeoutMs: 1e4
 			});
-			this.accepts = new AcceptLedger({ maxContentBytes: this.config.ledgerMaxTextBytes });
-			this.restore = new RollbackRestore(this.host, this.snapshots, this.ledger, this.safety, {
+			this.acceptBase = new AcceptBase(this.host, this.snapshots, { spawnTimeoutMs: this.config.spawnTimeoutMs });
+			this.tracker = new CallTracker(this.host, this.snapshots, {
+				maxBlobBytes: this.config.maxBlobBytes,
+				maxCallsPerSession: this.config.maxTrackedCallsPerSession
+			});
+			this.restore = new RollbackRestore(this.host, this.snapshots, this.tracker, this.safety, {
 				maxDiffHunksPerFile: this.config.maxDiffHunksPerFile,
 				maxDiffBytesPerFile: this.config.maxDiffBytesPerFile,
 				restoreChunkSize: this.config.restoreChunkSize,
 				spawnTimeoutMs: this.config.spawnTimeoutMs
 			});
-			this.sessionChangeManager = new SessionChangeManager(this.host, this.snapshots, this.ledger, this.safety, this.accepts, {
+			this.sessionChangeManager = new SessionChangeManager(this.host, this.snapshots, this.tracker, this.acceptBase, this.safety, {
 				maxDiffHunksPerFile: this.config.maxDiffHunksPerFile,
 				maxDiffBytesPerFile: this.config.maxDiffBytesPerFile,
 				spawnTimeoutMs: this.config.spawnTimeoutMs,
-				acceptContentMaxBytes: this.config.ledgerMaxTextBytes
+				diffContextLines: this.config.diffContextLines
 			});
 		}
 		prepare(sessionId, messageId, _signal) {
@@ -3985,6 +3967,9 @@ let RollbackService = (() => {
 		}
 		undoModification(request, _signal) {
 			return this.sessionChangeManager.undoModification(request);
+		}
+		undoHunks(request, _signal) {
+			return this.sessionChangeManager.undoHunks(request);
 		}
 	};
 })();
@@ -4093,6 +4078,11 @@ const ROLLBACK_HOST_TYPERT = {
 					kind: "method",
 					name: "undoModification",
 					signature: "@Remote undoModification(request: RollbackUndoModificationRequest, signal?: AbortSignal): Promise<RollbackUndoModificationResult>"
+				},
+				{
+					kind: "method",
+					name: "undoHunks",
+					signature: "@Remote undoHunks(request: RollbackUndoHunksRequest, signal?: AbortSignal): Promise<RollbackUndoHunksResult>"
 				}
 			],
 			types: []
@@ -4135,7 +4125,8 @@ const ROLLBACK_HOST_TYPERT = {
 				name: "line",
 				wire: "line",
 				source: "json",
-				codec: jsonCodec("dsh-rollback-plugin#JsonValue")
+				codec: jsonCodec("dsh-rollback-plugin#JsonValue"),
+				acceptsUndefined: true
 			}
 		], true),
 		invocation("status", [{
@@ -4196,6 +4187,12 @@ const ROLLBACK_HOST_TYPERT = {
 			wire: "request",
 			source: "json",
 			codec: jsonCodec("dsh-rollback-plugin#JsonValue")
+		}], true),
+		invocation("undoHunks", [{
+			name: "request",
+			wire: "request",
+			source: "json",
+			codec: jsonCodec("dsh-rollback-plugin#JsonValue")
 		}], true)
 	]
 };
@@ -4217,35 +4214,43 @@ function apply(ctx, options = {}) {
 	if (typert !== void 0) ctx.effect(() => typert.register(ROLLBACK_HOST_TYPERT), "rollback: typert host contribution");
 	else host.logger.warn("rollback: typert service unavailable; Remote methods may use the SRC fallback");
 	ctx.on("agent/pre-step", async (payload, next) => {
-		if (payload.step === 1 && service.config.snapshotOnPreStep && !isSubagentSession(payload.agent.session)) try {
-			await service.snapshots.capture(payload.agent.session, payload.turn);
+		const session = payload.agent.session;
+		const cwd = session.header?.cwd;
+		if (payload.step === 1 && service.config.trackingEnabled && cwd !== void 0 && cwd !== "" && !isSubagentSession(session)) try {
+			await service.tracker.flush(session.id);
+			await service.tracker.ensureBase(session.id, cwd);
+		} catch (error) {
+			host.logger.warn("rollback call tracking skipped:", error);
+		}
+		if (payload.step === 1 && service.config.snapshotOnPreStep && !isSubagentSession(session)) try {
+			await service.snapshots.capture(session, payload.turn);
 		} catch (error) {
 			host.logger.warn("rollback snapshot skipped:", error);
 		}
 		return next();
 	}, { prepend: true });
-	installLedgerListeners(ctx, service);
-	service.safety.reconcileRunning(host, service.snapshots, service.ledger).catch((error) => {
+	installTrackingListeners(ctx, service);
+	service.safety.reconcileRunning(host, service.snapshots).catch((error) => {
 		host.logger.warn("rollback startup reconciliation skipped:", error);
 	});
 }
-function installLedgerListeners(ctx, service) {
+/**
+* Per-call tracking listens to `fs/observed` only: the git-native model needs
+* no before-image, so the write/edit *intent* hooks (and their synchronous
+* whole-file read on the tool critical path) are gone.
+*/
+function installTrackingListeners(ctx, service) {
 	const host = ctx;
-	ctx.on("fs/write-intent", (target, actor, next) => {
-		return service.ledger.captureWriteBefore(target, actor, next);
-	}, { prepend: true });
-	ctx.on("fs/edit-intent", (target, actor, next) => {
-		return service.ledger.captureEditBefore(target, actor, next);
-	}, { prepend: true });
 	ctx.on("fs/observed", (target, observation, actor) => {
+		if (!service.config.trackingEnabled) return;
 		try {
-			service.ledger.observe(target, observation, actor);
+			service.tracker.observe(target, observation, actor);
 		} catch (error) {
-			host.logger.warn("rollback ledger observation failed:", error);
+			host.logger.warn("rollback call tracking failed:", error);
 		}
 	});
 }
 //#endregion
-export { ChangeLedger, DEFAULT_ROLLBACK_CONFIG, GitProvider, RollbackService, SnapshotManager, apply, boundaryInfo, buildFileChange, changeLedgerRoot, createdFileHunks, encodeSessionSegment, findPreviousTurnEnd, inject, installLedgerListeners, isHash, journalsPath, ledgerRecordsPath, lineDiffHunks, locksDir, manifestsPath, mergeFiles, name, normalizeLf, parseDiffHunks, parseDiffTreeZ, projectDirKey, readJsonFile, resolveBoundary, resolveBoundaryForTurn, resolveDshHome, restoreModification, sessionDirFor, sessionSnapshotRepo, sessionTurnPosition, spawnGit, splitDiffByPath, splitDiffSections, unquoteGitPath, wholeFileHunk, writeJsonFileAtomic };
+export { ACCEPTED_REF, AcceptBase, CHAIN_BASE_REF, CHAIN_HEAD_REF, CallTracker, DEFAULT_ROLLBACK_CONFIG, GitProvider, POINTS_PREFIX, RollbackService, SessionChangeManager, SnapshotManager, apply, applyHunkUndo, attachToolCalls, boundaryInfo, buildFileChange, changeLedgerRoot, diffGitPath, encodeSessionSegment, findPreviousTurnEnd, hunkFingerprint, inject, installTrackingListeners, isHash, journalsPath, locksDir, manifestsPath, name, parseDiffHunks, parseDiffTreeZ, patchFileViews, pointRef, projectDirKey, readJsonFile, replayPatches, resolveBoundary, resolveBoundaryForTurn, resolveDshHome, sessionDirFor, sessionSnapshotRepo, sessionStartTurn, spawnGit, splitDiffByPath, splitDiffSections, splitPatchFiles, unquoteGitPath, writeJsonFileAtomic };
 
 //# sourceMappingURL=index.js.map

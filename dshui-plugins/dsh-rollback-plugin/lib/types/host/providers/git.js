@@ -3,11 +3,12 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 const HEX_RE = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/;
+const ZERO_SHA = '0000000000000000000000000000000000000000';
 const RUNNING_OPS = ['MERGE_HEAD', 'CHERRY_PICK_HEAD', 'REVERT_HEAD', 'BISECT_LOG'];
 export function isHash(value) {
     return HEX_RE.test(value);
 }
-export function spawnGit(cwd, args, env, timeoutMs, signal, gitDir, workTree) {
+export function spawnGit(cwd, args, env, timeoutMs, signal, gitDir, workTree, input) {
     const flags = [];
     if (gitDir !== undefined && gitDir !== '')
         flags.push(`--git-dir=${gitDir}`);
@@ -21,9 +22,10 @@ export function spawnGit(cwd, args, env, timeoutMs, signal, gitDir, workTree) {
                 GIT_OPTIONAL_LOCKS: '0',
                 LC_ALL: 'C',
             },
-            stdio: ['ignore', 'pipe', 'pipe'],
+            stdio: ['pipe', 'pipe', 'pipe'],
             windowsHide: true,
         });
+        child.stdin.end(input ?? '');
         let stderr = '';
         let settled = false;
         const chunks = [];
@@ -166,8 +168,12 @@ export class GitProvider {
         const seen = new Set();
         let budget = 0;
         let materialized = false;
+        const scanIndex = this.indexPath('scan');
         const materialize = async (absRoot) => {
-            const tree = await this.captureWorktree(absRoot, signal);
+            // The workspace root reuses the persistent scan index so its stat cache
+            // survives between turn snapshots; nested roots always use a temp index.
+            const isRoot = path.resolve(absRoot) === path.resolve(this.cwd);
+            const tree = await this.captureWorktree(absRoot, signal, isRoot ? scanIndex : undefined);
             const replacements = [];
             for (const rel of await this.gitlinkPaths(tree)) {
                 if (budget >= this.maxNestedRepos)
@@ -285,19 +291,24 @@ export class GitProvider {
         return paths;
     }
     /** Capture one worktree (the workspace root or a nested repository root). */
-    async captureWorktree(cwd, signal) {
+    async captureWorktree(cwd, signal, reuseIndex) {
         const isRoot = path.resolve(cwd) === path.resolve(this.cwd);
-        const index = await this.createTempIndex();
+        const ownsIndex = reuseIndex === undefined;
+        const index = reuseIndex ?? await this.createTempIndex();
         try {
-            const reset = await this.runAt(cwd, ['read-tree', '--empty'], signal, index);
-            if (reset.code !== 0)
-                throw new Error(`git read-tree --empty failed: ${reset.stderr.trim()}`);
+            if (ownsIndex) {
+                // A fresh index starts empty; a reused (persistent) one keeps its stat
+                // cache, which is what makes the next `add -A` incremental.
+                const reset = await this.runAt(cwd, ['read-tree', '--empty'], signal, index);
+                if (reset.code !== 0)
+                    throw new Error(`git read-tree --empty failed: ${reset.stderr.trim()}`);
+            }
             let added = await this.runAt(cwd, ['add', '-A'], signal, index);
             if (added.code !== 0) {
                 // Git refuses to index a nested repository with no commit checked
                 // out. Find such directories by filesystem walk (no stderr parsing)
                 // and retry once with them excluded, so the rest of the tree keeps
-                // its snapshot. Their contents stay ledger-covered.
+                // its snapshot. Their contents are not captured per call.
                 const excludes = [];
                 for (const repo of await this.scanNestedRepos(cwd).catch(() => [])) {
                     if (!(await this.hasHead(repo.root)))
@@ -309,15 +320,6 @@ export class GitProvider {
             }
             if (added.code !== 0)
                 throw new Error(`git add -A failed: ${added.stderr.trim()}`);
-            if (isRoot) {
-                const ledgerRel = this.ledgerRelativePath();
-                if (ledgerRel !== undefined) {
-                    const removed = await this.runAt(cwd, ['rm', '-r', '--cached', '--ignore-unmatch', '--quiet', '--', ledgerRel], signal, index);
-                    if (removed.code !== 0 && removed.stderr.trim() !== '') {
-                        throw new Error(`git rm (ledger exclusion) failed: ${removed.stderr.trim()}`);
-                    }
-                }
-            }
             const result = await this.runAt(cwd, ['write-tree'], signal, index);
             if (result.code !== 0)
                 throw new Error(`git write-tree failed: ${result.stderr.trim()}`);
@@ -327,8 +329,10 @@ export class GitProvider {
             return tree;
         }
         finally {
-            fs.rmSync(index, { force: true });
-            fs.rmSync(path.dirname(index), { recursive: true, force: true });
+            if (ownsIndex) {
+                fs.rmSync(index, { force: true });
+                fs.rmSync(path.dirname(index), { recursive: true, force: true });
+            }
         }
     }
     /** Whether a repository has a resolvable HEAD (false ⇒ commitless/bare). */
@@ -382,10 +386,10 @@ export class GitProvider {
         const result = await this.run(['cat-file', '-e', `${tree}^{tree}`], signal);
         return result.code === 0;
     }
-    async diffEntries(from, to, signal, alternateObjectDirs) {
+    async diffEntries(from, to, signal) {
         if (!isHash(from) || !isHash(to))
             throw new Error('diff-trees requires valid tree hashes');
-        const result = await this.run(['diff-tree', '-r', '--no-renames', '-z', from, to], signal, undefined, alternateObjectDirs);
+        const result = await this.run(['diff-tree', '-r', '--no-renames', '-z', from, to], signal);
         if (result.code !== 0)
             throw new Error(`git diff-tree failed: ${result.stderr.trim()}`);
         return parseDiffTreeZ(result.stdout);
@@ -444,6 +448,377 @@ export class GitProvider {
         const hash = result.stdout.trim();
         return isHash(hash) ? hash : undefined;
     }
+    // --- git-native state primitives (docs/git-only-plan.md §1, §2) ---
+    //
+    // The ref/tree model keeps every bookmark in git itself: `accepted` (accept
+    // baseline), `points/*` (rollback points), `head` (the per-call chain),
+    // `guards/*` and `journals/*`. Queries are tree diffs, writes are forward
+    // restores or forward index applications — never reverse patches.
+    /**
+     * Run `body` with a **private** throwaway index.
+     *
+     * Scratch work (accept, hunk/patch application, guard capture, list diffs)
+     * must never share an index file: two overlapping operations would
+     * interleave `read-tree` / `apply --cached` / `write-tree` and could publish
+     * a corrupted tree. `update-ref`'s compare-and-swap protects the ref, not the
+     * tree, so isolation has to happen here.
+     */
+    async withScratch(body) {
+        const index = await this.createTempIndex();
+        try {
+            return await body(index);
+        }
+        finally {
+            fs.rmSync(index, { force: true });
+            fs.rmSync(path.dirname(index), { recursive: true, force: true });
+        }
+    }
+    /**
+     * A persistent index file inside the isolated repo. `scan` backs the
+     * full-worktree `add -A` (its stat cache must survive between captures).
+     * Use `withScratch` for every other index need.
+     */
+    indexPath(kind) {
+        const dir = this.options.isolatedRepoDir;
+        if (dir === undefined || dir === '')
+            return undefined;
+        return path.join(dir, kind === 'scan' ? 'dsh-scan.index' : 'dsh-scratch.index');
+    }
+    /**
+     * Write a worktree file into the isolated object store and return its blob
+     * hash. `undefined` when the path is absent or unreadable, which the caller
+     * records as a deletion.
+     */
+    async writeBlob(absPath, signal) {
+        if (!path.isAbsolute(absPath) || absPath.includes('\0'))
+            return undefined;
+        try {
+            if (!fs.statSync(absPath).isFile())
+                return undefined;
+        }
+        catch {
+            return undefined;
+        }
+        const result = await this.run(['hash-object', '-w', '--', absPath], signal);
+        if (result.code !== 0)
+            return undefined;
+        const hash = result.stdout.trim();
+        return isHash(hash) ? hash : undefined;
+    }
+    /** `write-tree` from an explicit index file. */
+    async writeTree(indexFile, signal) {
+        const result = await this.run(['write-tree'], signal, indexFile);
+        if (result.code !== 0)
+            throw new Error(`git write-tree failed: ${result.stderr.trim()}`);
+        const tree = result.stdout.trim();
+        if (!isHash(tree))
+            throw new Error(`git write-tree returned invalid tree hash: ${tree}`);
+        return tree;
+    }
+    /** Reset an index file to a tree-ish (`read-tree`; `--empty` when omitted). */
+    async readTree(indexFile, treeish, signal) {
+        const args = treeish === undefined || treeish === ''
+            ? ['read-tree', '--empty']
+            : ['read-tree', treeish];
+        const result = await this.run(args, signal, indexFile);
+        if (result.code !== 0)
+            throw new Error(`git read-tree failed: ${result.stderr.trim()}`);
+    }
+    /**
+     * Register many index entries in a single git process (`update-index
+     * --index-info`). An entry without `blob` removes the path.
+     */
+    async updateIndexInfo(indexFile, entries, signal) {
+        if (entries.length === 0)
+            return;
+        const batchable = entries.every(entry => !/[\n\t]/.test(entry.path));
+        if (batchable) {
+            const lines = entries.map(entry => entry.blob === undefined
+                ? `0 ${ZERO_SHA}\t${entry.path}\n`
+                : `${entry.mode ?? '100644'} ${entry.blob}\t${entry.path}\n`).join('');
+            const result = await this.run(['update-index', '--index-info'], signal, indexFile, undefined, lines);
+            if (result.code !== 0)
+                throw new Error(`git update-index --index-info failed: ${result.stderr.trim()}`);
+            return;
+        }
+        for (const entry of entries) {
+            const args = entry.blob === undefined
+                ? ['update-index', '--force-remove', '--', entry.path]
+                : ['update-index', '--add', '--cacheinfo', `${entry.mode ?? '100644'},${entry.blob},${entry.path}`];
+            const result = await this.run(args, signal, indexFile);
+            if (result.code !== 0)
+                throw new Error(`git update-index failed for ${entry.path}: ${result.stderr.trim()}`);
+        }
+    }
+    /**
+     * Apply a patch to an index only (never the worktree). The caller follows
+     * with `checkoutIndex` to materialize the result. This is the forward-only
+     * primitive behind hunk undo and patch replay.
+     */
+    async applyCached(indexFile, patch, options = {}, signal) {
+        if (patch.trim() === '')
+            return { ok: true, stderr: '' };
+        const args = ['apply', '--cached', '--whitespace=nowarn'];
+        if (options.unidiffZero === true)
+            args.push('--unidiff-zero');
+        if (options.threeWay === true)
+            args.push('--3way');
+        const result = await this.run(args, signal, indexFile, undefined, patch);
+        return { ok: result.code === 0, stderr: result.stderr.trim() };
+    }
+    /**
+     * Stage specific worktree paths into an index, including ignored ones
+     * (`-f`). A tree-vs-worktree diff only sees paths present in the index, so
+     * files created after the baseline (and ignored files) must be staged before
+     * the diff, which is also what keeps the diff bounded to session paths.
+     */
+    async stagePaths(indexFile, relPaths, signal) {
+        const existing = [];
+        for (const rel of new Set(relPaths)) {
+            this.assertSafeRelPath(rel);
+            try {
+                if (fs.statSync(path.resolve(this.cwd, rel)).isFile())
+                    existing.push(rel);
+            }
+            catch {
+                // Deleted paths need no staging: the index already reflects the base.
+            }
+        }
+        if (existing.length === 0)
+            return;
+        const chunkSize = Math.max(1, this.options.restoreChunkSize);
+        for (let start = 0; start < existing.length; start += chunkSize) {
+            const chunk = existing.slice(start, start + chunkSize);
+            const result = await this.run(['add', '-f', '--', ...chunk], signal, indexFile);
+            if (result.code !== 0)
+                throw new Error(`git add -f failed for ${chunk.join(', ')}: ${result.stderr.trim()}`);
+        }
+    }
+    /** Write index entries from an index file into the worktree. */
+    async checkoutIndex(indexFile, relPaths, signal) {
+        const unique = [...new Set(relPaths.map(item => this.normalizeRelPath(item)))];
+        if (unique.length === 0)
+            return;
+        const chunkSize = Math.max(1, this.options.restoreChunkSize);
+        for (let start = 0; start < unique.length; start += chunkSize) {
+            const chunk = unique.slice(start, start + chunkSize);
+            const result = await this.run(['checkout-index', '-f', '--', ...chunk], signal, indexFile);
+            if (result.code !== 0) {
+                throw new Error(`git checkout-index failed for ${chunk.join(', ')}: ${result.stderr.trim()}`);
+            }
+        }
+    }
+    /**
+     * The raw patch between two tree-ish values, or between a tree-ish and the
+     * worktree when `to` is omitted. Output keeps its `diff --git` headers so it
+     * can be fed straight back to `applyCached`. For the worktree form
+     * `indexFile` must be populated from `from` (see `readTree`), otherwise git
+     * reports every path as deleted.
+     */
+    async diffPatch(from, to, relPaths, options = {}) {
+        for (const rel of relPaths)
+            this.assertSafeRelPath(rel);
+        const args = ['diff', '--no-renames', '--full-index', `--unified=${Math.max(0, options.context ?? 3)}`, from];
+        if (to !== undefined && to !== '')
+            args.push(to);
+        if (relPaths.length > 0)
+            args.push('--', ...relPaths);
+        const result = await this.run(args, options.signal, options.indexFile);
+        if (result.code !== 0)
+            throw new Error(`git diff failed: ${result.stderr.trim()}`);
+        return result.stdout;
+    }
+    /**
+     * Per-commit patches for many commits in one process: each commit hash on
+     * stdin produces its own diff against its first parent, prefixed by a line
+     * containing the commit hash. This is the batched form of the per-call patch
+     * list (docs/git-only-plan.md §3).
+     */
+    async diffTreePatches(commits, options = {}) {
+        const result = new Map();
+        const hashes = commits.filter(commit => isHash(commit));
+        if (hashes.length === 0)
+            return result;
+        const run = await this.run(['diff-tree', '-p', '--no-renames', '--full-index', `--unified=${Math.max(0, options.context ?? 3)}`, '--stdin'], options.signal, undefined, undefined, `${hashes.join('\n')}\n`);
+        if (run.code !== 0)
+            throw new Error(`git diff-tree --stdin failed: ${run.stderr.trim()}`);
+        let current;
+        let lines = [];
+        const flush = () => {
+            if (current !== undefined)
+                result.set(current, lines.join('\n'));
+            lines = [];
+        };
+        for (const line of run.stdout.split('\n')) {
+            if (isHash(line)) {
+                flush();
+                current = line;
+                continue;
+            }
+            if (current !== undefined)
+                lines.push(line);
+        }
+        flush();
+        return result;
+    }
+    /** Create a commit object for a tree (no worktree or index involved). */ async commitTree(tree, parents, message, options = {}, signal) {
+        if (!isHash(tree))
+            throw new Error('commit-tree requires a valid tree hash');
+        const ready = await this.ensureIsolated(signal);
+        if (!ready)
+            throw new Error('rollback: isolated snapshot repository is unavailable');
+        const when = Math.floor((options.timestamp ?? Date.now()) / 1000);
+        const env = {
+            ...this.baseEnv,
+            GIT_AUTHOR_NAME: 'dsh',
+            GIT_AUTHOR_EMAIL: 'dsh@local',
+            GIT_COMMITTER_NAME: 'dsh',
+            GIT_COMMITTER_EMAIL: 'dsh@local',
+            GIT_AUTHOR_DATE: `${when} +0000`,
+            GIT_COMMITTER_DATE: `${when} +0000`,
+        };
+        const args = ['commit-tree', tree];
+        for (const parent of parents) {
+            if (isHash(parent))
+                args.push('-p', parent);
+        }
+        const result = await spawnGit(this.cwd, args, env, this.options.spawnTimeoutMs, signal, this.options.isolatedRepoDir, undefined, message);
+        if (result.code !== 0)
+            throw new Error(`git commit-tree failed: ${result.stderr.trim()}`);
+        const commit = result.stdout.trim();
+        if (!isHash(commit))
+            throw new Error(`git commit-tree returned invalid hash: ${commit}`);
+        return commit;
+    }
+    /** Resolve a ref to its object hash, or undefined when it does not exist. */
+    async readRef(ref, signal) {
+        const result = await this.run(['rev-parse', '--verify', '--quiet', ref], signal);
+        if (result.code !== 0)
+            return undefined;
+        const hash = result.stdout.trim();
+        return isHash(hash) ? hash : undefined;
+    }
+    /**
+     * Move a ref. With `expectedOld` this is a compare-and-swap: the update
+     * fails (returns false) unless the ref currently points at `expectedOld`,
+     * which makes concurrent accepts safe without a lock.
+     */
+    async updateRef(ref, sha, expectedOld, signal) {
+        if (!isHash(sha))
+            throw new Error('update-ref requires a valid object hash');
+        const args = ['update-ref', ref, sha];
+        if (expectedOld !== undefined)
+            args.push(expectedOld);
+        const result = await this.run(args, signal);
+        return result.code === 0;
+    }
+    /** Refs under a prefix, in refname order. */
+    async listRefs(prefix, signal) {
+        const result = await this.run(['for-each-ref', '--format=%(refname)%00%(objectname)', prefix], signal);
+        if (result.code !== 0)
+            return [];
+        const out = [];
+        for (const line of result.stdout.split('\n')) {
+            if (line === '')
+                continue;
+            const [ref, sha] = line.split('\0');
+            if (ref === undefined || sha === undefined || !isHash(sha))
+                continue;
+            out.push({ ref, sha });
+        }
+        return out;
+    }
+    /**
+     * Refs under a prefix with their commit messages in the same process
+     * (`for-each-ref --format=…%(contents)`), used by the ref-backed journal.
+     */
+    async listRefsDetailed(prefix, signal) {
+        const result = await this.run(['for-each-ref', '--format=%(refname)%00%(objectname)%00%(contents)', prefix], signal);
+        if (result.code !== 0)
+            return [];
+        const out = [];
+        for (const line of result.stdout.split('\n')) {
+            if (line === '')
+                continue;
+            const parts = line.split('\0');
+            const ref = parts[0];
+            const sha = parts[1];
+            if (ref === undefined || sha === undefined || !isHash(sha))
+                continue;
+            out.push({ ref, sha, contents: parts.slice(2).join('\0') });
+        }
+        return out;
+    }
+    /**
+     * Refs under a prefix with commit metadata in one process: refname, object
+     * hash, tree hash, committer time and message. Backs the turn-point list.
+     */
+    async listRefsWithMeta(prefix, signal) {
+        const result = await this.run(['for-each-ref', '--format=%(refname)%00%(objectname)%00%(tree)%00%(creatordate:unix)%00%(contents)', prefix], signal);
+        if (result.code !== 0)
+            return [];
+        const out = [];
+        for (const line of result.stdout.split('\n')) {
+            if (line === '')
+                continue;
+            const parts = line.split('\0');
+            const ref = parts[0];
+            const sha = parts[1];
+            if (ref === undefined || sha === undefined || !isHash(sha))
+                continue;
+            out.push({
+                ref,
+                sha,
+                tree: (parts[2] ?? '').trim(),
+                createdAt: Number(parts[3] ?? '0') || 0,
+                contents: parts.slice(4).join('\0'),
+            });
+        }
+        return out;
+    }
+    /**
+     * Parentless ancestors of a revision (`git rev-list --max-parents=0`), i.e.
+     * the root commit(s) of its history. Used to recover the session chain base
+     * of chains created before `refs/dsh/base` existed.
+     */
+    async roots(rev, signal) {
+        if (!isHash(rev))
+            return [];
+        const result = await this.run(['rev-list', '--max-parents=0', rev], signal);
+        if (result.code !== 0)
+            return [];
+        return result.stdout.split('\n').map(line => line.trim()).filter(isHash);
+    }
+    /** The tree hash a revision points at (`rev-parse <rev>^{tree}`). */
+    async treeOf(rev, signal) {
+        const result = await this.run(['rev-parse', '--verify', `${rev}^{tree}`], signal);
+        const tree = result.stdout.trim();
+        if (result.code !== 0 || !isHash(tree))
+            throw new Error(`git rev-parse ${rev}^{tree} failed: ${result.stderr.trim()}`);
+        return tree;
+    }
+    /** Delete a ref (best-effort; missing refs are not an error). */
+    async deleteRefs(refs, signal) {
+        if (refs.length === 0)
+            return;
+        await this.run(['update-ref', '--stdin'], signal, undefined, undefined, refs.map(ref => `delete ${ref}\n`).join(''));
+    }
+    /**
+     * Build any number of commits in one process. The caller assembles the
+     * fast-import stream; blobs must already exist in the isolated repo (see
+     * `writeBlob`), so this is the freeze step of the per-call chain.
+     */
+    async fastImport(stream, signal) {
+        if (stream.trim() === '')
+            return;
+        const ready = await this.ensureIsolated(signal);
+        if (!ready)
+            throw new Error('rollback: isolated snapshot repository is unavailable');
+        const payload = stream.endsWith('\n') ? stream : `${stream}\n`;
+        const result = await spawnGit(this.cwd, ['fast-import', '--quiet'], this.baseEnv, this.options.spawnTimeoutMs, signal, this.options.isolatedRepoDir, undefined, payload);
+        if (result.code !== 0)
+            throw new Error(`git fast-import failed: ${result.stderr.trim()}`);
+    }
     async restorePaths(tree, relPaths, signal) {
         if (!isHash(tree))
             throw new Error('restore requires a valid tree hash');
@@ -489,27 +864,16 @@ export class GitProvider {
         }
         return false;
     }
-    /**
-     * All snapshot object operations run against the isolated repo.
-     * `alternateObjectDirs` borrows additional object stores read-only (git
-     * alternates), used to diff against tree objects captured by other
-     * sessions into their own isolated repos.
-     */
-    async run(args, signal, indexFile, alternateObjectDirs) {
+    /** Every snapshot object operation runs against the isolated repo. */
+    async run(args, signal, indexFile, _unused, input) {
         const ready = await this.ensureIsolated(signal);
         if (!ready) {
             return { code: 128, stdout: '', stderr: 'rollback: isolated snapshot repository is unavailable' };
         }
-        const env = indexFile === undefined && alternateObjectDirs === undefined
+        const env = indexFile === undefined
             ? this.baseEnv
-            : {
-                ...this.baseEnv,
-                ...(indexFile === undefined ? {} : { GIT_INDEX_FILE: indexFile }),
-                ...(alternateObjectDirs === undefined || alternateObjectDirs.length === 0
-                    ? {}
-                    : { GIT_ALTERNATE_OBJECT_DIRECTORIES: alternateObjectDirs.join(path.delimiter) }),
-            };
-        return spawnGit(this.cwd, args, env, this.options.spawnTimeoutMs, signal, this.options.isolatedRepoDir, this.cwd);
+            : { ...this.baseEnv, GIT_INDEX_FILE: indexFile };
+        return spawnGit(this.cwd, args, env, this.options.spawnTimeoutMs, signal, this.options.isolatedRepoDir, this.cwd, input);
     }
     /** Read-only queries against the project's own repo (head, fences). */
     async runProject(args, signal) {
@@ -561,16 +925,6 @@ export class GitProvider {
     async createTempIndex() {
         const dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'dsh-rollback-index-'));
         return path.join(dir, 'index');
-    }
-    ledgerRelativePath() {
-        const ledger = this.options.ledgerDir;
-        if (ledger === undefined || ledger === '')
-            return undefined;
-        const abs = path.resolve(ledger);
-        const rel = path.relative(this.cwd, abs);
-        if (rel === '' || rel === '..' || rel.startsWith(`..${path.sep}`))
-            return undefined;
-        return rel.split(path.sep).join('/');
     }
 }
 export function parseDiffTreeZ(stdout) {
@@ -711,7 +1065,7 @@ export function splitDiffSections(stdout) {
     return sections;
 }
 /** Parse the path out of a `diff --git a/x b/x` section header (quoted or not). */
-function diffGitPath(line) {
+export function diffGitPath(line) {
     const rest = line.slice('diff --git '.length);
     if (!rest.startsWith('"')) {
         const match = /^a\/(\S+) b\//.exec(rest);

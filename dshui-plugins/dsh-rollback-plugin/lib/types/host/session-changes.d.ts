@@ -1,113 +1,88 @@
-import type { RollbackAcceptAllRequest, RollbackAcceptFileRequest, RollbackAcceptModificationRequest, RollbackAcceptFingerprint, RollbackAcceptResult, RollbackSessionChangesResult, RollbackUndoAllRequest, RollbackUndoAllResult, RollbackUndoFileRequest, RollbackUndoFileResult, RollbackUndoModificationRequest, RollbackUndoModificationResult } from '../shared/types.ts';
+import type { RollbackAcceptAllRequest, RollbackAcceptFileRequest, RollbackAcceptModificationRequest, RollbackAcceptResult, RollbackFileChange, RollbackModification, RollbackSessionChangesResult, RollbackUndoAllRequest, RollbackUndoAllResult, RollbackUndoFileRequest, RollbackUndoFileResult, RollbackUndoHunksRequest, RollbackUndoHunksResult, RollbackUndoModificationRequest, RollbackUndoModificationResult } from '../shared/types.ts';
 import type { RollbackCordisContext, Session } from './context.ts';
-import { AcceptLedger } from './accepts.ts';
-import { ChangeLedger } from './ledger.ts';
-import { RollbackSafety } from './safety.ts';
-import { SnapshotManager } from './snapshot.ts';
+import type { AcceptBase } from './accept-base.ts';
+import type { RollbackSafety } from './safety.ts';
+import type { SnapshotManager } from './snapshot.ts';
+import type { CallTracker } from './tracking.ts';
+/**
+ * The session modification list, derived entirely from git
+ * (docs/git-only-plan.md §3).
+ *
+ * The baseline is `refs/dsh/accepted`, so "what changed" is one
+ * `git diff accepted` against the worktree and "is it accepted" is a blob
+ * comparison. Per-call patches come from the tracked commit chain. Everything
+ * the previous implementation needed — fingerprints, accept-time content
+ * snapshots, cross-session activity windows and borrowed object stores — is
+ * gone.
+ */
 export interface SessionChangesOptions {
     spawnTimeoutMs: number;
     maxDiffHunksPerFile: number;
     maxDiffBytesPerFile: number;
-    /** Bound (bytes) on accept-time content snapshots used as later diff baselines. */
-    acceptContentMaxBytes?: number;
+    /** Diff context used for hunk enumeration and hunk undo (must match). */
+    diffContextLines: number;
 }
-/**
- * The session modification list: a live, session-wide diff against the
- * earliest session snapshot merged with ledger-covered tool changes, plus
- * accept markers and per-file / per-patch undo mutations.
- */
 export declare class SessionChangeManager {
     private readonly ctx;
     private readonly snapshots;
-    private readonly ledger;
-    private readonly safety;
+    private readonly tracker;
     private readonly accepts;
+    private readonly safety;
     private readonly options;
     private readonly bound;
-    constructor(ctx: RollbackCordisContext, snapshots: SnapshotManager, ledger: ChangeLedger, safety: RollbackSafety, accepts: AcceptLedger, options: SessionChangesOptions);
-    /** Bound (bytes) on accept-time content snapshots kept as later diff baselines. */
-    private get acceptContentMaxBytes();
+    constructor(ctx: RollbackCordisContext, snapshots: SnapshotManager, tracker: CallTracker, accepts: AcceptBase, safety: RollbackSafety, options: SessionChangesOptions);
     sessionChanges(sessionId: string): Promise<RollbackSessionChangesResult>;
     acceptFile(request: RollbackAcceptFileRequest): Promise<RollbackAcceptResult>;
     acceptModification(request: RollbackAcceptModificationRequest): Promise<RollbackAcceptResult>;
+    acceptAll(request: RollbackAcceptAllRequest): Promise<RollbackAcceptResult>;
     undoFile(request: RollbackUndoFileRequest): Promise<RollbackUndoFileResult>;
     undoModification(request: RollbackUndoModificationRequest): Promise<RollbackUndoModificationResult>;
+    undoHunks(request: RollbackUndoHunksRequest): Promise<RollbackUndoHunksResult>;
+    undoAll(request: RollbackUndoAllRequest): Promise<RollbackUndoAllResult>;
     /**
-     * Paths that changed during this session's own activity windows. Every
-     * snapshot this session captured opens a window that closes at the next
-     * snapshot captured by any session in the same workspace (treeless
-     * manifests extend the window); the last window ends at the current
-     * worktree. Changes outside these windows belong to other sessions and
-     * must not appear in this session's list. Returns undefined when window
-     * attribution is impossible (no own snapshot in the workspace timeline,
-     * or snapshot objects were garbage collected) — partial attribution
-     * would hide the session's own changes, which is worse than showing
-     * foreign ones.
-     *
-     * Window-end trees captured by OTHER sessions live in those sessions'
-     * isolated snapshot repos, invisible to this session's provider. They are
-     * borrowed read-only through git alternates (`GIT_ALTERNATE_OBJECT_
-     * DIRECTORIES`); without this the boundary diff fails and the window
-     * silently extends to the current worktree, leaking later sessions'
-     * changes into this session's list.
-     *
-     * Candidates are walked lazily in timeline order (distinct trees after the
-     * window's snapshot, current worktree last) and the walk stops at the first
-     * reachable boundary, so the common case attempts exactly one diff instead
-     * of materializing — and quadratically deduping — the whole timeline
-     * suffix per window.
+     * Shared undo skeleton: verify the listed worktree state is unchanged, take
+     * the workspace lock, fence, flush the session, guard the affected paths, run
+     * the mutation, journal it, and auto-accept the result.
      */
-    private ownWindowPaths;
-    /**
-     * Read-only alternate object dir of one foreign session's isolated snapshot
-     * repo, when it still exists on disk. A removed session store leaves its
-     * boundary tree unreachable; the window diff then falls through to the next
-     * reachable end (existing behaviour). Results (including the "gone"
-     * negative) are memoized per listing, so a session with many windows stats
-     * each foreign repo at most once.
-     */
-    private foreignObjectDir;
+    private withUndo;
+    private requireBound;
     private liveSession;
     /**
-     * Workspace-relative roots of nested git repositories under the workspace.
-     * Discovery reuses the provider's read-only walk, so displayed nested
-     * files always match what capture would materialize. Empty on failure.
+     * Turn-start tree of this session, used to seed the accepted baseline. Read
+     * from the persisted `refs/dsh/base` rather than the in-memory anchor: after
+     * a host restart that anchor is gone or has been re-pointed at the chain tip,
+     * which would silently drop every already-accepted file from the list.
      */
-    private materializedNestedRoots;
-    private isWithinNestedRoots;
-    /** Accept every unaccepted file of the bound list (with patch cascades). */
-    acceptAll(request: RollbackAcceptAllRequest): Promise<RollbackAcceptResult>;
-    /** Undo every unaccepted file of the bound list back to the session baseline. */
-    undoAll(request: RollbackUndoAllRequest): Promise<RollbackUndoAllResult>;
-    private attachToolCalls;
-    /** Every write/edit patch id (ledger + session-log only) attributed to a path. */
-    private patchIdsForPath;
+    private seedTree;
+    /** A list with nothing to show (no chain, no accept baseline yet). */
+    private emptyValue;
     /**
-     * Re-diff a previously accepted file against the accepted content, so a
-     * second round of changes shows only what happened after acceptance instead
-     * of the whole session diff against the earliest snapshot. Falls back to
-     * the original hunks (git / ledger baseline) when the current file is
-     * missing, binary, oversized, or unreadable.
+     * Accepted rows: paths whose accepted content differs from the session
+     * baseline, i.e. what this session accepted. One diff process; hunks are
+     * intentionally omitted (the accepted group is a file list).
+     *
+     * Suppression is per *attribution*, not per path: only paths this session
+     * itself re-wrote after accepting (`ownPending`) leave the accepted group.
+     * A path touched by another session keeps its accepted row and is reported
+     * through `warnings`, instead of silently masquerading as a change of ours.
      */
-    private rebaseHunksOnAccepted;
-    private mutationFailure;
+    private acceptedRows;
+    private nestedRoots;
+    /**
+     * Per-call patches of the session chain, with hunks and accept state. Also
+     * reports, per path, the post-image blob of the *newest* call and whether that
+     * call has a usable post-image — the caller uses it to attribute the worktree
+     * content to this session (or to somebody else).
+     */
+    private modifications;
+    private locatePatch;
+    private callBlob;
+    private callPatch;
+    private acceptValue;
+    /** Patch ids whose post-image already equals the accepted content. */
+    private acceptedPatchIds;
 }
-/**
- * The session's real starting turn: the first `turn/start` this session
- * produced itself. Plain new sessions start at turn 1; forked/resumed
- * sessions inherit seed events (which keep their original seq numbers), so
- * their real start is the first turn/start at or after the seed boundary.
- */
+/** Attach per-path tool-call patch lists to the file rows. */
+export declare function attachToolCalls(changes: RollbackFileChange[], modifications: readonly RollbackModification[]): void;
+/** The turn the session started at (first `turn/start`). */
 export declare function sessionStartTurn(session: Session): number;
-/** Content fingerprint of a file; falls back to stat identity for unreadable files. */
-export declare function fingerprintOfAbs(abs: string): Promise<RollbackAcceptFingerprint | undefined>;
-/**
- * Accept-marker data for a file: the content fingerprint (whole file, so
- * later state changes are detected) plus the bounded text content kept as
- * the diff baseline once the file changes again. Binary or oversized files
- * keep only the fingerprint.
- */
-export declare function acceptSnapshotOf(abs: string, maxBytes: number): Promise<{
-    fingerprint: RollbackAcceptFingerprint | undefined;
-    content?: string;
-}>;

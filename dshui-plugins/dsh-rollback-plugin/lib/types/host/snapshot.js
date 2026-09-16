@@ -95,13 +95,22 @@ export async function writeJsonFileAtomic(file, value) {
     await fs.promises.writeFile(tmp, JSON.stringify(value, null, 2), 'utf8');
     await fs.promises.rename(tmp, file);
 }
+export const POINTS_PREFIX = 'refs/dsh/points/';
+/**
+ * Turn-start rollback points, stored as git commits
+ * (docs/git-only-plan.md §2.1).
+ *
+ * `refs/dsh/points/<nnnn>` is a full-worktree commit taken at the start of a
+ * turn; everything the old manifest store kept (snapshot ids, JSON files, the
+ * storage-domain table) is now a ref. The full `add -A` is the only
+ * O(worktree) operation left, and it reuses a persistent index so unchanged
+ * files are not re-hashed.
+ */
 export class SnapshotManager {
     options;
     ctx;
-    manifests = [];
-    loaded = false;
-    writeTail = Promise.resolve();
-    domainStorePromise;
+    /** In-memory manifests for the current process (never persisted). */
+    manifests = new Map();
     dshHome;
     /** In-flight isolated repo inits, keyed by repo dir (dedupe across providers). */
     isolatedInit = new Map();
@@ -116,7 +125,6 @@ export class SnapshotManager {
     /**
      * Provider bound to one session's isolated snapshot repo (kept inside the
      * session's own directory, so deleting the session removes the objects).
-     * `sessionId` undefined degrades to ledger-only coverage.
      */
     providerFor(cwd, sessionId) {
         const isolatedRepoDir = sessionId === undefined || sessionId === ''
@@ -128,20 +136,9 @@ export class SnapshotManager {
             maxDiffHunksPerFile: this.options.maxDiffHunksPerFile,
             maxDiffBytesPerFile: this.options.maxDiffBytesPerFile,
             restoreChunkSize: this.options.restoreChunkSize,
-            ledgerDir: this.options.ledgerDir,
             isolatedRepoDir,
             isolatedRepoInit,
         });
-    }
-    /**
-     * Objects directory of one session's isolated snapshot repo, when it exists
-     * on disk. Used to borrow foreign snapshot trees read-only (git alternates)
-     * for cross-session window diffs; undefined when the session store was
-     * removed together with its session.
-     */
-    sessionObjectsDir(cwd, sessionId) {
-        const objects = path.join(sessionSnapshotRepo(this.dshHome, cwd, sessionId), 'objects');
-        return fs.existsSync(objects) ? objects : undefined;
     }
     ensureIsolatedRepo(dir) {
         const existing = this.isolatedInit.get(dir);
@@ -154,66 +151,80 @@ export class SnapshotManager {
             this.isolatedInit.delete(dir); });
         return init;
     }
-    /** Capture the pre-step baseline. Failures are caught by the caller and never block the agent. */
+    /** Capture the turn-start point. Failures never block the agent. */
     async capture(session, turn) {
         const cwd = session.header.cwd;
         if (cwd === undefined || cwd === '')
             return undefined;
-        await this.load();
-        if (this.manifests.some(item => item.sessionId === session.id && item.turn === turn))
-            return undefined;
         const provider = this.providerFor(cwd, session.id);
-        const head = await provider.head().catch(() => undefined);
-        let tree;
-        let materialized = false;
-        let mode = 'ledger';
-        if (await provider.available().catch(() => false)) {
-            const captured = await provider.captureTreeInfo().catch(() => undefined);
-            if (captured !== undefined) {
-                tree = captured.tree;
-                materialized = captured.materialized;
-            }
-            if (tree === undefined) {
-                // Re-attempt without the ledger-exclusion path; useful when the status dir is unusual.
-                tree = await provider.captureTree().catch(() => undefined);
-            }
-            if (tree !== undefined)
-                mode = 'git';
-        }
+        if (!(await provider.available().catch(() => false)))
+            return undefined;
+        const ref = pointRef(turn);
+        const existing = await provider.readRef(ref);
+        if (existing !== undefined)
+            return this.manifestAt(cwd, session.id, turn, provider);
+        // `captureTreeInfo` reuses the provider's persistent scan index for the
+        // workspace root (warm stat cache) and materializes nested repositories.
+        const captured = await provider.captureTreeInfo().catch(() => undefined);
+        const tree = captured?.tree;
+        const materialized = captured?.materialized ?? false;
         if (tree === undefined)
-            mode = 'ledger';
+            return undefined;
+        const message = [
+            'turn point',
+            `session=${session.id}`,
+            `turn=${turn}`,
+            `cwd=${cwd}`,
+            `created=${Date.now()}`,
+            '',
+        ].join('\n');
+        const commit = await provider.commitTree(tree, [], message);
+        if (!(await provider.updateRef(ref, commit)))
+            return undefined;
+        await this.prune(cwd, session.id, provider);
         const manifest = {
-            snapshotId: `${session.id}:${turn}:${Date.now().toString(36)}`,
+            snapshotId: `${session.id}:${turn}:${commit.slice(0, 8)}`,
             sessionId: session.id,
             turn,
             cwd,
-            ...(tree === undefined ? {} : { tree }),
-            ...(head === undefined ? {} : { head }),
+            tree,
             createdAt: Date.now(),
-            mode,
+            mode: 'git',
             ...(materialized ? { materialized: true } : {}),
-            ...(turnStartSeq(session, turn) === undefined ? {} : { turnStartSeq: turnStartSeq(session, turn) }),
         };
-        const next = this.manifests
-            .filter(item => !(item.sessionId === session.id && item.turn === turn));
-        next.push(manifest);
-        this.enqueuePersist(trimManifests(next, this.options.maxSnapshotsPerSession));
+        const list = this.manifests.get(session.id) ?? [];
+        this.manifests.set(session.id, [...list.filter(item => item.turn !== turn), manifest]);
         return manifest;
     }
-    /** Exact snapshot first, then the newest earlier snapshot for the same session. */
-    async find(sessionId, targetTurn) {
-        await this.load();
-        const exact = this.manifests
-            .filter(item => item.sessionId === sessionId && item.turn === targetTurn)
-            .sort((a, b) => b.createdAt - a.createdAt)[0];
+    /** Exact point first, then the newest earlier point for the same session. */
+    async find(cwd, sessionId, targetTurn) {
+        const provider = this.providerFor(cwd, sessionId);
+        if (!(await provider.available().catch(() => false)))
+            return undefined;
+        const exact = await this.manifestAt(cwd, sessionId, targetTurn, provider);
         if (exact !== undefined)
             return { manifest: exact, degraded: false };
-        const earlier = this.manifests
-            .filter(item => item.sessionId === sessionId && item.turn < targetTurn)
-            .sort((a, b) => b.turn - a.turn || b.createdAt - a.createdAt)[0];
+        const points = await this.listPoints(cwd, sessionId, provider);
+        const earlier = points.filter(item => item.turn < targetTurn).sort((a, b) => b.turn - a.turn)[0];
         if (earlier === undefined)
             return undefined;
         return { manifest: earlier, degraded: true };
+    }
+    async listPoints(cwd, sessionId, provider = this.providerFor(cwd, sessionId)) {
+        const refs = await provider.listRefsWithMeta(POINTS_PREFIX).catch(() => []);
+        return refs.map(entry => {
+            const turn = Number(entry.ref.slice(POINTS_PREFIX.length)) || 0;
+            const manifest = {
+                snapshotId: `${sessionId}:${turn}:${entry.sha.slice(0, 8)}`,
+                sessionId,
+                turn,
+                cwd,
+                ...(entry.tree === '' ? {} : { tree: entry.tree }),
+                createdAt: entry.createdAt > 0 ? entry.createdAt * 1000 : Date.now(),
+                mode: 'git',
+            };
+            return manifest;
+        }).sort((a, b) => a.turn - b.turn);
     }
     async ensureTreeAvailable(manifest, provider) {
         if (manifest.tree === undefined)
@@ -228,94 +239,31 @@ export class SnapshotManager {
             ...(degraded ? { degraded: true } : {}),
         };
     }
-    async listForSession(sessionId) {
-        await this.load();
-        return this.manifests
-            .filter(item => item.sessionId === sessionId)
-            .sort((a, b) => b.turn - a.turn || b.createdAt - a.createdAt);
-    }
-    /** All manifests captured in one workspace (any session), oldest first. */
-    async listForWorkspace(cwd) {
-        await this.load();
-        const resolved = path.resolve(cwd);
-        return this.manifests
-            .filter(item => path.resolve(item.cwd) === resolved)
-            .sort((a, b) => a.createdAt - b.createdAt || a.snapshotId.localeCompare(b.snapshotId));
-    }
-    async load() {
-        if (this.loaded)
+    /** Drop the oldest points beyond `maxSnapshotsPerSession`. */
+    async prune(cwd, sessionId, provider) {
+        const points = await this.listPoints(cwd, sessionId, provider);
+        const overflow = points.length - Math.max(1, this.options.maxSnapshotsPerSession);
+        if (overflow <= 0)
             return;
-        this.loaded = true;
-        const store = await this.domainStore();
-        if (store !== undefined) {
-            this.manifests = await store.read();
-            return;
-        }
-        this.manifests = await readJsonFile(manifestsPath(), []);
+        await provider.deleteRefs(points.slice(0, overflow).map(item => pointRef(item.turn)));
     }
-    enqueuePersist(next) {
-        this.manifests = next;
-        this.writeTail = this.writeTail
-            .catch(() => undefined)
-            .then(async () => {
-            const store = await this.domainStore();
-            if (store !== undefined)
-                await store.write(this.manifests);
-            await writeJsonFileAtomic(manifestsPath(), this.manifests);
-        })
-            .catch(() => undefined);
-    }
-    /** Open the storage-domain table when the Host composition provides one. */
-    domainStore() {
-        this.domainStorePromise ??= this.openDomainStore().catch((error) => {
-            if (this.ctx !== undefined)
-                this.ctx.logger.warn('rollback: storage-domain unavailable, using JSON manifests:', error);
+    async manifestAt(cwd, sessionId, turn, provider) {
+        const commit = await provider.readRef(pointRef(turn));
+        if (commit === undefined)
             return undefined;
-        });
-        return this.domainStorePromise;
-    }
-    async openDomainStore() {
-        if (this.ctx === undefined)
-            return undefined;
-        const facility = this.ctx.get('storageDomain');
-        if (facility === undefined || typeof facility.open !== 'function')
-            return undefined;
-        const [domainModule, schemaModule] = await Promise.all([
-            import('@deepseek-ai/dsh-storage-domain'),
-            import('@deepseek-ai/schemastery'),
-        ]);
-        const z = schemaModule.default;
-        const spec = domainModule.defineDomain({
-            name: 'rollback',
-            version: 1,
-            tables: {
-                manifests: domainModule.domainTable(z.any()),
-            },
-        });
-        const domain = await facility.open(spec);
-        const table = domain.table('manifests');
+        const tree = await provider.treeOf(commit).catch(() => undefined);
         return {
-            read: async () => {
-                const value = table.get('manifests');
-                return Array.isArray(value?.items) ? value.items : [];
-            },
-            write: async (value) => table.put('manifests', { items: value }),
+            snapshotId: `${sessionId}:${turn}:${commit.slice(0, 8)}`,
+            sessionId,
+            turn,
+            cwd,
+            ...(tree === undefined ? {} : { tree }),
+            createdAt: Date.now(),
+            mode: 'git',
         };
     }
 }
-function trimManifests(manifests, maxPerSession) {
-    const bySession = new Map();
-    for (const manifest of manifests) {
-        const list = bySession.get(manifest.sessionId) ?? [];
-        list.push(manifest);
-        bySession.set(manifest.sessionId, list);
-    }
-    const result = [];
-    for (const list of bySession.values())
-        result.push(...list.slice(-maxPerSession));
-    return result;
-}
-function turnStartSeq(session, turn) {
-    const event = session.snapshotEvents().find(item => item.type === 'turn/start' && item.data.turn === turn);
-    return event?.seq;
+/** `refs/dsh/points/<nnnn>`: zero padded so ref order equals turn order. */
+export function pointRef(turn) {
+    return `${POINTS_PREFIX}${String(Math.max(0, Math.trunc(turn))).padStart(4, '0')}`;
 }

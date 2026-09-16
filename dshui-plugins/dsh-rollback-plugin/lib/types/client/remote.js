@@ -1,7 +1,7 @@
 import { jsonCodec } from "../shared/json-codec.js";
 const packageName = 'dsh-rollback-plugin';
-function parameter(name) {
-    return { name, wire: name, source: 'json', codec: jsonCodec('dsh-rollback-plugin#JsonValue') };
+function parameter(name, extra) {
+    return { name, wire: name, source: 'json', codec: jsonCodec('dsh-rollback-plugin#JsonValue'), ...extra };
 }
 /** Consumer-side contribution; mirrors the Host descriptors in ../host/typert.ts. */
 export const ROLLBACK_REMOTE = {
@@ -33,7 +33,9 @@ export const ROLLBACK_REMOTE = {
             namespace: 'rollback',
             method: 'openAt',
             invocation: { kind: 'direct' },
-            parameters: [parameter('sessionId'), parameter('path'), parameter('line')],
+            // `line` is optional and the wire drops undefined fields; the Host
+            // descriptor carries the matching `acceptsUndefined` contract.
+            parameters: [parameter('sessionId'), parameter('path'), parameter('line', { acceptsUndefined: true })],
             cancellation: { parameter: 'signal' },
             result: jsonCodec('dsh-rollback-plugin#RemoteResult'),
         },
@@ -122,6 +124,16 @@ export const ROLLBACK_REMOTE = {
             service: 'rollback',
             namespace: 'rollback',
             method: 'undoModification',
+            invocation: { kind: 'direct' },
+            parameters: [parameter('request')],
+            cancellation: { parameter: 'signal' },
+            result: jsonCodec('dsh-rollback-plugin#RemoteResult'),
+        },
+        {
+            id: `${packageName}#rollback/undoHunks`,
+            service: 'rollback',
+            namespace: 'rollback',
+            method: 'undoHunks',
             invocation: { kind: 'direct' },
             parameters: [parameter('request')],
             cancellation: { parameter: 'signal' },

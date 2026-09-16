@@ -36,6 +36,7 @@ export const ROLLBACK_HOST_TYPERT = {
                     { kind: 'method', name: 'acceptModification', signature: '@Remote acceptModification(request: RollbackAcceptModificationRequest, signal?: AbortSignal): Promise<RollbackAcceptResult>' },
                     { kind: 'method', name: 'undoFile', signature: '@Remote undoFile(request: RollbackUndoFileRequest, signal?: AbortSignal): Promise<RollbackUndoFileResult>' },
                     { kind: 'method', name: 'undoModification', signature: '@Remote undoModification(request: RollbackUndoModificationRequest, signal?: AbortSignal): Promise<RollbackUndoModificationResult>' },
+                    { kind: 'method', name: 'undoHunks', signature: '@Remote undoHunks(request: RollbackUndoHunksRequest, signal?: AbortSignal): Promise<RollbackUndoHunksResult>' },
                 ],
                 types: [],
             }],
@@ -53,7 +54,12 @@ export const ROLLBACK_HOST_TYPERT = {
         invocation('openAt', [
             { name: 'sessionId', wire: 'sessionId', source: 'json', codec: jsonCodec('dsh-rollback-plugin#JsonValue') },
             { name: 'path', wire: 'path', source: 'json', codec: jsonCodec('dsh-rollback-plugin#JsonValue') },
-            { name: 'line', wire: 'line', source: 'json', codec: jsonCodec('dsh-rollback-plugin#JsonValue') },
+            // `line` is optional (`line?: number`): the Client gateway drops undefined
+            // wire fields, and the Host gateway rejects an absent field unless the
+            // descriptor declares `acceptsUndefined`. Without this flag every openAt
+            // without a line (accepted rows and hunk-less files) fails with
+            // `gateway/arguments-invalid: missing "line"` and nothing opens.
+            { name: 'line', wire: 'line', source: 'json', codec: jsonCodec('dsh-rollback-plugin#JsonValue'), acceptsUndefined: true },
         ], true),
         invocation('status', [
             { name: 'sessionId', wire: 'sessionId', source: 'json', codec: jsonCodec('dsh-rollback-plugin#JsonValue') },
@@ -81,6 +87,9 @@ export const ROLLBACK_HOST_TYPERT = {
             { name: 'request', wire: 'request', source: 'json', codec: jsonCodec('dsh-rollback-plugin#JsonValue') },
         ], true),
         invocation('undoModification', [
+            { name: 'request', wire: 'request', source: 'json', codec: jsonCodec('dsh-rollback-plugin#JsonValue') },
+        ], true),
+        invocation('undoHunks', [
             { name: 'request', wire: 'request', source: 'json', codec: jsonCodec('dsh-rollback-plugin#JsonValue') },
         ], true),
     ],

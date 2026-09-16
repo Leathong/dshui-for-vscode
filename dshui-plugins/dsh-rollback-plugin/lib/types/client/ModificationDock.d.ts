@@ -2,7 +2,7 @@ import type { ReactElement } from 'react';
 import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots';
 import type { SessionEventSource, SessionSnapshot } from '@deepseek-ai/dsh-api-session-controller/client';
 import type { RemoteResult } from '@deepseek-ai/dsh-typert-protocol';
-import type { OpenAtResult, RollbackAcceptResult, RollbackSessionChangesResult, RollbackUndoFileResult, RollbackUndoModificationResult } from '../shared/types.ts';
+import type { OpenAtResult, RollbackAcceptResult, RollbackSessionChangesResult, RollbackUndoFileResult, RollbackUndoHunksResult, RollbackUndoModificationResult } from '../shared/types.ts';
 export interface ModificationDockInjected {
     sessionChanges: () => Promise<RemoteResult<RollbackSessionChangesResult>>;
     acceptAll: (listId: string) => Promise<RemoteResult<RollbackAcceptResult>>;
@@ -11,6 +11,8 @@ export interface ModificationDockInjected {
     acceptModification: (modificationId: string, path: string, listId: string) => Promise<RemoteResult<RollbackAcceptResult>>;
     undoFile: (path: string, listId: string) => Promise<RemoteResult<RollbackUndoFileResult>>;
     undoModification: (modificationId: string, listId: string) => Promise<RemoteResult<RollbackUndoModificationResult>>;
+    /** Undo single hunks of one file (forward complement, no reverse patch). */
+    undoHunks: (path: string, hunks: number[], listId: string) => Promise<RemoteResult<RollbackUndoHunksResult>>;
     openAt: (path: string, line?: number) => Promise<RemoteResult<OpenAtResult>>;
     /**
      * Live session event window. The host appends session events (turns, tool

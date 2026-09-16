@@ -1,5 +1,5 @@
 import type { RemoteResult } from '@deepseek-ai/dsh-typert-protocol';
-import type { OpenAtResult, RollbackAcceptAllRequest, RollbackAcceptAllResult, RollbackAcceptFileRequest, RollbackAcceptModificationRequest, RollbackAcceptResult, RollbackExecuteRequest, RollbackExecuteResult, RollbackPrepareResult, RollbackPrepareTurnResult, RollbackSessionChangesResult, RollbackStatusResult, RollbackUndoAllRequest, RollbackUndoAllResult, RollbackUndoFileRequest, RollbackUndoFileResult, RollbackUndoModificationRequest, RollbackUndoModificationResult } from './types.ts';
+import type { OpenAtResult, RollbackAcceptAllRequest, RollbackAcceptAllResult, RollbackAcceptFileRequest, RollbackAcceptModificationRequest, RollbackAcceptResult, RollbackExecuteRequest, RollbackExecuteResult, RollbackPrepareResult, RollbackPrepareTurnResult, RollbackSessionChangesResult, RollbackStatusResult, RollbackUndoAllRequest, RollbackUndoAllResult, RollbackUndoFileRequest, RollbackUndoFileResult, RollbackUndoHunksRequest, RollbackUndoHunksResult, RollbackUndoModificationRequest, RollbackUndoModificationResult } from './types.ts';
 export interface RollbackRemote {
     prepare(sessionId: string, messageId: string): Promise<RemoteResult<RollbackPrepareResult>>;
     execute(request: RollbackExecuteRequest): Promise<RemoteResult<RollbackExecuteResult>>;
@@ -13,6 +13,7 @@ export interface RollbackRemote {
     acceptModification(request: RollbackAcceptModificationRequest): Promise<RemoteResult<RollbackAcceptResult>>;
     undoFile(request: RollbackUndoFileRequest): Promise<RemoteResult<RollbackUndoFileResult>>;
     undoModification(request: RollbackUndoModificationRequest): Promise<RemoteResult<RollbackUndoModificationResult>>;
+    undoHunks(request: RollbackUndoHunksRequest): Promise<RemoteResult<RollbackUndoHunksResult>>;
 }
 declare module '@deepseek-ai/dsh-typert-protocol' {
     interface TypertRemoteMap {
@@ -28,6 +29,7 @@ declare module '@deepseek-ai/dsh-typert-protocol' {
         'rollback/acceptModification'(request: RollbackAcceptModificationRequest): Promise<RemoteResult<RollbackAcceptResult>>;
         'rollback/undoFile'(request: RollbackUndoFileRequest): Promise<RemoteResult<RollbackUndoFileResult>>;
         'rollback/undoModification'(request: RollbackUndoModificationRequest): Promise<RemoteResult<RollbackUndoModificationResult>>;
+        'rollback/undoHunks'(request: RollbackUndoHunksRequest): Promise<RemoteResult<RollbackUndoHunksResult>>;
     }
     interface TypertRemoteNamespaceMap {
         rollback: RollbackRemote;

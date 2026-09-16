@@ -42,6 +42,7 @@ const DOCK_CSS = '.dsh-mod-dock{box-sizing:border-box;width:calc(100% - var(--ds
     '.dsh-mod-file-path{min-width:0;flex:auto;display:flex;align-items:center;gap:6px;background:0 0;border:none;cursor:pointer;text-align:left;color:var(--dsw-alias-label-primary);font:var(--dsw-font-xs-13);font-family:Inter,var(--dsw-font-family);padding:0;text-overflow:ellipsis;white-space:nowrap;overflow:hidden}' +
     '.dsh-mod-file-path:hover{text-decoration:underline}' +
     '.dsh-mod-status{flex:none;font-size:11px;color:var(--dsw-alias-label-tertiary);white-space:nowrap}' +
+    '.dsh-mod-foreign{flex:none;font-size:11px;line-height:16px;color:#b8860b;border:1px solid #b8860b;border-radius:999px;padding:0 6px;white-space:nowrap}' +
     '.dsh-mod-status-dot{flex:none;width:8px;height:8px;border-radius:999px;background:var(--dsw-alias-state-business-primary)}' +
     '.dsh-mod-status-modified{background:var(--dsw-alias-state-business-primary)}' +
     '.dsh-mod-status-created{background:#2ea043}' +
@@ -149,6 +150,7 @@ export async function apply(ctx) {
                 acceptModification: (modificationId, path, listId) => rollback.acceptModification({ sessionId, modificationId, path, listId }),
                 undoFile: (path, listId) => rollback.undoFile({ sessionId, path, listId }),
                 undoModification: (modificationId, listId) => rollback.undoModification({ sessionId, modificationId, listId }),
+                undoHunks: (path, hunks, listId) => rollback.undoHunks({ sessionId, path, hunks, listId }),
                 openAt: (path, line) => rollback.openAt(sessionId, path, line),
                 // Live session event window so the dock refreshes on host-side
                 // modification activity (tool results, turn boundaries) instead of

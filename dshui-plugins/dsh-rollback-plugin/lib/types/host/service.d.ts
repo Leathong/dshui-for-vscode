@@ -1,18 +1,16 @@
 import type { Context } from '@deepseek-ai/cordis';
 import { TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol';
-import type { OpenAtResult, RollbackAcceptAllRequest, RollbackAcceptAllResult, RollbackAcceptFileRequest, RollbackAcceptModificationRequest, RollbackAcceptResult, RollbackExecuteRequest, RollbackExecuteResult, RollbackPrepareResult, RollbackPrepareTurnResult, RollbackSessionChangesResult, RollbackStatusResult, RollbackUndoAllRequest, RollbackUndoAllResult, RollbackUndoFileRequest, RollbackUndoFileResult, RollbackUndoModificationRequest, RollbackUndoModificationResult } from '../shared/types.ts';
+import type { OpenAtResult, RollbackAcceptAllRequest, RollbackAcceptAllResult, RollbackAcceptFileRequest, RollbackAcceptModificationRequest, RollbackAcceptResult, RollbackExecuteRequest, RollbackExecuteResult, RollbackPrepareResult, RollbackPrepareTurnResult, RollbackSessionChangesResult, RollbackStatusResult, RollbackUndoAllRequest, RollbackUndoAllResult, RollbackUndoFileRequest, RollbackUndoFileResult, RollbackUndoHunksRequest, RollbackUndoHunksResult, RollbackUndoModificationRequest, RollbackUndoModificationResult } from '../shared/types.ts';
 import type { RollbackCordisContext } from './context.ts';
-import { AcceptLedger } from './accepts.ts';
-import { ChangeLedger } from './ledger.ts';
+import { AcceptBase } from './accept-base.ts';
 import { RollbackRestore } from './restore.ts';
 import { RollbackSafety } from './safety.ts';
 import { SessionChangeManager } from './session-changes.ts';
 import { SnapshotManager } from './snapshot.ts';
+import { CallTracker } from './tracking.ts';
 export interface RollbackHostConfig {
     enabled: boolean;
     snapshotOnPreStep: boolean;
-    ledgerMaxTextBytes: number;
-    maxLedgerRecordsPerSession: number;
     maxSnapshotsPerSession: number;
     maxDiffHunksPerFile: number;
     maxDiffBytesPerFile: number;
@@ -20,17 +18,25 @@ export interface RollbackHostConfig {
     guardRetentionMs: number;
     lockStaleMs: number;
     spawnTimeoutMs: number;
+    /** Turn-level capture of per-call tracked writes (git-native model). */
+    trackingEnabled: boolean;
+    /** Per-call blob capture ceiling; larger writes stay turn-level only. */
+    maxBlobBytes: number;
+    /** In-memory per-call history retained per session. */
+    maxTrackedCallsPerSession: number;
+    /** Diff context lines used for hunk views and hunk undo. */
+    diffContextLines: number;
 }
 export declare const DEFAULT_ROLLBACK_CONFIG: RollbackHostConfig;
 export declare class RollbackService extends TypertRemoteService {
     readonly host: RollbackCordisContext;
     readonly config: RollbackHostConfig;
     readonly snapshots: SnapshotManager;
-    readonly ledger: ChangeLedger;
     readonly safety: RollbackSafety;
-    readonly accepts: AcceptLedger;
+    readonly acceptBase: AcceptBase;
     readonly restore: RollbackRestore;
     readonly sessionChangeManager: SessionChangeManager;
+    readonly tracker: CallTracker;
     constructor(ctx: Context, config?: Partial<RollbackHostConfig>);
     prepare(sessionId: string, messageId: string, _signal?: AbortSignal): Promise<RollbackPrepareResult>;
     execute(request: RollbackExecuteRequest, _signal?: AbortSignal): Promise<RollbackExecuteResult>;
@@ -44,4 +50,5 @@ export declare class RollbackService extends TypertRemoteService {
     undoAll(request: RollbackUndoAllRequest, _signal?: AbortSignal): Promise<RollbackUndoAllResult>;
     undoFile(request: RollbackUndoFileRequest, _signal?: AbortSignal): Promise<RollbackUndoFileResult>;
     undoModification(request: RollbackUndoModificationRequest, _signal?: AbortSignal): Promise<RollbackUndoModificationResult>;
+    undoHunks(request: RollbackUndoHunksRequest, _signal?: AbortSignal): Promise<RollbackUndoHunksResult>;
 }

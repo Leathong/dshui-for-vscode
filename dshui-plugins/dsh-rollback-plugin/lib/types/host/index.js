@@ -22,9 +22,22 @@ export function apply(ctx, options = {}) {
         // snapshot already covers the whole turn the subagent runs in. Capturing
         // per-subagent snapshots would only pollute the workspace timeline with
         // manifests no modification list ever queries.
-        if (payload.step === 1 && service.config.snapshotOnPreStep && !isSubagentSession(payload.agent.session)) {
+        const session = payload.agent.session;
+        const cwd = session.header?.cwd;
+        if (payload.step === 1 && service.config.trackingEnabled && cwd !== undefined && cwd !== '' && !isSubagentSession(session)) {
             try {
-                await service.snapshots.capture(payload.agent.session, payload.turn);
+                // Freeze the previous turn's per-call chain before the new turn starts,
+                // then make sure the chain base exists for the turn about to run.
+                await service.tracker.flush(session.id);
+                await service.tracker.ensureBase(session.id, cwd);
+            }
+            catch (error) {
+                host.logger.warn('rollback call tracking skipped:', error);
+            }
+        }
+        if (payload.step === 1 && service.config.snapshotOnPreStep && !isSubagentSession(session)) {
+            try {
+                await service.snapshots.capture(session, payload.turn);
             }
             catch (error) {
                 host.logger.warn('rollback snapshot skipped:', error);
@@ -32,25 +45,26 @@ export function apply(ctx, options = {}) {
         }
         return next();
     }, { prepend: true });
-    installLedgerListeners(ctx, service);
-    void service.safety.reconcileRunning(host, service.snapshots, service.ledger).catch((error) => {
+    installTrackingListeners(ctx, service);
+    void service.safety.reconcileRunning(host, service.snapshots).catch((error) => {
         host.logger.warn('rollback startup reconciliation skipped:', error);
     });
 }
-export function installLedgerListeners(ctx, service) {
+/**
+ * Per-call tracking listens to `fs/observed` only: the git-native model needs
+ * no before-image, so the write/edit *intent* hooks (and their synchronous
+ * whole-file read on the tool critical path) are gone.
+ */
+export function installTrackingListeners(ctx, service) {
     const host = ctx;
-    ctx.on('fs/write-intent', (target, actor, next) => {
-        return service.ledger.captureWriteBefore(target, actor, next);
-    }, { prepend: true });
-    ctx.on('fs/edit-intent', (target, actor, next) => {
-        return service.ledger.captureEditBefore(target, actor, next);
-    }, { prepend: true });
     ctx.on('fs/observed', (target, observation, actor) => {
+        if (!service.config.trackingEnabled)
+            return;
         try {
-            service.ledger.observe(target, observation, actor);
+            service.tracker.observe(target, observation, actor);
         }
         catch (error) {
-            host.logger.warn('rollback ledger observation failed:', error);
+            host.logger.warn('rollback call tracking failed:', error);
         }
     });
 }

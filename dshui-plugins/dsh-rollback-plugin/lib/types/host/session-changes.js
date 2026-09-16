@@ -1,876 +1,671 @@
 import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
-import * as path from 'node:path';
-import { ok, fail } from "./errors.js";
-import { sandboxPolicyFor } from "./fs-policy.js";
-import { createdFileHunks, lineDiffHunks, normalizeLf } from "./ledger.js";
-import { buildModificationsFromRecords, parseRecordArgs } from "./restore.js";
-import { restoreModification } from "./modification.js";
-/** Default bound on stored accept-time content; matches the ledger text bound. */
-const DEFAULT_ACCEPT_CONTENT_MAX_BYTES = 256 * 1024;
-/**
- * The session modification list: a live, session-wide diff against the
- * earliest session snapshot merged with ledger-covered tool changes, plus
- * accept markers and per-file / per-patch undo mutations.
- */
+import { ok } from "./errors.js";
+import { applyHunkUndo, patchFileViews, replayPatches } from "./hunk-undo.js";
 export class SessionChangeManager {
     ctx;
     snapshots;
-    ledger;
-    safety;
+    tracker;
     accepts;
+    safety;
     options;
     bound = new Map();
-    constructor(ctx, snapshots, ledger, safety, accepts, options) {
+    constructor(ctx, snapshots, tracker, accepts, safety, options) {
         this.ctx = ctx;
         this.snapshots = snapshots;
-        this.ledger = ledger;
-        this.safety = safety;
+        this.tracker = tracker;
         this.accepts = accepts;
+        this.safety = safety;
         this.options = options;
-    }
-    /** Bound (bytes) on accept-time content snapshots kept as later diff baselines. */
-    get acceptContentMaxBytes() {
-        return this.options.acceptContentMaxBytes ?? DEFAULT_ACCEPT_CONTENT_MAX_BYTES;
     }
     async sessionChanges(sessionId) {
         const live = this.liveSession(sessionId);
         if (!live.ok)
             return live;
         const session = live.value;
-        const cwd = session.header.cwd;
-        if (cwd === undefined) {
-            return fail('session-not-live', `session "${sessionId}" has no workspace cwd`);
-        }
-        const manifests = await this.snapshots.listForSession(sessionId);
-        const earliest = manifests[manifests.length - 1];
-        const provider = this.snapshots.providerFor(cwd, sessionId);
-        const gitAvailable = await provider.available();
+        const cwd = session.header.cwd ?? '';
+        if (cwd === '')
+            return failure('session-not-live', `session "${sessionId}" has no workspace cwd`, { sessionId });
         const warnings = [];
-        let preparedTree;
-        let baselineUsable = false;
-        let changes = [];
-        if (earliest !== undefined && earliest.tree !== undefined && gitAvailable) {
-            if (!(await this.snapshots.ensureTreeAvailable(earliest, provider))) {
-                warnings.push('the session baseline snapshot objects are no longer available (the session store was removed); only ledger-covered paths are shown');
+        const provider = this.snapshots.providerFor(cwd, sessionId);
+        if (!(await provider.available().catch(() => false))) {
+            return failure('rollback-failed', 'the isolated git snapshot repository is unavailable for this workspace', { sessionId });
+        }
+        // Freeze pending calls first so the patch list matches the worktree, then
+        // diff the whole worktree against the accepted baseline in one process.
+        await this.tracker.flush(sessionId);
+        const sessionBase = await this.seedTree(sessionId, cwd);
+        if (sessionBase === undefined) {
+            warnings.push('this session has no chain base, so already-accepted files cannot be listed');
+        }
+        // `requireSeed` keeps the list path from inventing a baseline out of the
+        // current worktree — that would silently absorb every other session's
+        // content as "accepted here" and hide this session's pending writes.
+        const accepted = await this.accepts.ensure(cwd, sessionId, sessionBase, { requireSeed: true });
+        if (accepted === undefined) {
+            if (sessionBase === undefined) {
+                // Nothing has been attributed to this session yet and no accept
+                // baseline exists: report an empty list rather than fabricating one.
+                return ok(this.emptyValue(session, warnings));
             }
-            else {
-                baselineUsable = true;
-                preparedTree = await provider.captureTree();
-                const entries = await provider.diffEntries(earliest.tree, preparedTree);
-                const ownWindows = await this.ownWindowPaths(sessionId, cwd, earliest.tree, preparedTree, entries, provider);
-                const ledgerPaths = this.ledger.pathsForSession(sessionId, cwd);
-                const foreignPaths = this.ledger.foreignPathsForSession(sessionId, cwd);
-                const nestedRoots = await this.materializedNestedRoots(provider);
-                // Hunks for modified/deleted/typechanged files are fetched in one git
-                // process instead of one spawn per file.
-                const deferredPaths = new Set();
-                for (const entry of entries) {
-                    if (entry.oldMode === '160000' || entry.newMode === '160000') {
-                        // Materialization is best-effort: a nested repository whose
-                        // gitlink survived capture (discovery failure, commitless child,
-                        // or the per-capture cap) is excluded, exactly like before.
-                        warnings.push(entry.oldMode !== '160000'
-                            ? `nested git repository "${entry.path}" appeared after the baseline snapshot; it is outside the list scope and will not be deleted or restored`
-                            : `nested git repository "${entry.path}" is still tracked as a gitlink; its internal changes are outside the list scope (only tool-written files inside it can be restored)`);
-                        continue;
-                    }
-                    // Attribution: a path belongs to this session's list only when it
-                    // changed during one of this session's own snapshot windows or is
-                    // claimed by this session's ledger. Paths claimed solely by other
-                    // sessions' ledgers never leak in, even when window attribution is
-                    // unavailable or the other session left no snapshot behind.
-                    const windowClaimed = ownWindows === undefined || ownWindows.has(entry.path);
-                    const ledgerClaimed = ledgerPaths.has(entry.path);
-                    if ((!windowClaimed && !ledgerClaimed) || (foreignPaths.has(entry.path) && !ledgerClaimed))
-                        continue;
-                    if (entry.status === 'A') {
-                        const abs = provider.absolutePath(entry.path);
-                        const hunks = await createdFileHunks(abs, this.options.maxDiffBytesPerFile);
-                        changes.push({
-                            path: entry.path,
-                            absolutePath: abs,
-                            status: 'created',
-                            source: 'git',
-                            restorable: false,
-                            createdAfterSnapshot: true,
-                            ...(this.isWithinNestedRoots(entry.path, nestedRoots) ? { nested: true } : {}),
-                            ...(hunks.length > 0 ? { hunks } : {}),
-                        });
-                        continue;
-                    }
-                    deferredPaths.add(entry.path);
-                    changes.push({
-                        path: entry.path,
-                        absolutePath: provider.absolutePath(entry.path),
-                        status: entry.status === 'D' ? 'deleted' : entry.status === 'T' ? 'typechange' : 'modified',
-                        source: 'git',
-                        restorable: true,
-                        ...(this.isWithinNestedRoots(entry.path, nestedRoots) ? { nested: true } : {}),
-                    });
-                }
-                if (deferredPaths.size > 0) {
-                    const diffMap = await provider.diffHunksBatched(earliest.tree, preparedTree, [...deferredPaths].sort())
-                        .catch(() => undefined);
-                    for (const change of changes) {
-                        if (!deferredPaths.has(change.path))
-                            continue;
-                        const diff = diffMap?.get(change.path)
-                            ?? await provider.diffHunks(earliest.tree, preparedTree, change.path);
-                        if (diff.binary) {
-                            change.binary = true;
-                            if (change.status === 'modified')
-                                change.status = 'binary';
-                        }
-                        if (diff.truncated)
-                            change.truncated = true;
-                        if (diff.hunks.length > 0)
-                            change.hunks = diff.hunks;
-                    }
-                }
-            }
+            return failure('rollback-failed', 'no accepted baseline could be established for this session', { sessionId });
         }
-        else if (earliest !== undefined && earliest.tree !== undefined) {
-            warnings.push('workspace is no longer inside a git work tree; only ledger-covered paths are shown');
-        }
-        if (earliest === undefined) {
-            warnings.push('no session baseline snapshot yet; only ledger-covered tool modifications are listed');
-        }
-        const ledgerChanges = await this.ledger.buildSessionFileChanges(sessionId, cwd, gitAvailable && baselineUsable ? 'ignored' : 'fallback');
-        const byPath = new Map();
-        for (const change of changes)
-            byPath.set(change.path, change);
-        for (const change of ledgerChanges) {
-            if (byPath.has(change.path))
-                continue;
-            byPath.set(change.path, change);
-        }
-        changes = [...byPath.values()];
-        if (!gitAvailable) {
-            warnings.push('workspace is not inside a git work tree; only tool write/edit modifications captured by the ledger can be restored');
-        }
-        const modifications = buildModificationsFromRecords(cwd, session.snapshotEvents(), this.ledger.list(sessionId), record => this.ledger.laterModifications(sessionId, record.path, record));
-        this.attachToolCalls(changes, modifications);
-        // Reading a whole file only to hash it is the most expensive per-change
-        // step, so fingerprint only files that actually have an accept record.
+        // Stage the paths this session wrote so created (and ignored) files show up
+        // in the worktree diff at all, and so the diff stays session-scoped.
+        const trackedPaths = [...new Set((await this.tracker.loadCalls(cwd, sessionId)).map(call => call.path))];
+        const patch = await provider.withScratch(async (scratch) => {
+            await provider.readTree(scratch, accepted);
+            await provider.stagePaths(scratch, trackedPaths);
+            return provider.diffPatch(accepted, undefined, [], {
+                context: this.options.diffContextLines,
+                indexFile: scratch,
+            });
+        });
+        const allViews = patchFileViews(patch, this.options.maxDiffHunksPerFile, this.options.maxDiffBytesPerFile);
+        // Session scoping: only paths this session actually wrote belong to the
+        // list. This replaces the old cross-session activity-window attribution.
+        const sessionPaths = new Set(trackedPaths);
+        const views = allViews.filter(view => sessionPaths.has(view.path));
+        const nestedRoots = await this.nestedRoots(provider);
+        const probe = new Map();
+        const changes = views.map(view => {
+            probe.set(view.path, view.newBlob);
+            const nested = nestedRoots.some(root => view.path === root || view.path.startsWith(`${root}/`));
+            const created = view.status === 'added';
+            return {
+                path: view.path,
+                absolutePath: provider.absolutePath(view.path),
+                status: created ? 'created'
+                    : view.status === 'deleted' ? 'deleted'
+                        : view.binary ? 'binary'
+                            : 'modified',
+                source: 'git',
+                restorable: !view.binary && !nested,
+                accepted: false,
+                ...(created ? { createdAfterSnapshot: true } : {}),
+                ...(view.binary ? { binary: true } : {}),
+                ...(view.truncated ? { truncated: true } : {}),
+                ...(nested ? { nested: true } : {}),
+                ...(view.view.length > 0 ? { hunks: view.view } : {}),
+            };
+        });
+        // Per-call patches, plus the post-image blob of the newest call per path so
+        // "this session changed the file after accepting it" can be told apart from
+        // a write by another session (or by hand).
+        const { items: modifications, latestBlob, attributable } = await this.modifications(session, cwd, provider, accepted, views);
+        // The current content is provably *not* ours only when the newest tracked
+        // call has a usable post-image that differs from the worktree. Calls with
+        // no post-image at all (oversized, superseded, unavailable) stay on this
+        // session's side, matching the previous accept-marker semantics.
+        const ownPending = new Set();
         for (const change of changes) {
-            const record = this.accepts.fileRecord(sessionId, change.path);
-            change.accepted = record === undefined ? false
-                : record.fingerprint === undefined ? true
-                    : this.accepts.fileAccepted(sessionId, change.path, await fingerprintOfAbs(change.absolutePath));
+            const foreign = attributable.get(change.path) === true
+                && latestBlob.get(change.path) !== probe.get(change.path);
+            if (!foreign)
+                ownPending.add(change.path);
         }
-        for (const modification of modifications) {
-            modification.accepted = this.accepts.modificationAccepted(sessionId, modification.modificationId);
-        }
-        // A file accepted earlier and changed again re-enters the list; its diff
-        // baseline must be the accepted content, not the earliest snapshot, so
-        // only the post-accept changes are shown.
+        // Rows for what this session already accepted: the accepted tree differs
+        // from the session baseline exactly on the paths accept touched. A path the
+        // session itself re-changed after accepting is suppressed (it is back in the
+        // unaccepted list); a path changed outside the tool chain keeps its accepted
+        // row and is flagged instead.
+        const acceptedRows = await this.acceptedRows(cwd, provider, sessionBase, accepted, changes, ownPending, warnings);
+        const acceptedPaths = new Set(acceptedRows.map(row => row.path));
         for (const change of changes) {
-            if (change.accepted === true)
-                continue;
-            const acceptedContent = this.accepts.acceptedContent(sessionId, change.path);
-            if (acceptedContent === undefined)
-                continue;
-            await this.rebaseHunksOnAccepted(change, acceptedContent);
+            if (acceptedPaths.has(change.path) && !ownPending.has(change.path))
+                change.foreign = true;
+        }
+        attachToolCalls(changes, modifications);
+        for (const rel of this.tracker.oversizedPaths(sessionId)) {
+            if (!probe.has(rel))
+                warnings.push(`"${rel}" exceeds maxBlobBytes and is only rollback-able at turn granularity`);
+        }
+        if (this.tracker.baseDegraded(sessionId)) {
+            warnings.push('the call chain baseline was captured after the session started; the first write to each path has no caller-level patch');
         }
         const listId = crypto.randomUUID();
+        // The bound list is the undo scope: only unaccepted rows (the accepted group
+        // is informational and its paths now equal the accepted baseline).
         this.bound.set(listId, {
             listId,
             sessionId,
             cwd,
-            ...(baselineUsable && earliest !== undefined ? { baseline: earliest } : {}),
-            ...(preparedTree === undefined ? {} : { preparedTree }),
-            gitAvailable,
-            changes: changes.filter(change => change.accepted !== true),
+            accepted,
+            ...(sessionBase === undefined ? {} : { sessionBase }),
+            probe,
+            changes,
             createdAt: Date.now(),
         });
-        // Bound lists are tiny; keep only the most recent ones alive.
         while (this.bound.size > 32) {
             const oldest = this.bound.keys().next().value;
             if (oldest === undefined)
                 break;
             this.bound.delete(oldest);
         }
-        return ok({
+        const allChanges = [...changes, ...acceptedRows];
+        const value = {
             listId,
-            ...(earliest === undefined ? {} : { baseline: baselineInfo(earliest, sessionStartTurn(session)) }),
-            changes,
+            baseline: { turn: sessionStartTurn(session), createdAt: Date.now(), mode: 'git' },
+            changes: allChanges,
             modifications,
-            acceptedFiles: this.accepts.acceptedFiles(sessionId),
-            acceptedModifications: this.accepts.acceptedModifications(sessionId),
+            acceptedFiles: acceptedRows.map(row => row.path),
+            acceptedModifications: modifications.filter(item => item.accepted === true).map(item => item.modificationId),
             warnings: [...new Set(warnings)],
-        });
+        };
+        return ok(value);
     }
     async acceptFile(request) {
-        const bound = this.bound.get(request.listId);
-        if (bound === undefined || bound.sessionId !== request.sessionId) {
-            return fail('workspace-changed', 'the modification list is stale; refresh it and try again', { sessionId: request.sessionId });
-        }
-        const live = this.liveSession(request.sessionId);
-        if (!live.ok)
-            return live;
-        const provider = this.snapshots.providerFor(bound.cwd, bound.sessionId);
-        let rel;
-        try {
-            rel = provider.normalizeRelPath(request.path);
-        }
-        catch {
-            return fail('path-not-in-snapshot', `path "${request.path}" is not a valid workspace path`, { sessionId: request.sessionId });
-        }
-        const acceptSnapshot = await acceptSnapshotOf(provider.absolutePath(rel), this.acceptContentMaxBytes);
-        this.accepts.acceptFile(request.sessionId, rel, acceptSnapshot.fingerprint, acceptSnapshot.content);
-        // Cascade: accepting a file accepts every patch attributed to it.
-        for (const id of this.patchIdsForPath(live.value, bound.cwd, rel)) {
-            this.accepts.acceptModification(request.sessionId, id);
-        }
-        return ok({
-            acceptedFiles: this.accepts.acceptedFiles(request.sessionId),
-            acceptedModifications: this.accepts.acceptedModifications(request.sessionId),
+        const bound = this.requireBound(request.listId, request.sessionId);
+        if (!bound.ok)
+            return bound;
+        const provider = this.snapshots.providerFor(bound.value.cwd, bound.value.sessionId);
+        const rel = safeRel(provider, request.path);
+        if (rel === undefined)
+            return failure('path-not-in-snapshot', `path "${request.path}" is not a valid workspace path`, { sessionId: request.sessionId });
+        const accepted = await this.accepts.acceptPaths(bound.value.cwd, bound.value.sessionId, [rel], {
+            message: 'accept file',
+            ...(bound.value.sessionBase === undefined ? {} : { seedTree: bound.value.sessionBase }),
         });
+        if (!accepted.ok)
+            return failure('rollback-failed', `accepting "${rel}" failed`, { sessionId: request.sessionId, detail: accepted.reason });
+        return ok(await this.acceptValue(bound.value, [rel]));
     }
     async acceptModification(request) {
-        const bound = this.bound.get(request.listId);
-        if (bound === undefined || bound.sessionId !== request.sessionId) {
-            return fail('workspace-changed', 'the modification list is stale; refresh it and try again', { sessionId: request.sessionId });
+        const bound = this.requireBound(request.listId, request.sessionId);
+        if (!bound.ok)
+            return bound;
+        const provider = this.snapshots.providerFor(bound.value.cwd, bound.value.sessionId);
+        const located = await this.locatePatch(bound.value, provider, request.modificationId);
+        if (located === undefined) {
+            return failure('rollback-failed', `patch "${request.modificationId}" is no longer known`, { sessionId: request.sessionId });
         }
-        const live = this.liveSession(request.sessionId);
-        if (!live.ok)
-            return live;
-        this.accepts.acceptModification(request.sessionId, request.modificationId);
-        const provider = this.snapshots.providerFor(bound.cwd, bound.sessionId);
-        let rel;
-        try {
-            rel = provider.normalizeRelPath(request.path);
-        }
-        catch {
-            rel = undefined;
-        }
-        if (rel !== undefined) {
-            const patchIds = this.patchIdsForPath(live.value, bound.cwd, rel);
-            if (patchIds.length > 0 && patchIds.every(id => this.accepts.modificationAccepted(request.sessionId, id))) {
-                const acceptSnapshot = await acceptSnapshotOf(provider.absolutePath(rel), this.acceptContentMaxBytes);
-                this.accepts.acceptFile(request.sessionId, rel, acceptSnapshot.fingerprint, acceptSnapshot.content);
-            }
-        }
-        return ok({
-            acceptedFiles: this.accepts.acceptedFiles(request.sessionId),
-            acceptedModifications: this.accepts.acceptedModifications(request.sessionId),
+        const accepted = await this.accepts.acceptPatch(bound.value.cwd, bound.value.sessionId, located.call.path, located.patch, {
+            ...(bound.value.sessionBase === undefined ? {} : { seedTree: bound.value.sessionBase }),
+            ...(located.view?.oldBlob === undefined ? {} : { beforeBlob: located.view.oldBlob }),
+            ...(located.view?.newBlob === undefined ? {} : { afterBlob: located.view.newBlob }),
         });
+        if (!accepted.ok) {
+            return failure('patch-conflict', `accepting patch "${request.modificationId}" failed`, {
+                sessionId: request.sessionId,
+                detail: accepted.reason,
+                paths: [located.call.path],
+            });
+        }
+        return ok(await this.acceptValue(bound.value, [located.call.path]));
+    }
+    async acceptAll(request) {
+        const bound = this.requireBound(request.listId, request.sessionId);
+        if (!bound.ok)
+            return bound;
+        const paths = bound.value.changes.map(change => change.path);
+        const accepted = await this.accepts.acceptPaths(bound.value.cwd, bound.value.sessionId, paths, {
+            message: 'accept all',
+            ...(bound.value.sessionBase === undefined ? {} : { seedTree: bound.value.sessionBase }),
+        });
+        if (!accepted.ok)
+            return failure('rollback-failed', 'accepting the modification list failed', { sessionId: request.sessionId, detail: accepted.reason });
+        return ok({ acceptedFiles: paths, acceptedModifications: await this.acceptedPatchIds(bound.value, paths) });
     }
     async undoFile(request) {
-        const bound = this.bound.get(request.listId);
-        if (bound === undefined || bound.sessionId !== request.sessionId) {
-            return fail('workspace-changed', 'the modification list is stale; refresh it and try again', { sessionId: request.sessionId });
-        }
-        const live = this.liveSession(request.sessionId);
-        if (!live.ok)
-            return live;
-        const session = live.value;
-        const policy = sandboxPolicyFor(this.ctx, session);
-        const provider = this.snapshots.providerFor(bound.cwd, bound.sessionId);
-        let rel;
-        try {
-            rel = provider.normalizeRelPath(request.path);
-        }
-        catch {
-            return fail('path-not-in-snapshot', `path "${request.path}" is not a valid workspace path`, { sessionId: request.sessionId });
-        }
-        let guardId = '';
-        let journalId;
-        let acquired = false;
-        try {
-            if (bound.preparedTree !== undefined) {
-                const guardTree = await provider.captureTree();
-                if (guardTree !== bound.preparedTree) {
-                    return fail('workspace-changed', 'the workspace changed after the list was read; refresh it and try again', { sessionId: request.sessionId });
-                }
+        const bound = this.requireBound(request.listId, request.sessionId);
+        if (!bound.ok)
+            return bound;
+        const provider = this.snapshots.providerFor(bound.value.cwd, bound.value.sessionId);
+        const rel = safeRel(provider, request.path);
+        if (rel === undefined)
+            return failure('path-not-in-snapshot', `path "${request.path}" is not a valid workspace path`, { sessionId: request.sessionId });
+        const outcome = await this.withUndo(bound.value, [rel], async () => {
+            const acceptedBlob = await this.accepts.acceptedBlob(bound.value.cwd, bound.value.sessionId, rel);
+            if (acceptedBlob === undefined) {
+                await fs.promises.rm(provider.absolutePath(rel), { force: true });
+                return { deleted: [rel], acceptedPaths: [rel] };
             }
-            await this.safety.acquire(bound.cwd);
-            acquired = true;
-            await this.safety.assertFences(this.ctx, bound.cwd, provider);
-            await this.ctx.sessions.flush(session);
-            guardId = (await this.safety.captureGuard(this.ctx, provider, bound.cwd, bound.preparedTree, [rel], this.ledger, bound.sessionId)).guardId;
-            journalId = (await this.safety.journalStart(guardId, [rel])).id;
-            const restored = [];
-            const deleted = [];
-            const kept = [];
-            const skipped = [];
-            try {
-                const baseline = bound.baseline;
-                if (baseline !== undefined && baseline.tree !== undefined) {
-                    const inSnapshot = (await provider.pathsInTree(baseline.tree, rel)).includes(rel);
-                    if (inSnapshot) {
-                        await provider.restorePaths(baseline.tree, [rel]);
-                        const expected = await provider.blobHash(baseline.tree, rel);
-                        const actual = await provider.fileHash(rel);
-                        if (expected !== actual)
-                            throw new Error(`verification failed for ${rel}`);
-                        restored.push(rel);
-                    }
-                    else {
-                        const abs = provider.absolutePath(rel);
-                        if (!fs.existsSync(abs))
-                            skipped.push(rel);
-                        else {
-                            fs.rmSync(abs, { force: true });
-                            deleted.push(rel);
-                        }
-                    }
-                }
-                else {
-                    const earliest = this.ledger.earliestForSessionPath(request.sessionId, provider.absolutePath(rel));
-                    if (earliest === undefined) {
-                        throw new Error(`no ledger baseline is available for ${rel}`);
-                    }
-                    const outcome = await this.ledger.restoreLedgerPath(bound.cwd, rel, earliest, 'delete', policy);
-                    if (outcome === 'restored')
-                        restored.push(rel);
-                    else if (outcome === 'deleted')
-                        deleted.push(rel);
-                    else if (outcome === 'kept')
-                        kept.push(rel);
-                    else
-                        skipped.push(rel);
-                }
-                await this.safety.journalUpdate(journalId, 'completed');
-                // Undoing is itself an accept: the restored state leaves the default list.
-                const acceptSnapshot = await acceptSnapshotOf(provider.absolutePath(rel), this.acceptContentMaxBytes);
-                this.accepts.acceptFile(request.sessionId, rel, acceptSnapshot.fingerprint, acceptSnapshot.content);
-                return ok({
-                    guardId,
-                    restored,
-                    deleted,
-                    kept,
-                    skipped,
-                    acceptedFiles: this.accepts.acceptedFiles(request.sessionId),
-                });
-            }
-            catch (error) {
-                await this.safety.rollbackGuard(this.ctx, provider, this.ledger, guardId, [rel], policy).catch(() => undefined);
-                await this.safety.journalUpdate(journalId, 'rolled-back').catch(() => undefined);
-                const code = error instanceof Error && error.message.startsWith('verification failed') ? 'verification-failed' : 'rollback-failed';
-                return fail(code, String(error), { sessionId: request.sessionId, paths: [rel] });
-            }
-        }
-        catch (error) {
-            return this.mutationFailure(error, request.sessionId, bound, guardId, journalId, [rel], policy);
-        }
-        finally {
-            if (acquired)
-                await this.safety.release();
-        }
+            await provider.restorePaths(bound.value.accepted, [rel]);
+            return { restored: [rel], acceptedPaths: [rel] };
+        });
+        if (!outcome.ok)
+            return outcome;
+        const value = {
+            guardId: outcome.guardId,
+            restored: outcome.run.restored ?? [],
+            deleted: outcome.run.deleted ?? [],
+            kept: outcome.run.kept ?? [],
+            skipped: outcome.run.skipped ?? [],
+            acceptedFiles: outcome.run.acceptedPaths,
+        };
+        return ok(value);
     }
     async undoModification(request) {
-        const bound = this.bound.get(request.listId);
-        if (bound === undefined || bound.sessionId !== request.sessionId) {
-            return fail('workspace-changed', 'the modification list is stale; refresh it and try again', { sessionId: request.sessionId });
+        const bound = this.requireBound(request.listId, request.sessionId);
+        if (!bound.ok)
+            return bound;
+        const provider = this.snapshots.providerFor(bound.value.cwd, bound.value.sessionId);
+        const located = await this.locatePatch(bound.value, provider, request.modificationId);
+        if (located === undefined) {
+            return failure('rollback-failed', `patch "${request.modificationId}" is no longer known`, { sessionId: request.sessionId });
         }
-        const live = this.liveSession(request.sessionId);
+        const rel = located.call.path;
+        let results = [];
+        const outcome = await this.withUndo(bound.value, [rel], async () => {
+            const chain = (await this.tracker.loadCalls(bound.value.cwd, bound.value.sessionId))
+                .filter(call => call.path === rel && call.commit !== undefined);
+            const acceptedBlob = await this.accepts.acceptedBlob(bound.value.cwd, bound.value.sessionId, rel);
+            const steps = [];
+            const ids = [];
+            for (const call of chain) {
+                const blob = await this.callBlob(provider, call);
+                if (blob !== undefined && blob === acceptedBlob)
+                    continue;
+                steps.push({ path: rel, patch: await this.callPatch(provider, call) });
+                ids.push(call.callId);
+            }
+            const skip = ids.indexOf(request.modificationId);
+            if (skip < 0) {
+                // Already accepted: nothing to replay, the file is unchanged.
+                results = [{ modificationId: request.modificationId, path: rel, status: 'restored' }];
+                return { acceptedPaths: [] };
+            }
+            const replay = await provider.withScratch(scratch => replayPatches(provider, scratch, bound.value.accepted, steps, new Set([skip])));
+            if (!replay.ok) {
+                results = [{
+                        modificationId: request.modificationId,
+                        path: rel,
+                        status: 'conflict',
+                        ...(replay.reason === undefined ? {} : { detail: replay.reason }),
+                    }];
+                return { acceptedPaths: [] };
+            }
+            results = [{ modificationId: request.modificationId, path: rel, status: 'restored' }];
+            return { restored: [rel], acceptedPaths: [rel] };
+        });
+        if (!outcome.ok)
+            return outcome;
+        return ok({
+            guardId: outcome.guardId,
+            modificationResults: results,
+            acceptedModifications: await this.acceptedPatchIds(bound.value, outcome.run.acceptedPaths),
+        });
+    }
+    async undoHunks(request) {
+        const bound = this.requireBound(request.listId, request.sessionId);
+        if (!bound.ok)
+            return bound;
+        const provider = this.snapshots.providerFor(bound.value.cwd, bound.value.sessionId);
+        const rel = safeRel(provider, request.path);
+        if (rel === undefined)
+            return failure('path-not-in-snapshot', `path "${request.path}" is not a valid workspace path`, { sessionId: request.sessionId });
+        let undone = 0;
+        let conflict;
+        const outcome = await this.withUndo(bound.value, [rel], async () => {
+            const applied = await provider.withScratch(scratch => applyHunkUndo(provider, scratch, {
+                acceptedCommit: bound.value.accepted,
+                path: rel,
+                undo: request.hunks,
+                context: this.options.diffContextLines,
+            }));
+            if (!applied.ok) {
+                conflict = applied.reason ?? 'hunk-conflict';
+                return { acceptedPaths: [] };
+            }
+            undone = applied.undone;
+            return { restored: [rel], acceptedPaths: [rel] };
+        });
+        if (!outcome.ok)
+            return outcome;
+        if (conflict !== undefined) {
+            return failure('hunk-conflict', `undoing hunks of "${rel}" failed`, {
+                sessionId: request.sessionId,
+                detail: conflict,
+                paths: [rel],
+            });
+        }
+        return ok({
+            guardId: outcome.guardId,
+            undone,
+            acceptedFiles: outcome.run.acceptedPaths,
+            acceptedModifications: await this.acceptedPatchIds(bound.value, outcome.run.acceptedPaths),
+        });
+    }
+    async undoAll(request) {
+        const bound = this.requireBound(request.listId, request.sessionId);
+        if (!bound.ok)
+            return bound;
+        const provider = this.snapshots.providerFor(bound.value.cwd, bound.value.sessionId);
+        const paths = bound.value.changes.map(change => provider.normalizeRelPath(change.path));
+        const outcome = await this.withUndo(bound.value, paths, async () => {
+            const restored = [];
+            const deleted = [];
+            for (const rel of paths) {
+                const acceptedBlob = await this.accepts.acceptedBlob(bound.value.cwd, bound.value.sessionId, rel);
+                if (acceptedBlob === undefined) {
+                    await fs.promises.rm(provider.absolutePath(rel), { force: true });
+                    deleted.push(rel);
+                }
+                else {
+                    restored.push(rel);
+                }
+            }
+            if (restored.length > 0)
+                await provider.restorePaths(bound.value.accepted, restored);
+            return { restored, deleted, acceptedPaths: paths };
+        });
+        if (!outcome.ok)
+            return outcome;
+        const value = {
+            guardId: outcome.guardId,
+            restored: outcome.run.restored ?? [],
+            deleted: outcome.run.deleted ?? [],
+            kept: outcome.run.kept ?? [],
+            skipped: outcome.run.skipped ?? [],
+            acceptedFiles: outcome.run.acceptedPaths,
+        };
+        return ok(value);
+    }
+    /**
+     * Shared undo skeleton: verify the listed worktree state is unchanged, take
+     * the workspace lock, fence, flush the session, guard the affected paths, run
+     * the mutation, journal it, and auto-accept the result.
+     */
+    async withUndo(bound, paths, run) {
+        const live = this.liveSession(bound.sessionId);
         if (!live.ok)
             return live;
-        const session = live.value;
-        const policy = sandboxPolicyFor(this.ctx, session);
-        const record = this.ledger.recordById(request.sessionId, request.modificationId);
-        if (record === undefined) {
-            return fail('rollback-failed', `modification "${request.modificationId}" has no live ledger record; refresh the list and undo at file level instead`, { sessionId: request.sessionId });
-        }
         const provider = this.snapshots.providerFor(bound.cwd, bound.sessionId);
-        let rel;
-        try {
-            rel = provider.normalizeRelPath(path.relative(bound.cwd, record.path));
-        }
-        catch {
-            return fail('path-not-in-snapshot', 'the modification path is outside the workspace', { sessionId: request.sessionId });
-        }
-        let guardId = '';
-        let journalId;
-        let acquired = false;
-        try {
-            if (bound.preparedTree !== undefined) {
-                const guardTree = await provider.captureTree();
-                if (guardTree !== bound.preparedTree) {
-                    return fail('workspace-changed', 'the workspace changed after the list was read; refresh it and try again', { sessionId: request.sessionId });
-                }
-            }
-            await this.safety.acquire(bound.cwd);
-            acquired = true;
-            await this.safety.assertFences(this.ctx, bound.cwd, provider);
-            await this.ctx.sessions.flush(session);
-            const fileGuard = await this.ledger.readCurrentForGuard(bound.cwd, rel);
-            guardId = (await this.safety.captureGuard(this.ctx, provider, bound.cwd, bound.preparedTree, [rel], this.ledger, bound.sessionId)).guardId;
-            journalId = (await this.safety.journalStart(guardId, [rel])).id;
-            try {
-                const outcome = await restoreModification(this.ctx, this.ledger, bound.cwd, record, true, this.options.spawnTimeoutMs, policy);
-                const results = [{
-                        modificationId: record.modificationId,
-                        path: rel,
-                        status: outcome.status,
-                        ...(outcome.detail === undefined ? {} : { detail: outcome.detail }),
-                    }];
-                if (outcome.status === 'conflict' || outcome.status === 'failed' || outcome.status === 'unsupported') {
-                    await this.ledger.restoreGuardFile(bound.cwd, rel, fileGuard, policy).catch(() => undefined);
-                    await this.safety.journalUpdate(journalId, 'rolled-back').catch(() => undefined);
-                    return fail('rollback-failed', outcome.detail ?? `undo failed with status ${outcome.status}`, { sessionId: request.sessionId, paths: [rel] });
-                }
-                await this.safety.journalUpdate(journalId, 'completed');
-                this.accepts.acceptModification(request.sessionId, record.modificationId);
-                const patchIds = this.patchIdsForPath(session, bound.cwd, rel);
-                if (patchIds.length > 0 && patchIds.every(id => this.accepts.modificationAccepted(request.sessionId, id))) {
-                    this.accepts.acceptFile(request.sessionId, rel, await fingerprintOfAbs(provider.absolutePath(rel)));
-                }
-                return ok({
-                    guardId,
-                    modificationResults: results,
-                    acceptedModifications: this.accepts.acceptedModifications(request.sessionId),
+        const unique = [...new Set(paths)];
+        for (const rel of unique) {
+            const expected = bound.probe.get(rel);
+            const current = await provider.fileHash(rel).catch(() => undefined);
+            if (current !== expected) {
+                return failure('workspace-changed', `"${rel}" changed after the list was read; refresh and try again`, {
+                    sessionId: bound.sessionId,
+                    paths: [rel],
                 });
             }
+        }
+        await this.safety.acquire(bound.cwd);
+        let journalId;
+        try {
+            await this.safety.assertFences(this.ctx, bound.cwd, provider);
+            await this.ctx.sessions.flush(live.value);
+            const guard = await this.safety.captureGuard(provider, { cwd: bound.cwd, sessionId: bound.sessionId }, unique);
+            journalId = await this.safety.journalStart(provider, guard, unique);
+            try {
+                const result = await run();
+                await this.safety.journalUpdate(provider, journalId, 'completed');
+                if (result.acceptedPaths.length > 0) {
+                    await this.accepts.acceptPaths(bound.cwd, bound.sessionId, result.acceptedPaths, {
+                        message: 'auto accept after undo',
+                        ...(bound.sessionBase === undefined ? {} : { seedTree: bound.sessionBase }),
+                    });
+                }
+                return { ok: true, guardId: guard.guardId, run: result };
+            }
             catch (error) {
-                await this.safety.rollbackGuard(this.ctx, provider, this.ledger, guardId, [rel], policy).catch(() => undefined);
-                await this.safety.journalUpdate(journalId, 'rolled-back').catch(() => undefined);
-                return fail('rollback-failed', String(error), { sessionId: request.sessionId, paths: [rel] });
+                await this.safety.restoreGuard(provider, guard, unique).catch(() => undefined);
+                await this.safety.journalUpdate(provider, journalId, 'rolled-back');
+                return failure('rollback-failed', error instanceof Error ? error.message : 'rollback failed', {
+                    sessionId: bound.sessionId,
+                    paths: unique,
+                });
             }
         }
         catch (error) {
-            return this.mutationFailure(error, request.sessionId, bound, guardId, journalId, [rel], policy);
+            if (journalId !== undefined) {
+                await this.safety.journalUpdate(provider, journalId, 'interrupted').catch(() => undefined);
+            }
+            return failure('rollback-failed', error instanceof Error ? error.message : 'rollback failed', { sessionId: bound.sessionId });
         }
         finally {
-            if (acquired)
-                await this.safety.release();
+            await this.safety.release().catch(() => undefined);
         }
     }
-    /**
-     * Paths that changed during this session's own activity windows. Every
-     * snapshot this session captured opens a window that closes at the next
-     * snapshot captured by any session in the same workspace (treeless
-     * manifests extend the window); the last window ends at the current
-     * worktree. Changes outside these windows belong to other sessions and
-     * must not appear in this session's list. Returns undefined when window
-     * attribution is impossible (no own snapshot in the workspace timeline,
-     * or snapshot objects were garbage collected) — partial attribution
-     * would hide the session's own changes, which is worse than showing
-     * foreign ones.
-     *
-     * Window-end trees captured by OTHER sessions live in those sessions'
-     * isolated snapshot repos, invisible to this session's provider. They are
-     * borrowed read-only through git alternates (`GIT_ALTERNATE_OBJECT_
-     * DIRECTORIES`); without this the boundary diff fails and the window
-     * silently extends to the current worktree, leaking later sessions'
-     * changes into this session's list.
-     *
-     * Candidates are walked lazily in timeline order (distinct trees after the
-     * window's snapshot, current worktree last) and the walk stops at the first
-     * reachable boundary, so the common case attempts exactly one diff instead
-     * of materializing — and quadratically deduping — the whole timeline
-     * suffix per window.
-     */
-    async ownWindowPaths(sessionId, cwd, baselineTree, preparedTree, preparedEntries, provider) {
-        const timeline = await this.snapshots.listForWorkspace(cwd);
-        // Per-listing memo: each foreign session's repo existence is one sync
-        // stat, resolved once no matter how many windows reference it.
-        const objectsDirMemo = new Map();
-        const own = new Set();
-        let found = false;
-        for (let index = 0; index < timeline.length; index += 1) {
-            const manifest = timeline[index];
-            if (manifest.sessionId !== sessionId || manifest.tree === undefined)
-                continue;
-            found = true;
-            // `tried` doubles as the O(1) dedupe set (seeded with the window's own
-            // tree, which is never a valid end) and as the record of whether the
-            // current worktree was already attempted as a timeline candidate.
-            const tried = new Set([manifest.tree]);
-            let entries;
-            let attempted = false;
-            for (let next = index + 1; next < timeline.length; next += 1) {
-                const candidate = timeline[next];
-                const tree = candidate.tree;
-                if (tree === undefined || tried.has(tree))
-                    continue;
-                tried.add(tree);
-                attempted = true;
-                if (tree === preparedTree && manifest.tree === baselineTree) {
-                    // The boundary is the current worktree itself; reuse the already
-                    // computed baseline diff.
-                    entries = preparedEntries;
-                    break;
-                }
-                // preparedTree's objects were just written to the own repo by this
-                // listing's capture, so only genuinely foreign trees need borrowing.
-                const objects = candidate.sessionId === sessionId || tree === preparedTree
-                    ? undefined
-                    : this.foreignObjectDir(cwd, candidate.sessionId, objectsDirMemo);
-                entries = await provider.diffEntries(manifest.tree, tree, undefined, objects === undefined ? undefined : [objects]).catch(() => undefined);
-                if (entries !== undefined)
-                    break;
-            }
-            if (entries === undefined && !tried.has(preparedTree)) {
-                // Final window end: the current worktree, not covered by any
-                // timeline candidate.
-                attempted = true;
-                entries = manifest.tree === baselineTree
-                    ? preparedEntries
-                    : await provider.diffEntries(manifest.tree, preparedTree).catch(() => undefined);
-            }
-            if (!attempted)
-                continue; // no distinct end: nothing changed after this snapshot
-            if (entries === undefined)
-                return undefined;
-            for (const entry of entries)
-                own.add(entry.path);
+    requireBound(listId, sessionId) {
+        const bound = this.bound.get(listId);
+        if (bound === undefined || bound.sessionId !== sessionId) {
+            return failure('workspace-changed', 'the modification list is stale; refresh it and try again', { sessionId });
         }
-        return found ? own : undefined;
-    }
-    /**
-     * Read-only alternate object dir of one foreign session's isolated snapshot
-     * repo, when it still exists on disk. A removed session store leaves its
-     * boundary tree unreachable; the window diff then falls through to the next
-     * reachable end (existing behaviour). Results (including the "gone"
-     * negative) are memoized per listing, so a session with many windows stats
-     * each foreign repo at most once.
-     */
-    foreignObjectDir(cwd, foreignSessionId, memo) {
-        if (memo.has(foreignSessionId))
-            return memo.get(foreignSessionId);
-        const objects = this.snapshots.sessionObjectsDir(cwd, foreignSessionId);
-        memo.set(foreignSessionId, objects);
-        return objects;
+        return { ok: true, value: bound };
     }
     liveSession(sessionId) {
         const session = this.ctx.sessions.get(sessionId);
         if (session === undefined)
-            return fail('session-not-found', `session "${sessionId}" is not live`, { sessionId });
-        return ok(session);
+            return failure('session-not-found', `unknown session "${sessionId}"`, { sessionId });
+        const cwd = session.header?.cwd;
+        if (cwd === undefined || cwd === '') {
+            return failure('session-not-live', `session "${sessionId}" has no workspace cwd`, { sessionId });
+        }
+        return { ok: true, value: session };
     }
     /**
-     * Workspace-relative roots of nested git repositories under the workspace.
-     * Discovery reuses the provider's read-only walk, so displayed nested
-     * files always match what capture would materialize. Empty on failure.
+     * Turn-start tree of this session, used to seed the accepted baseline. Read
+     * from the persisted `refs/dsh/base` rather than the in-memory anchor: after
+     * a host restart that anchor is gone or has been re-pointed at the chain tip,
+     * which would silently drop every already-accepted file from the list.
      */
-    async materializedNestedRoots(provider) {
+    async seedTree(sessionId, cwd) {
+        const base = await this.tracker.readBase(cwd, sessionId).catch(() => undefined);
+        if (base === undefined)
+            return undefined;
+        return this.snapshots.providerFor(cwd, sessionId).treeOf(base).catch(() => undefined);
+    }
+    /** A list with nothing to show (no chain, no accept baseline yet). */
+    emptyValue(session, warnings) {
+        return {
+            listId: crypto.randomUUID(),
+            baseline: { turn: sessionStartTurn(session), createdAt: Date.now(), mode: 'git' },
+            changes: [],
+            modifications: [],
+            acceptedFiles: [],
+            acceptedModifications: [],
+            warnings: [...new Set(warnings)],
+        };
+    }
+    /**
+     * Accepted rows: paths whose accepted content differs from the session
+     * baseline, i.e. what this session accepted. One diff process; hunks are
+     * intentionally omitted (the accepted group is a file list).
+     *
+     * Suppression is per *attribution*, not per path: only paths this session
+     * itself re-wrote after accepting (`ownPending`) leave the accepted group.
+     * A path touched by another session keeps its accepted row and is reported
+     * through `warnings`, instead of silently masquerading as a change of ours.
+     */
+    async acceptedRows(cwd, provider, sessionBase, accepted, changes, ownPending, warnings) {
+        if (sessionBase === undefined)
+            return [];
+        // Both sides must be trees: `diff-tree` only compares trees, and the
+        // accepted ref points at a commit.
+        const acceptedTree = await provider.treeOf(accepted).catch(() => undefined);
+        if (acceptedTree === undefined) {
+            warnings.push('the accepted baseline tree could not be read; already-accepted files are not listed');
+            return [];
+        }
+        if (acceptedTree === sessionBase)
+            return [];
+        const entries = await provider.diffEntries(sessionBase, acceptedTree).catch(() => undefined);
+        if (entries === undefined) {
+            warnings.push('the accepted-file list could not be computed from the snapshot repository');
+            return [];
+        }
+        const foreign = changes.filter(change => !ownPending.has(change.path)
+            && entries.some(entry => entry.path === change.path))
+            .map(change => change.path);
+        if (foreign.length > 0) {
+            warnings.push(`already-accepted path(s) changed outside this session's tool chain: ${summarize(foreign)}`);
+        }
+        return entries
+            .filter(entry => !ownPending.has(entry.path))
+            .map(entry => ({
+            path: entry.path,
+            absolutePath: provider.absolutePath(entry.path),
+            status: entry.status === 'A' ? 'created' : entry.status === 'D' ? 'deleted' : 'modified',
+            source: 'git',
+            restorable: true,
+            accepted: true,
+        }));
+    }
+    async nestedRoots(provider) {
         const repos = await provider.listNestedRepos().catch(() => []);
         return repos.map(repo => repo.rel).filter(rel => rel !== '');
     }
-    isWithinNestedRoots(filePath, nestedRoots) {
-        return nestedRoots.some(root => filePath === root || filePath.startsWith(`${root}/`));
-    }
-    /** Accept every unaccepted file of the bound list (with patch cascades). */
-    async acceptAll(request) {
-        const bound = this.bound.get(request.listId);
-        if (bound === undefined || bound.sessionId !== request.sessionId) {
-            return fail('workspace-changed', 'the modification list is stale; refresh it and try again', { sessionId: request.sessionId });
+    /**
+     * Per-call patches of the session chain, with hunks and accept state. Also
+     * reports, per path, the post-image blob of the *newest* call and whether that
+     * call has a usable post-image — the caller uses it to attribute the worktree
+     * content to this session (or to somebody else).
+     */
+    async modifications(session, cwd, provider, accepted, views) {
+        const calls = await this.tracker.loadCalls(cwd, session.id);
+        if (calls.length === 0)
+            return { items: [], latestBlob: new Map(), attributable: new Map() };
+        const commits = calls.map(call => call.commit).filter((commit) => commit !== undefined);
+        const patches = commits.length > 0
+            ? await provider.diffTreePatches(commits, { context: this.options.diffContextLines }).catch(() => new Map())
+            : new Map();
+        // Accepted blobs are needed for every patched path, including files that
+        // already left the list (their patches must still report as accepted).
+        const acceptedBlobs = new Map();
+        for (const rel of new Set(calls.map(call => call.path))) {
+            acceptedBlobs.set(rel, await provider.blobHash(accepted, rel).catch(() => undefined));
         }
-        const live = this.liveSession(request.sessionId);
-        if (!live.ok)
-            return live;
-        const session = live.value;
-        for (const change of bound.changes) {
-            const acceptSnapshot = await acceptSnapshotOf(change.absolutePath, this.acceptContentMaxBytes);
-            this.accepts.acceptFile(request.sessionId, change.path, acceptSnapshot.fingerprint, acceptSnapshot.content);
-            for (const id of this.patchIdsForPath(session, bound.cwd, change.path)) {
-                this.accepts.acceptModification(request.sessionId, id);
-            }
+        const byPath = new Map();
+        for (const call of calls) {
+            const list = byPath.get(call.path) ?? [];
+            list.push(call);
+            byPath.set(call.path, list);
         }
-        return ok({
-            acceptedFiles: this.accepts.acceptedFiles(request.sessionId),
-            acceptedModifications: this.accepts.acceptedModifications(request.sessionId),
-        });
-    }
-    /** Undo every unaccepted file of the bound list back to the session baseline. */
-    async undoAll(request) {
-        const bound = this.bound.get(request.listId);
-        if (bound === undefined || bound.sessionId !== request.sessionId) {
-            return fail('workspace-changed', 'the modification list is stale; refresh it and try again', { sessionId: request.sessionId });
-        }
-        const live = this.liveSession(request.sessionId);
-        if (!live.ok)
-            return live;
-        const session = live.value;
-        const policy = sandboxPolicyFor(this.ctx, session);
-        const provider = this.snapshots.providerFor(bound.cwd, bound.sessionId);
-        const changes = bound.changes;
-        if (changes.length === 0) {
-            return ok({
-                guardId: '',
-                restored: [],
-                deleted: [],
-                kept: [],
-                skipped: [],
-                acceptedFiles: this.accepts.acceptedFiles(request.sessionId),
+        // `calls` is in chain order, so the last write per path wins.
+        const latestBlob = new Map();
+        const attributable = new Map();
+        const result = [];
+        for (const call of calls) {
+            const raw = call.commit === undefined ? '' : patches.get(call.commit) ?? '';
+            const view = patchFileViews(raw, this.options.maxDiffHunksPerFile, this.options.maxDiffBytesPerFile)
+                .find(item => item.path === call.path);
+            const blob = await this.callBlob(provider, call);
+            const acceptedBlob = acceptedBlobs.get(call.path);
+            const later = (byPath.get(call.path) ?? []).filter(item => item.seq > call.seq).map(item => item.callId);
+            latestBlob.set(call.path, blob);
+            // A deletion is a known post-image (absent); a call with neither a blob
+            // nor a commit produced nothing we can compare against.
+            attributable.set(call.path, call.deleted === true || blob !== undefined || call.commit !== undefined);
+            result.push({
+                modificationId: call.callId,
+                toolName: call.toolName === 'write' ? 'write' : 'edit',
+                path: call.path,
+                turn: call.turn,
+                step: call.step,
+                seq: call.seq,
+                hunks: view?.view ?? [],
+                restorable: call.commit === undefined || call.oversized === true
+                    ? 'unsupported'
+                    : view?.status === 'added' ? 'file-only' : 'merge',
+                accepted: acceptedBlob !== undefined && blob !== undefined && blob === acceptedBlob,
+                ...(call.superseded === true ? { reason: 'the path was rewritten before this call could be recorded' } : {}),
+                ...(call.deleted === true ? { reason: 'this call removed the file' } : {}),
+                ...(view?.status === 'added' ? { createdFile: true } : {}),
+                ...(later.length > 0 ? { laterModificationIds: later } : {}),
             });
         }
-        const rels = changes.map(change => change.path);
-        const gitChanges = changes.filter(change => change.source === 'git');
-        const ledgerChanges = changes.filter(change => change.source === 'ledger');
-        const baseline = bound.baseline;
-        let guardId = '';
-        let journalId;
-        let acquired = false;
-        try {
-            if (bound.preparedTree !== undefined) {
-                const guardTree = await provider.captureTree();
-                if (guardTree !== bound.preparedTree) {
-                    return fail('workspace-changed', 'the workspace changed after the list was read; refresh it and try again', { sessionId: request.sessionId });
-                }
-            }
-            await this.safety.acquire(bound.cwd);
-            acquired = true;
-            await this.safety.assertFences(this.ctx, bound.cwd, provider);
-            await this.ctx.sessions.flush(session);
-            guardId = (await this.safety.captureGuard(this.ctx, provider, bound.cwd, bound.preparedTree, ledgerChanges.map(change => change.path), this.ledger, bound.sessionId)).guardId;
-            journalId = (await this.safety.journalStart(guardId, rels)).id;
-            const restored = [];
-            const deleted = [];
-            const kept = [];
-            const skipped = [];
-            try {
-                if (gitChanges.length > 0) {
-                    if (baseline === undefined || baseline.tree === undefined) {
-                        throw new Error('no baseline snapshot is available for git-tracked paths');
-                    }
-                    const inSnapshot = [];
-                    const created = [];
-                    for (const change of gitChanges) {
-                        const included = (await provider.pathsInTree(baseline.tree, change.path)).includes(change.path);
-                        if (included)
-                            inSnapshot.push(change.path);
-                        else
-                            created.push(change.path);
-                    }
-                    if (inSnapshot.length > 0) {
-                        await provider.restorePaths(baseline.tree, inSnapshot);
-                        for (const rel of inSnapshot) {
-                            const expected = await provider.blobHash(baseline.tree, rel);
-                            const actual = await provider.fileHash(rel);
-                            if (expected !== actual)
-                                throw new Error(`verification failed for ${rel}`);
-                            restored.push(rel);
-                        }
-                    }
-                    for (const rel of created) {
-                        const abs = provider.absolutePath(rel);
-                        if (!fs.existsSync(abs))
-                            skipped.push(rel);
-                        else {
-                            fs.rmSync(abs, { force: true });
-                            deleted.push(rel);
-                        }
-                    }
-                }
-                for (const change of ledgerChanges) {
-                    const earliest = this.ledger.earliestForSessionPath(request.sessionId, provider.absolutePath(change.path));
-                    if (earliest === undefined) {
-                        throw new Error(`no ledger baseline is available for ${change.path}`);
-                    }
-                    const outcome = await this.ledger.restoreLedgerPath(bound.cwd, change.path, earliest, 'delete', policy);
-                    if (outcome === 'restored')
-                        restored.push(change.path);
-                    else if (outcome === 'deleted')
-                        deleted.push(change.path);
-                    else if (outcome === 'kept')
-                        kept.push(change.path);
-                    else
-                        skipped.push(change.path);
-                }
-                await this.safety.journalUpdate(journalId, 'completed');
-                // Undoing is itself an accept: the restored state leaves the default list.
-                for (const rel of rels) {
-                    const acceptSnapshot = await acceptSnapshotOf(provider.absolutePath(rel), this.acceptContentMaxBytes);
-                    this.accepts.acceptFile(request.sessionId, rel, acceptSnapshot.fingerprint, acceptSnapshot.content);
-                }
-                return ok({
-                    guardId,
-                    restored,
-                    deleted,
-                    kept,
-                    skipped,
-                    acceptedFiles: this.accepts.acceptedFiles(request.sessionId),
-                });
-            }
-            catch (error) {
-                await this.safety.rollbackGuard(this.ctx, provider, this.ledger, guardId, rels, policy).catch(() => undefined);
-                await this.safety.journalUpdate(journalId, 'rolled-back').catch(() => undefined);
-                const code = error instanceof Error && error.message.startsWith('verification failed') ? 'verification-failed' : 'rollback-failed';
-                return fail(code, String(error), { sessionId: request.sessionId, paths: rels });
-            }
-        }
-        catch (error) {
-            return this.mutationFailure(error, request.sessionId, bound, guardId, journalId, rels, policy);
-        }
-        finally {
-            if (acquired)
-                await this.safety.release();
-        }
+        return {
+            items: result.sort((a, b) => a.seq - b.seq || a.turn - b.turn || a.step - b.step),
+            latestBlob,
+            attributable,
+        };
     }
-    attachToolCalls(changes, modifications) {
-        for (const change of changes) {
-            const calls = modifications.filter(item => item.path === change.path);
-            if (calls.length === 0)
-                continue;
-            change.toolCalls = calls.map(item => ({
-                callId: item.modificationId,
-                toolName: item.toolName,
-                turn: item.turn,
-                step: item.step,
-                seq: item.seq,
-                hunks: item.hunks,
-            }));
-        }
-    }
-    /** Every write/edit patch id (ledger + session-log only) attributed to a path. */
-    patchIdsForPath(session, cwd, rel) {
-        const ids = new Set();
-        const abs = path.resolve(cwd, rel);
-        for (const record of this.ledger.recordsForPath(session.id, abs))
-            ids.add(record.modificationId);
-        for (const event of session.snapshotEvents()) {
-            if (event.type !== 'tool/call')
-                continue;
-            const data = event.data;
-            if (data.callId === undefined || data.name !== 'write' && data.name !== 'edit')
-                continue;
-            const args = parseRecordArgs(data.arguments);
-            const filePath = typeof args.file_path === 'string' ? args.file_path : typeof args.filePath === 'string' ? args.filePath : undefined;
-            if (filePath === undefined)
-                continue;
-            const eventAbs = path.resolve(cwd, path.relative(cwd, filePath));
-            if (eventAbs !== abs)
-                continue;
-            ids.add(data.callId);
-        }
-        return [...ids];
-    }
-    /**
-     * Re-diff a previously accepted file against the accepted content, so a
-     * second round of changes shows only what happened after acceptance instead
-     * of the whole session diff against the earliest snapshot. Falls back to
-     * the original hunks (git / ledger baseline) when the current file is
-     * missing, binary, oversized, or unreadable.
-     */
-    async rebaseHunksOnAccepted(change, acceptedContent) {
-        const abs = change.absolutePath;
-        const maxBytes = this.acceptContentMaxBytes;
-        let current;
-        let missing = false;
-        try {
-            const stat = await fs.promises.stat(abs);
-            if (!stat.isFile() || stat.size > maxBytes)
-                return;
-            const data = await fs.promises.readFile(abs);
-            if (data.includes(0))
-                return;
-            current = data.toString('utf8');
-        }
-        catch (error) {
-            if (error.code === 'ENOENT')
-                missing = true;
-            else
-                return;
-        }
-        const hunks = missing
-            ? lineDiffHunks(normalizeLf(acceptedContent), '')
-            : lineDiffHunks(normalizeLf(acceptedContent), normalizeLf(current ?? ''));
-        if (hunks.length === 0)
-            return;
-        const maxHunks = this.options.maxDiffHunksPerFile;
-        if (hunks.length > maxHunks) {
-            change.hunks = hunks.slice(0, maxHunks);
-            change.truncated = true;
-        }
-        else {
-            change.hunks = hunks;
-            delete change.truncated;
-        }
-        delete change.binary;
-        delete change.createdAfterSnapshot;
-        change.status = missing ? 'deleted' : 'modified';
-    }
-    async mutationFailure(error, sessionId, bound, guardId, journalId, affected, policy) {
-        const message = error instanceof Error ? error.message : String(error);
-        const code = message.includes('workspace lock timeout') ? 'lock-timeout'
-            : message.includes('running agent') ? 'agent-running'
-                : message.includes('git operation') ? 'git-operation-in-progress'
-                    : 'rollback-failed';
-        let guardRolledBack = guardId === '';
-        if (guardId !== '' && affected.length > 0) {
-            try {
-                const provider = this.snapshots.providerFor(bound.cwd, bound.sessionId);
-                await this.safety.rollbackGuard(this.ctx, provider, this.ledger, guardId, affected, policy);
-                guardRolledBack = true;
-            }
-            catch {
-                // Interrupted guard rollback is surfaced through the journal.
-            }
-        }
-        if (journalId !== undefined) {
-            await this.safety.journalUpdate(journalId, guardRolledBack ? 'rolled-back' : 'interrupted').catch(() => undefined);
-        }
-        return fail(code, message, { sessionId, paths: affected });
-    }
-}
-/**
- * The session's real starting turn: the first `turn/start` this session
- * produced itself. Plain new sessions start at turn 1; forked/resumed
- * sessions inherit seed events (which keep their original seq numbers), so
- * their real start is the first turn/start at or after the seed boundary.
- */
-export function sessionStartTurn(session) {
-    const seedLength = session.inheritedEventCount ?? 0;
-    for (const event of session.snapshotEvents()) {
-        if (event.type === 'turn/start' && event.seq >= seedLength)
-            return event.data.turn;
-    }
-    return 1;
-}
-function baselineInfo(manifest, startTurn) {
-    return {
-        turn: manifest.turn,
-        createdAt: manifest.createdAt,
-        mode: manifest.tree === undefined ? 'ledger' : 'git',
-        ...(manifest.materialized === true ? { materialized: true } : {}),
-        ...(manifest.turn > startTurn ? { degraded: true } : {}),
-    };
-}
-/** Content fingerprint of a file; falls back to stat identity for unreadable files. */
-export async function fingerprintOfAbs(abs) {
-    try {
-        const data = await fs.promises.readFile(abs);
-        return { kind: 'content', hash: crypto.createHash('sha256').update(data).digest('hex') };
-    }
-    catch {
-        try {
-            const stat = await fs.promises.stat(abs);
-            return { kind: 'stat', size: stat.size, mtimeMs: stat.mtimeMs };
-        }
-        catch {
+    async locatePatch(bound, provider, modificationId) {
+        const call = (await this.tracker.loadCalls(bound.cwd, bound.sessionId)).find(item => item.callId === modificationId);
+        if (call === undefined)
             return undefined;
+        const patch = await this.callPatch(provider, call);
+        const view = patchFileViews(patch, this.options.maxDiffHunksPerFile, this.options.maxDiffBytesPerFile)
+            .find(item => item.path === call.path);
+        return { call, patch, ...(view === undefined ? {} : { view }) };
+    }
+    async callBlob(provider, call) {
+        if (call.blob !== undefined)
+            return call.blob;
+        if (call.deleted === true || call.commit === undefined)
+            return undefined;
+        return provider.blobHash(call.commit, call.path).catch(() => undefined);
+    }
+    async callPatch(provider, call) {
+        if (call.commit === undefined)
+            return '';
+        const result = await provider.run([
+            'diff-tree', '-p', '--no-renames', '--full-index',
+            `--unified=${this.options.diffContextLines}`,
+            `${call.commit}^`, call.commit, '--', call.path,
+        ]);
+        return result.code === 0 ? result.stdout : '';
+    }
+    async acceptValue(bound, paths) {
+        const provider = this.snapshots.providerFor(bound.cwd, bound.sessionId);
+        const acceptedFiles = [];
+        for (const rel of paths) {
+            const acceptedBlob = await this.accepts.acceptedBlob(bound.cwd, bound.sessionId, rel);
+            const current = await provider.fileHash(rel).catch(() => undefined);
+            if (acceptedBlob !== undefined && acceptedBlob === current)
+                acceptedFiles.push(rel);
         }
+        return { acceptedFiles, acceptedModifications: await this.acceptedPatchIds(bound, paths) };
+    }
+    /** Patch ids whose post-image already equals the accepted content. */
+    async acceptedPatchIds(bound, paths) {
+        const provider = this.snapshots.providerFor(bound.cwd, bound.sessionId);
+        const ids = [];
+        const calls = await this.tracker.loadCalls(bound.cwd, bound.sessionId);
+        for (const rel of [...new Set(paths)]) {
+            const acceptedBlob = await this.accepts.acceptedBlob(bound.cwd, bound.sessionId, rel);
+            if (acceptedBlob === undefined)
+                continue;
+            for (const call of calls) {
+                if (call.path !== rel)
+                    continue;
+                if (await this.callBlob(provider, call) === acceptedBlob)
+                    ids.push(call.callId);
+            }
+        }
+        return ids;
     }
 }
-/**
- * Accept-marker data for a file: the content fingerprint (whole file, so
- * later state changes are detected) plus the bounded text content kept as
- * the diff baseline once the file changes again. Binary or oversized files
- * keep only the fingerprint.
- */
-export async function acceptSnapshotOf(abs, maxBytes) {
+/** Failure-only result, so control flow narrows without the `ok: true` branch. */
+function failure(code, message, fields = {}) {
+    return { ok: false, error: { code, message, ...fields } };
+}
+function safeRel(provider, input) {
     try {
-        const stat = await fs.promises.stat(abs);
-        if (!stat.isFile())
-            return { fingerprint: { kind: 'stat', size: stat.size, mtimeMs: stat.mtimeMs } };
-        const data = await fs.promises.readFile(abs);
-        const fingerprint = { kind: 'content', hash: crypto.createHash('sha256').update(data).digest('hex') };
-        if (data.length <= maxBytes && !data.includes(0)) {
-            return { fingerprint, content: data.toString('utf8') };
-        }
-        return { fingerprint };
+        return provider.normalizeRelPath(input);
     }
     catch {
-        try {
-            const stat = await fs.promises.stat(abs);
-            return { fingerprint: { kind: 'stat', size: stat.size, mtimeMs: stat.mtimeMs } };
-        }
-        catch {
-            return { fingerprint: undefined };
-        }
+        return undefined;
     }
+}
+/** Short, bounded path list for a warning message. */
+function summarize(paths, max = 3) {
+    const shown = paths.slice(0, max).join(', ');
+    return paths.length > max ? `${shown}, … (+${paths.length - max})` : shown;
+}
+/** Attach per-path tool-call patch lists to the file rows. */
+export function attachToolCalls(changes, modifications) {
+    for (const change of changes) {
+        const calls = modifications.filter(item => item.path === change.path);
+        if (calls.length === 0)
+            continue;
+        const toolCalls = calls.map(item => ({
+            callId: item.modificationId,
+            toolName: item.toolName,
+            turn: item.turn,
+            step: item.step,
+            seq: item.seq,
+            hunks: item.hunks,
+        }));
+        change.toolCalls = toolCalls;
+    }
+}
+/** The turn the session started at (first `turn/start`). */
+export function sessionStartTurn(session) {
+    const event = session.snapshotEvents().find(item => item.type === 'turn/start');
+    const data = event?.data;
+    return data?.turn ?? 0;
 }
