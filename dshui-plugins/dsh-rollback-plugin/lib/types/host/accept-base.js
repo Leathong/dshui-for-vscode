@@ -59,7 +59,9 @@ export class AcceptBase {
     /**
      * Accept the current worktree content of each path (a file that disappeared
      * is accepted as a deletion). This is the only accept path that reads the
-     * worktree.
+     * worktree. The returned `blobs` map holds the accepted (post-image) blob of
+     * every requested path — `undefined` for a deletion — so callers can classify
+     * modifications without resolving the accepted tree again.
      */
     async acceptPaths(cwd, sessionId, relPaths, options = {}) {
         const provider = this.snapshots.providerFor(cwd, sessionId);
@@ -68,15 +70,16 @@ export class AcceptBase {
             return { ok: false, reason: 'no-accepted-baseline' };
         const paths = [...new Set(relPaths.map(item => provider.normalizeRelPath(item)))];
         if (paths.length === 0)
-            return { ok: true, commit: baseline };
+            return { ok: true, commit: baseline, blobs: new Map() };
+        // One `hash-object --stdin-paths` process for the whole accept instead of
+        // one spawn per path, which is what dominated the click-to-response time.
+        const blobs = await provider.hashBlobs(paths, { write: true });
         const tree = await provider.withScratch(async (scratch) => {
             await provider.readTree(scratch, baseline);
-            const entries = [];
-            for (const rel of paths) {
-                const abs = provider.absolutePath(rel);
-                const blob = await provider.writeBlob(abs).catch(() => undefined);
-                entries.push(blob === undefined ? { path: rel } : { path: rel, blob });
-            }
+            const entries = paths.map(rel => {
+                const blob = blobs.get(rel);
+                return blob === undefined ? { path: rel } : { path: rel, blob };
+            });
             await provider.updateIndexInfo(scratch, entries);
             return provider.writeTree(scratch);
         });
@@ -87,7 +90,7 @@ export class AcceptBase {
                 return { ok: false, reason: 'git-unavailable' };
             const commit = await provider.commitTree(tree, [current], `${options.message ?? 'accept'}\npaths=${paths.join(',')}\n`);
             if (await provider.updateRef(ACCEPTED_REF, commit, current))
-                return { ok: true, commit };
+                return { ok: true, commit, blobs };
         }
         return { ok: false, reason: 'accept-conflict' };
     }
@@ -124,13 +127,17 @@ export class AcceptBase {
         if (!applied.ok || applied.tree === undefined)
             return { ok: false, reason: applied.reason };
         const tree = applied.tree;
+        // The fast path already knows the post-image; otherwise read it back from
+        // the tree that was just written (one lookup instead of the caller's two).
+        const blob = fast ? options.afterBlob : await provider.blobHash(tree, rel).catch(() => undefined);
+        const blobs = new Map([[rel, blob]]);
         for (let attempt = 0; attempt < 2; attempt += 1) {
             const current = await provider.readRef(ACCEPTED_REF);
             if (current === undefined)
                 return { ok: false, reason: 'git-unavailable' };
             const commit = await provider.commitTree(tree, [current], `accept patch\npaths=${rel}\n`);
             if (await provider.updateRef(ACCEPTED_REF, commit, current))
-                return { ok: true, commit };
+                return { ok: true, commit, blobs };
         }
         return { ok: false, reason: 'accept-conflict' };
     }

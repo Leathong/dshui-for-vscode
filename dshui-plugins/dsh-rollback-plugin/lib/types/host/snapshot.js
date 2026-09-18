@@ -111,6 +111,8 @@ export class SnapshotManager {
     ctx;
     /** In-memory manifests for the current process (never persisted). */
     manifests = new Map();
+    /** Nested-repository roots per workspace cwd, refreshed by `capture`. */
+    nestedRootsCache = new Map();
     dshHome;
     /** In-flight isolated repo inits, keyed by repo dir (dedupe across providers). */
     isolatedInit = new Map();
@@ -151,6 +153,25 @@ export class SnapshotManager {
             this.isolatedInit.delete(dir); });
         return init;
     }
+    /**
+     * Workspace-relative roots of the nested git repositories under `cwd`.
+     *
+     * Discovery costs a full `readdir` + per-directory `lstat` walk of the
+     * workspace (seconds on a large checkout), so the result is cached per cwd
+     * and refreshed by every turn `capture`, which already discovers nested
+     * repositories while materializing the snapshot. Callers on the list path
+     * must never pay that walk per refresh.
+     */
+    async nestedRoots(cwd, provider) {
+        const cached = this.nestedRootsCache.get(cwd);
+        if (cached !== undefined)
+            return cached;
+        const roots = (await provider.listNestedRepos().catch(() => []))
+            .map(repo => repo.rel)
+            .filter(rel => rel !== '');
+        this.nestedRootsCache.set(cwd, roots);
+        return roots;
+    }
     /** Capture the turn-start point. Failures never block the agent. */
     async capture(session, turn) {
         const cwd = session.header.cwd;
@@ -170,6 +191,13 @@ export class SnapshotManager {
         const materialized = captured?.materialized ?? false;
         if (tree === undefined)
             return undefined;
+        // Refresh the nested-repo cache from the capture's own discovery (one walk
+        // per turn, not one per list refresh). An incomplete discovery drops the
+        // cache so the next reader falls back to a full walk.
+        if (captured?.nested === undefined)
+            this.nestedRootsCache.delete(cwd);
+        else
+            this.nestedRootsCache.set(cwd, captured.nested);
         const message = [
             'turn point',
             `session=${session.id}`,

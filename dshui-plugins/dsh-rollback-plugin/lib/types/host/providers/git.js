@@ -166,18 +166,27 @@ export class GitProvider {
      */
     async captureTreeInfo(signal) {
         const seen = new Set();
+        const nested = new Set();
         let budget = 0;
+        let capped = false;
         let materialized = false;
         const scanIndex = this.indexPath('scan');
         const materialize = async (absRoot) => {
             // The workspace root reuses the persistent scan index so its stat cache
             // survives between turn snapshots; nested roots always use a temp index.
             const isRoot = path.resolve(absRoot) === path.resolve(this.cwd);
-            const tree = await this.captureWorktree(absRoot, signal, isRoot ? scanIndex : undefined);
+            const captured = await this.captureWorktree(absRoot, signal, isRoot ? scanIndex : undefined);
+            // Nested repositories the worktree capture itself discovered: commitless
+            // children are excluded from `add -A`, so they never reach the tree.
+            for (const rel of captured.nested)
+                nested.add(path.resolve(absRoot, rel));
+            const tree = captured.tree;
             const replacements = [];
             for (const rel of await this.gitlinkPaths(tree)) {
-                if (budget >= this.maxNestedRepos)
+                if (budget >= this.maxNestedRepos) {
+                    capped = true;
                     break;
+                }
                 const abs = path.resolve(absRoot, rel);
                 const real = await fs.promises.realpath(abs).catch(() => abs);
                 if (seen.has(real))
@@ -189,6 +198,7 @@ export class GitProvider {
                 if (probe === undefined || probe.code !== 0)
                     continue;
                 budget += 1;
+                nested.add(abs);
                 const subTree = await materialize(abs).catch(() => undefined);
                 if (subTree !== undefined) {
                     replacements.push({ path: rel, tree: subTree });
@@ -198,7 +208,13 @@ export class GitProvider {
             return replacements.length > 0 ? await this.replaceGitlinks(tree, replacements, signal) : tree;
         };
         const tree = await materialize(this.cwd);
-        return { tree, materialized };
+        const roots = [...nested]
+            .map(abs => path.relative(this.cwd, abs).split(path.sep).join('/'))
+            .filter(rel => rel !== '' && !rel.startsWith('../'))
+            .sort();
+        // `capped` means discovery was truncated: report nothing rather than a
+        // partial list, so callers fall back to a full walk.
+        return { tree, materialized, nested: capped ? undefined : roots };
     }
     /**
      * Nested git repositories under the worktree, in post-order (a repo's
@@ -292,9 +308,9 @@ export class GitProvider {
     }
     /** Capture one worktree (the workspace root or a nested repository root). */
     async captureWorktree(cwd, signal, reuseIndex) {
-        const isRoot = path.resolve(cwd) === path.resolve(this.cwd);
         const ownsIndex = reuseIndex === undefined;
         const index = reuseIndex ?? await this.createTempIndex();
+        let nested = [];
         try {
             if (ownsIndex) {
                 // A fresh index starts empty; a reused (persistent) one keeps its stat
@@ -310,7 +326,9 @@ export class GitProvider {
                 // and retry once with them excluded, so the rest of the tree keeps
                 // its snapshot. Their contents are not captured per call.
                 const excludes = [];
-                for (const repo of await this.scanNestedRepos(cwd).catch(() => [])) {
+                const scanned = await this.scanNestedRepos(cwd).catch(() => []);
+                nested = scanned.map(repo => repo.rel).filter(rel => rel !== '');
+                for (const repo of scanned) {
                     if (!(await this.hasHead(repo.root)))
                         excludes.push(`:(exclude)${repo.rel}/`);
                 }
@@ -326,7 +344,7 @@ export class GitProvider {
             const tree = result.stdout.trim();
             if (!isHash(tree))
                 throw new Error(`git write-tree returned invalid tree hash: ${tree}`);
-            return tree;
+            return { tree, nested };
         }
         finally {
             if (ownsIndex) {
@@ -438,6 +456,63 @@ export class GitProvider {
         const hash = result.stdout.trim();
         return isHash(hash) ? hash : undefined;
     }
+    /**
+     * Resolve many `<treeish>:<path>` lookups in **one** process
+     * (`cat-file --batch-check`), positionally. `undefined` means the spec does
+     * not resolve (absent path, unresolvable treeish, or git unavailable).
+     *
+     * This is the batch form of `blobHash` and the reason the accept/list hot
+     * paths no longer spawn one `rev-parse` per changed file: on a 35-file list
+     * the per-path form costs ~0.5 s, this one ~20 ms. Specs whose path cannot
+     * ride the line protocol (a newline in the name) fall back to `blobHash`,
+     * as does the whole batch when the process fails.
+     */
+    async blobHashes(specs, signal) {
+        const result = new Array(specs.length);
+        const resolved = new Array(specs.length).fill(false);
+        const batchable = [];
+        for (let index = 0; index < specs.length; index += 1) {
+            const spec = specs[index];
+            this.assertSafeRelPath(spec.path);
+            if (!spec.path.includes('\n') && !spec.path.includes('\r'))
+                batchable.push(index);
+        }
+        if (batchable.length > 0) {
+            const run = await this.run(['cat-file', '--batch-check=%(objectname)'], signal, undefined, undefined, `${batchable.map(index => `${specs[index].treeish}:${specs[index].path}`).join('\n')}\n`);
+            if (run.code === 0) {
+                const lines = run.stdout.split('\n');
+                let complete = true;
+                for (let at = 0; at < batchable.length; at += 1) {
+                    const line = (lines[at] ?? '').trim();
+                    // A missing object echoes "<spec> missing"; anything else is either a
+                    // hash or a protocol answer we do not understand.
+                    if (isHash(line)) {
+                        result[batchable[at]] = line;
+                        resolved[batchable[at]] = true;
+                    }
+                    else if (line.endsWith(' missing')) {
+                        resolved[batchable[at]] = true;
+                    }
+                    else {
+                        complete = false;
+                    }
+                }
+                if (!complete) {
+                    for (const index of batchable) {
+                        result[index] = undefined;
+                        resolved[index] = false;
+                    }
+                }
+            }
+        }
+        for (let index = 0; index < specs.length; index += 1) {
+            if (resolved[index] === true)
+                continue;
+            const spec = specs[index];
+            result[index] = await this.blobHash(spec.treeish, spec.path, signal).catch(() => undefined);
+        }
+        return result;
+    }
     async fileHash(relPath, signal) {
         this.assertSafeRelPath(relPath);
         if (!fs.existsSync(path.resolve(this.cwd, relPath)))
@@ -447,6 +522,65 @@ export class GitProvider {
             return undefined;
         const hash = result.stdout.trim();
         return isHash(hash) ? hash : undefined;
+    }
+    /**
+     * Hash many worktree files in **one** process
+     * (`hash-object [-w] --stdin-paths`), keyed by workspace-relative path.
+     * Absent paths map to `undefined`, exactly like `fileHash` / `writeBlob`;
+     * with `write` the blobs are also stored in the object store.
+     *
+     * `hash-object --stdin-paths` dies on the first missing file, so absent
+     * paths are filtered with a stat before the call and the batch falls back to
+     * per-path spawns when the process fails (or for a path that cannot ride the
+     * line protocol).
+     */
+    async hashBlobs(relPaths, options = {}) {
+        const unique = [...new Set(relPaths)];
+        const result = new Map();
+        const batchable = [];
+        for (const rel of unique) {
+            this.assertSafeRelPath(rel);
+            result.set(rel, undefined);
+            if (rel.includes('\n') || rel.includes('\r'))
+                continue;
+            try {
+                if (fs.statSync(path.resolve(this.cwd, rel)).isFile())
+                    batchable.push(rel);
+            }
+            catch {
+                // Absent or unreadable: stays undefined, like `fileHash`/`writeBlob`.
+            }
+        }
+        const resolved = new Set();
+        if (batchable.length > 0) {
+            const run = await this.run(['hash-object', ...(options.write === true ? ['-w'] : []), '--stdin-paths'], options.signal, undefined, undefined, `${batchable.join('\n')}\n`);
+            if (run.code === 0) {
+                const lines = run.stdout.split('\n');
+                let complete = true;
+                for (let index = 0; index < batchable.length; index += 1) {
+                    const hash = (lines[index] ?? '').trim();
+                    if (isHash(hash)) {
+                        result.set(batchable[index], hash);
+                        resolved.add(batchable[index]);
+                    }
+                    else {
+                        complete = false;
+                    }
+                }
+                if (!complete)
+                    for (const rel of batchable)
+                        result.set(rel, undefined);
+            }
+        }
+        for (const rel of unique) {
+            if (resolved.has(rel))
+                continue;
+            const hash = options.write === true
+                ? await this.writeBlob(this.absolutePath(rel), options.signal).catch(() => undefined)
+                : await this.fileHash(rel, options.signal).catch(() => undefined);
+            result.set(rel, hash);
+        }
+        return result;
     }
     // --- git-native state primitives (docs/git-only-plan.md §1, §2) ---
     //

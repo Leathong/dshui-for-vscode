@@ -93,6 +93,7 @@ export declare class GitProvider {
     captureTreeInfo(signal?: AbortSignal): Promise<{
         tree: string;
         materialized: boolean;
+        nested: string[] | undefined;
     }>;
     /**
      * Nested git repositories under the worktree, in post-order (a repo's
@@ -138,7 +139,37 @@ export declare class GitProvider {
     }>>;
     pathsInTree(tree: string, relPath?: string, signal?: AbortSignal): Promise<string[]>;
     blobHash(tree: string, relPath: string, signal?: AbortSignal): Promise<string | undefined>;
+    /**
+     * Resolve many `<treeish>:<path>` lookups in **one** process
+     * (`cat-file --batch-check`), positionally. `undefined` means the spec does
+     * not resolve (absent path, unresolvable treeish, or git unavailable).
+     *
+     * This is the batch form of `blobHash` and the reason the accept/list hot
+     * paths no longer spawn one `rev-parse` per changed file: on a 35-file list
+     * the per-path form costs ~0.5 s, this one ~20 ms. Specs whose path cannot
+     * ride the line protocol (a newline in the name) fall back to `blobHash`,
+     * as does the whole batch when the process fails.
+     */
+    blobHashes(specs: ReadonlyArray<{
+        treeish: string;
+        path: string;
+    }>, signal?: AbortSignal): Promise<Array<string | undefined>>;
     fileHash(relPath: string, signal?: AbortSignal): Promise<string | undefined>;
+    /**
+     * Hash many worktree files in **one** process
+     * (`hash-object [-w] --stdin-paths`), keyed by workspace-relative path.
+     * Absent paths map to `undefined`, exactly like `fileHash` / `writeBlob`;
+     * with `write` the blobs are also stored in the object store.
+     *
+     * `hash-object --stdin-paths` dies on the first missing file, so absent
+     * paths are filtered with a stat before the call and the batch falls back to
+     * per-path spawns when the process fails (or for a path that cannot ride the
+     * line protocol).
+     */
+    hashBlobs(relPaths: readonly string[], options?: {
+        write?: boolean;
+        signal?: AbortSignal;
+    }): Promise<Map<string, string | undefined>>;
     /**
      * Run `body` with a **private** throwaway index.
      *

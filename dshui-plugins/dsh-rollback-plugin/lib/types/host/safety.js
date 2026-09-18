@@ -83,11 +83,13 @@ export class RollbackSafety {
     async captureGuard(provider, context, paths) {
         const unique = [...new Set(paths.map(item => provider.normalizeRelPath(item)))];
         const head = await provider.readRef(CHAIN_HEAD_REF);
-        const entries = [];
-        for (const rel of unique) {
-            const blob = await provider.writeBlob(provider.absolutePath(rel)).catch(() => undefined);
-            entries.push(blob === undefined ? { path: rel } : { path: rel, blob });
-        }
+        // Batched worktree hashing: one `hash-object -w --stdin-paths` per guard
+        // instead of one spawn per guarded path.
+        const blobs = await provider.hashBlobs(unique, { write: true });
+        const entries = unique.map(rel => {
+            const blob = blobs.get(rel);
+            return blob === undefined ? { path: rel } : { path: rel, blob };
+        });
         // Paths that do not exist must be *removed* from the guard tree even when
         // the head tree already lacked them (a no-op) or held a stale entry.
         const tree = await provider.withScratch(async (scratch) => {

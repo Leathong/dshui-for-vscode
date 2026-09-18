@@ -76,10 +76,27 @@ export declare class SessionChangeManager {
      */
     private modifications;
     private locatePatch;
-    private callBlob;
+    /**
+     * Post-image blob of every call, keyed by `callId`. Blobs already in memory
+     * (the common case) are used as-is; the rest — a cold read after a restart
+     * leaves `TrackedCall.blob` unset — are resolved in one
+     * `cat-file --batch-check` instead of one `rev-parse` per call.
+     */
+    private callBlobs;
     private callPatch;
+    /**
+     * Accepted blob of many paths in one process. `AcceptBase.acceptedBlob`
+     * resolves the ref and spawns per path; the accept paths ask for every
+     * changed file at once. `known` entries (from the accept that just ran) are
+     * reused as-is, and only the paths it did not cover are resolved.
+     */
+    private acceptedBlobMap;
     private acceptValue;
-    /** Patch ids whose post-image already equals the accepted content. */
+    /**
+     * Patch ids whose post-image already equals the accepted content. Pass
+     * `acceptedBlobs` (from the accept that just ran) to skip resolving the
+     * accepted tree again.
+     */
     private acceptedPatchIds;
 }
 /** Attach per-path tool-call patch lists to the file rows. */

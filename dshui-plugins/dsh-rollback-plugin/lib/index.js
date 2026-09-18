@@ -94,7 +94,9 @@ var AcceptBase = class {
 	/**
 	* Accept the current worktree content of each path (a file that disappeared
 	* is accepted as a deletion). This is the only accept path that reads the
-	* worktree.
+	* worktree. The returned `blobs` map holds the accepted (post-image) blob of
+	* every requested path — `undefined` for a deletion — so callers can classify
+	* modifications without resolving the accepted tree again.
 	*/
 	async acceptPaths(cwd, sessionId, relPaths, options = {}) {
 		const provider = this.snapshots.providerFor(cwd, sessionId);
@@ -106,19 +108,19 @@ var AcceptBase = class {
 		const paths = [...new Set(relPaths.map((item) => provider.normalizeRelPath(item)))];
 		if (paths.length === 0) return {
 			ok: true,
-			commit: baseline
+			commit: baseline,
+			blobs: /* @__PURE__ */ new Map()
 		};
+		const blobs = await provider.hashBlobs(paths, { write: true });
 		const tree = await provider.withScratch(async (scratch) => {
 			await provider.readTree(scratch, baseline);
-			const entries = [];
-			for (const rel of paths) {
-				const abs = provider.absolutePath(rel);
-				const blob = await provider.writeBlob(abs).catch(() => void 0);
-				entries.push(blob === void 0 ? { path: rel } : {
+			const entries = paths.map((rel) => {
+				const blob = blobs.get(rel);
+				return blob === void 0 ? { path: rel } : {
 					path: rel,
 					blob
-				});
-			}
+				};
+			});
 			await provider.updateIndexInfo(scratch, entries);
 			return provider.writeTree(scratch);
 		});
@@ -131,7 +133,8 @@ var AcceptBase = class {
 			const commit = await provider.commitTree(tree, [current], `${options.message ?? "accept"}\npaths=${paths.join(",")}\n`);
 			if (await provider.updateRef("refs/dsh/accepted", commit, current)) return {
 				ok: true,
-				commit
+				commit,
+				blobs
 			};
 		}
 		return {
@@ -179,6 +182,8 @@ var AcceptBase = class {
 			reason: applied.reason
 		};
 		const tree = applied.tree;
+		const blob = fast ? options.afterBlob : await provider.blobHash(tree, rel).catch(() => void 0);
+		const blobs = new Map([[rel, blob]]);
 		for (let attempt = 0; attempt < 2; attempt += 1) {
 			const current = await provider.readRef(ACCEPTED_REF);
 			if (current === void 0) return {
@@ -188,7 +193,8 @@ var AcceptBase = class {
 			const commit = await provider.commitTree(tree, [current], `accept patch\npaths=${rel}\n`);
 			if (await provider.updateRef("refs/dsh/accepted", commit, current)) return {
 				ok: true,
-				commit
+				commit,
+				blobs
 			};
 		}
 		return {
@@ -451,15 +457,22 @@ var GitProvider = class {
 	*/
 	async captureTreeInfo(signal) {
 		const seen = /* @__PURE__ */ new Set();
+		const nested = /* @__PURE__ */ new Set();
 		let budget = 0;
+		let capped = false;
 		let materialized = false;
 		const scanIndex = this.indexPath("scan");
 		const materialize = async (absRoot) => {
 			const isRoot = path.resolve(absRoot) === path.resolve(this.cwd);
-			const tree = await this.captureWorktree(absRoot, signal, isRoot ? scanIndex : void 0);
+			const captured = await this.captureWorktree(absRoot, signal, isRoot ? scanIndex : void 0);
+			for (const rel of captured.nested) nested.add(path.resolve(absRoot, rel));
+			const tree = captured.tree;
 			const replacements = [];
 			for (const rel of await this.gitlinkPaths(tree)) {
-				if (budget >= this.maxNestedRepos) break;
+				if (budget >= this.maxNestedRepos) {
+					capped = true;
+					break;
+				}
 				const abs = path.resolve(absRoot, rel);
 				const real = await fs.promises.realpath(abs).catch(() => abs);
 				if (seen.has(real)) continue;
@@ -467,6 +480,7 @@ var GitProvider = class {
 				const probe = await spawnGit(abs, ["rev-parse", "--absolute-git-dir"], this.baseEnv, this.options.spawnTimeoutMs).catch(() => void 0);
 				if (probe === void 0 || probe.code !== 0) continue;
 				budget += 1;
+				nested.add(abs);
 				const subTree = await materialize(abs).catch(() => void 0);
 				if (subTree !== void 0) {
 					replacements.push({
@@ -478,9 +492,12 @@ var GitProvider = class {
 			}
 			return replacements.length > 0 ? await this.replaceGitlinks(tree, replacements, signal) : tree;
 		};
+		const tree = await materialize(this.cwd);
+		const roots = [...nested].map((abs) => path.relative(this.cwd, abs).split(path.sep).join("/")).filter((rel) => rel !== "" && !rel.startsWith("../")).sort();
 		return {
-			tree: await materialize(this.cwd),
-			materialized
+			tree,
+			materialized,
+			nested: capped ? void 0 : roots
 		};
 	}
 	/**
@@ -566,9 +583,9 @@ var GitProvider = class {
 	}
 	/** Capture one worktree (the workspace root or a nested repository root). */
 	async captureWorktree(cwd, signal, reuseIndex) {
-		path.resolve(cwd), path.resolve(this.cwd);
 		const ownsIndex = reuseIndex === void 0;
 		const index = reuseIndex ?? await this.createTempIndex();
+		let nested = [];
 		try {
 			if (ownsIndex) {
 				const reset = await this.runAt(cwd, ["read-tree", "--empty"], signal, index);
@@ -577,7 +594,9 @@ var GitProvider = class {
 			let added = await this.runAt(cwd, ["add", "-A"], signal, index);
 			if (added.code !== 0) {
 				const excludes = [];
-				for (const repo of await this.scanNestedRepos(cwd).catch(() => [])) if (!await this.hasHead(repo.root)) excludes.push(`:(exclude)${repo.rel}/`);
+				const scanned = await this.scanNestedRepos(cwd).catch(() => []);
+				nested = scanned.map((repo) => repo.rel).filter((rel) => rel !== "");
+				for (const repo of scanned) if (!await this.hasHead(repo.root)) excludes.push(`:(exclude)${repo.rel}/`);
 				if (excludes.length > 0) added = await this.runAt(cwd, [
 					"add",
 					"-A",
@@ -590,7 +609,10 @@ var GitProvider = class {
 			if (result.code !== 0) throw new Error(`git write-tree failed: ${result.stderr.trim()}`);
 			const tree = result.stdout.trim();
 			if (!isHash(tree)) throw new Error(`git write-tree returned invalid tree hash: ${tree}`);
-			return tree;
+			return {
+				tree,
+				nested
+			};
 		} finally {
 			if (ownsIndex) {
 				fs.rmSync(index, { force: true });
@@ -742,6 +764,52 @@ var GitProvider = class {
 		const hash = result.stdout.trim();
 		return isHash(hash) ? hash : void 0;
 	}
+	/**
+	* Resolve many `<treeish>:<path>` lookups in **one** process
+	* (`cat-file --batch-check`), positionally. `undefined` means the spec does
+	* not resolve (absent path, unresolvable treeish, or git unavailable).
+	*
+	* This is the batch form of `blobHash` and the reason the accept/list hot
+	* paths no longer spawn one `rev-parse` per changed file: on a 35-file list
+	* the per-path form costs ~0.5 s, this one ~20 ms. Specs whose path cannot
+	* ride the line protocol (a newline in the name) fall back to `blobHash`,
+	* as does the whole batch when the process fails.
+	*/
+	async blobHashes(specs, signal) {
+		const result = new Array(specs.length);
+		const resolved = new Array(specs.length).fill(false);
+		const batchable = [];
+		for (let index = 0; index < specs.length; index += 1) {
+			const spec = specs[index];
+			this.assertSafeRelPath(spec.path);
+			if (!spec.path.includes("\n") && !spec.path.includes("\r")) batchable.push(index);
+		}
+		if (batchable.length > 0) {
+			const run = await this.run(["cat-file", "--batch-check=%(objectname)"], signal, void 0, void 0, `${batchable.map((index) => `${specs[index].treeish}:${specs[index].path}`).join("\n")}\n`);
+			if (run.code === 0) {
+				const lines = run.stdout.split("\n");
+				let complete = true;
+				for (let at = 0; at < batchable.length; at += 1) {
+					const line = (lines[at] ?? "").trim();
+					if (isHash(line)) {
+						result[batchable[at]] = line;
+						resolved[batchable[at]] = true;
+					} else if (line.endsWith(" missing")) resolved[batchable[at]] = true;
+					else complete = false;
+				}
+				if (!complete) for (const index of batchable) {
+					result[index] = void 0;
+					resolved[index] = false;
+				}
+			}
+		}
+		for (let index = 0; index < specs.length; index += 1) {
+			if (resolved[index] === true) continue;
+			const spec = specs[index];
+			result[index] = await this.blobHash(spec.treeish, spec.path, signal).catch(() => void 0);
+		}
+		return result;
+	}
 	async fileHash(relPath, signal) {
 		this.assertSafeRelPath(relPath);
 		if (!fs.existsSync(path.resolve(this.cwd, relPath))) return void 0;
@@ -753,6 +821,56 @@ var GitProvider = class {
 		if (result.code !== 0) return void 0;
 		const hash = result.stdout.trim();
 		return isHash(hash) ? hash : void 0;
+	}
+	/**
+	* Hash many worktree files in **one** process
+	* (`hash-object [-w] --stdin-paths`), keyed by workspace-relative path.
+	* Absent paths map to `undefined`, exactly like `fileHash` / `writeBlob`;
+	* with `write` the blobs are also stored in the object store.
+	*
+	* `hash-object --stdin-paths` dies on the first missing file, so absent
+	* paths are filtered with a stat before the call and the batch falls back to
+	* per-path spawns when the process fails (or for a path that cannot ride the
+	* line protocol).
+	*/
+	async hashBlobs(relPaths, options = {}) {
+		const unique = [...new Set(relPaths)];
+		const result = /* @__PURE__ */ new Map();
+		const batchable = [];
+		for (const rel of unique) {
+			this.assertSafeRelPath(rel);
+			result.set(rel, void 0);
+			if (rel.includes("\n") || rel.includes("\r")) continue;
+			try {
+				if (fs.statSync(path.resolve(this.cwd, rel)).isFile()) batchable.push(rel);
+			} catch {}
+		}
+		const resolved = /* @__PURE__ */ new Set();
+		if (batchable.length > 0) {
+			const run = await this.run([
+				"hash-object",
+				...options.write === true ? ["-w"] : [],
+				"--stdin-paths"
+			], options.signal, void 0, void 0, `${batchable.join("\n")}\n`);
+			if (run.code === 0) {
+				const lines = run.stdout.split("\n");
+				let complete = true;
+				for (let index = 0; index < batchable.length; index += 1) {
+					const hash = (lines[index] ?? "").trim();
+					if (isHash(hash)) {
+						result.set(batchable[index], hash);
+						resolved.add(batchable[index]);
+					} else complete = false;
+				}
+				if (!complete) for (const rel of batchable) result.set(rel, void 0);
+			}
+		}
+		for (const rel of unique) {
+			if (resolved.has(rel)) continue;
+			const hash = options.write === true ? await this.writeBlob(this.absolutePath(rel), options.signal).catch(() => void 0) : await this.fileHash(rel, options.signal).catch(() => void 0);
+			result.set(rel, hash);
+		}
+		return result;
 	}
 	/**
 	* Run `body` with a **private** throwaway index.
@@ -1689,7 +1807,7 @@ var SessionChangeManager = class {
 			sessionId: request.sessionId,
 			detail: accepted.reason
 		});
-		return ok(await this.acceptValue(bound.value, [rel]));
+		return ok(await this.acceptValue(bound.value, [rel], accepted.blobs));
 	}
 	async acceptModification(request) {
 		const bound = this.requireBound(request.listId, request.sessionId);
@@ -1707,7 +1825,7 @@ var SessionChangeManager = class {
 			detail: accepted.reason,
 			paths: [located.call.path]
 		});
-		return ok(await this.acceptValue(bound.value, [located.call.path]));
+		return ok(await this.acceptValue(bound.value, [located.call.path], accepted.blobs));
 	}
 	async acceptAll(request) {
 		const bound = this.requireBound(request.listId, request.sessionId);
@@ -1723,7 +1841,7 @@ var SessionChangeManager = class {
 		});
 		return ok({
 			acceptedFiles: paths,
-			acceptedModifications: await this.acceptedPatchIds(bound.value, paths)
+			acceptedModifications: await this.acceptedPatchIds(bound.value, paths, accepted.blobs)
 		});
 	}
 	async undoFile(request) {
@@ -1767,10 +1885,11 @@ var SessionChangeManager = class {
 		const outcome = await this.withUndo(bound.value, [rel], async () => {
 			const chain = (await this.tracker.loadCalls(bound.value.cwd, bound.value.sessionId)).filter((call) => call.path === rel && call.commit !== void 0);
 			const acceptedBlob = await this.accepts.acceptedBlob(bound.value.cwd, bound.value.sessionId, rel);
+			const blobs = await this.callBlobs(provider, chain);
 			const steps = [];
 			const ids = [];
 			for (const call of chain) {
-				const blob = await this.callBlob(provider, call);
+				const blob = blobs.get(call.callId);
 				if (blob !== void 0 && blob === acceptedBlob) continue;
 				steps.push({
 					path: rel,
@@ -1860,7 +1979,8 @@ var SessionChangeManager = class {
 		const outcome = await this.withUndo(bound.value, paths, async () => {
 			const restored = [];
 			const deleted = [];
-			for (const rel of paths) if (await this.accepts.acceptedBlob(bound.value.cwd, bound.value.sessionId, rel) === void 0) {
+			const accepted = await this.acceptedBlobMap(bound.value, provider, paths);
+			for (const rel of paths) if (accepted.get(rel) === void 0) {
 				await fs.promises.rm(provider.absolutePath(rel), { force: true });
 				deleted.push(rel);
 			} else restored.push(rel);
@@ -1891,9 +2011,10 @@ var SessionChangeManager = class {
 		if (!live.ok) return live;
 		const provider = this.snapshots.providerFor(bound.cwd, bound.sessionId);
 		const unique = [...new Set(paths)];
+		const current = await provider.hashBlobs(unique).catch(() => /* @__PURE__ */ new Map());
 		for (const rel of unique) {
 			const expected = bound.probe.get(rel);
-			if (await provider.fileHash(rel).catch(() => void 0) !== expected) return failure("workspace-changed", `"${rel}" changed after the list was read; refresh and try again`, {
+			if (current.get(rel) !== expected) return failure("workspace-changed", `"${rel}" changed after the list was read; refresh and try again`, {
 				sessionId: bound.sessionId,
 				paths: [rel]
 			});
@@ -2015,7 +2136,7 @@ var SessionChangeManager = class {
 		}));
 	}
 	async nestedRoots(provider) {
-		return (await provider.listNestedRepos().catch(() => [])).map((repo) => repo.rel).filter((rel) => rel !== "");
+		return this.snapshots.nestedRoots(provider.cwd, provider);
 	}
 	/**
 	* Per-call patches of the session chain, with hunks and accept state. Also
@@ -2032,8 +2153,14 @@ var SessionChangeManager = class {
 		};
 		const commits = calls.map((call) => call.commit).filter((commit) => commit !== void 0);
 		const patches = commits.length > 0 ? await provider.diffTreePatches(commits, { context: this.options.diffContextLines }).catch(() => /* @__PURE__ */ new Map()) : /* @__PURE__ */ new Map();
+		const patched = [...new Set(calls.map((call) => call.path))];
+		const acceptedHashes = await provider.blobHashes(patched.map((path) => ({
+			treeish: accepted,
+			path
+		}))).catch(() => new Array(patched.length));
 		const acceptedBlobs = /* @__PURE__ */ new Map();
-		for (const rel of new Set(calls.map((call) => call.path))) acceptedBlobs.set(rel, await provider.blobHash(accepted, rel).catch(() => void 0));
+		patched.forEach((rel, index) => acceptedBlobs.set(rel, acceptedHashes[index]));
+		const blobs = await this.callBlobs(provider, calls);
 		const byPath = /* @__PURE__ */ new Map();
 		for (const call of calls) {
 			const list = byPath.get(call.path) ?? [];
@@ -2045,7 +2172,7 @@ var SessionChangeManager = class {
 		const result = [];
 		for (const call of calls) {
 			const view = patchFileViews(call.commit === void 0 ? "" : patches.get(call.commit) ?? "", this.options.maxDiffHunksPerFile, this.options.maxDiffBytesPerFile).find((item) => item.path === call.path);
-			const blob = await this.callBlob(provider, call);
+			const blob = blobs.get(call.callId);
 			const acceptedBlob = acceptedBlobs.get(call.path);
 			const later = (byPath.get(call.path) ?? []).filter((item) => item.seq > call.seq).map((item) => item.callId);
 			latestBlob.set(call.path, blob);
@@ -2083,10 +2210,34 @@ var SessionChangeManager = class {
 			...view === void 0 ? {} : { view }
 		};
 	}
-	async callBlob(provider, call) {
-		if (call.blob !== void 0) return call.blob;
-		if (call.deleted === true || call.commit === void 0) return void 0;
-		return provider.blobHash(call.commit, call.path).catch(() => void 0);
+	/**
+	* Post-image blob of every call, keyed by `callId`. Blobs already in memory
+	* (the common case) are used as-is; the rest — a cold read after a restart
+	* leaves `TrackedCall.blob` unset — are resolved in one
+	* `cat-file --batch-check` instead of one `rev-parse` per call.
+	*/
+	async callBlobs(provider, calls) {
+		const result = /* @__PURE__ */ new Map();
+		const pending = [];
+		for (const call of calls) {
+			if (call.blob !== void 0) {
+				result.set(call.callId, call.blob);
+				continue;
+			}
+			if (call.deleted === true || call.commit === void 0) {
+				result.set(call.callId, void 0);
+				continue;
+			}
+			pending.push(call);
+		}
+		if (pending.length > 0) {
+			const hashes = await provider.blobHashes(pending.map((call) => ({
+				treeish: call.commit,
+				path: call.path
+			}))).catch(() => new Array(pending.length));
+			pending.forEach((call, index) => result.set(call.callId, hashes[index]));
+		}
+		return result;
 	}
 	async callPatch(provider, call) {
 		if (call.commit === void 0) return "";
@@ -2103,31 +2254,65 @@ var SessionChangeManager = class {
 		]);
 		return result.code === 0 ? result.stdout : "";
 	}
-	async acceptValue(bound, paths) {
+	/**
+	* Accepted blob of many paths in one process. `AcceptBase.acceptedBlob`
+	* resolves the ref and spawns per path; the accept paths ask for every
+	* changed file at once. `known` entries (from the accept that just ran) are
+	* reused as-is, and only the paths it did not cover are resolved.
+	*/
+	async acceptedBlobMap(bound, provider, paths, known) {
+		const result = /* @__PURE__ */ new Map();
+		const missing = [];
+		for (const rel of [...new Set(paths)]) if (known !== void 0 && known.has(rel)) result.set(rel, known.get(rel));
+		else missing.push(rel);
+		if (missing.length > 0) {
+			const commit = await this.accepts.ref(bound.cwd, bound.sessionId);
+			const hashes = commit === void 0 ? new Array(missing.length) : await provider.blobHashes(missing.map((path) => ({
+				treeish: commit,
+				path
+			}))).catch(() => new Array(missing.length));
+			missing.forEach((rel, index) => result.set(rel, hashes[index]));
+		}
+		return result;
+	}
+	async acceptValue(bound, paths, acceptedBlobs) {
 		const provider = this.snapshots.providerFor(bound.cwd, bound.sessionId);
+		const unique = [...new Set(paths)];
+		const accepted = await this.acceptedBlobMap(bound, provider, unique, acceptedBlobs);
+		const current = await provider.hashBlobs(unique).catch(() => /* @__PURE__ */ new Map());
 		const acceptedFiles = [];
-		for (const rel of paths) {
-			const acceptedBlob = await this.accepts.acceptedBlob(bound.cwd, bound.sessionId, rel);
-			const current = await provider.fileHash(rel).catch(() => void 0);
-			if (acceptedBlob !== void 0 && acceptedBlob === current) acceptedFiles.push(rel);
+		for (const rel of unique) {
+			const acceptedBlob = accepted.get(rel);
+			if (acceptedBlob !== void 0 && acceptedBlob === current.get(rel)) acceptedFiles.push(rel);
 		}
 		return {
 			acceptedFiles,
-			acceptedModifications: await this.acceptedPatchIds(bound, paths)
+			acceptedModifications: await this.acceptedPatchIds(bound, unique, accepted)
 		};
 	}
-	/** Patch ids whose post-image already equals the accepted content. */
-	async acceptedPatchIds(bound, paths) {
+	/**
+	* Patch ids whose post-image already equals the accepted content. Pass
+	* `acceptedBlobs` (from the accept that just ran) to skip resolving the
+	* accepted tree again.
+	*/
+	async acceptedPatchIds(bound, paths, acceptedBlobs) {
 		const provider = this.snapshots.providerFor(bound.cwd, bound.sessionId);
+		const unique = [...new Set(paths)];
+		const wanted = new Set(unique);
+		const accepted = await this.acceptedBlobMap(bound, provider, unique, acceptedBlobs);
+		const calls = (await this.tracker.loadCalls(bound.cwd, bound.sessionId)).filter((call) => wanted.has(call.path));
+		const blobs = await this.callBlobs(provider, calls);
+		const byPath = /* @__PURE__ */ new Map();
+		for (const call of calls) {
+			const list = byPath.get(call.path) ?? [];
+			list.push(call);
+			byPath.set(call.path, list);
+		}
 		const ids = [];
-		const calls = await this.tracker.loadCalls(bound.cwd, bound.sessionId);
-		for (const rel of [...new Set(paths)]) {
-			const acceptedBlob = await this.accepts.acceptedBlob(bound.cwd, bound.sessionId, rel);
+		for (const rel of unique) {
+			const acceptedBlob = accepted.get(rel);
 			if (acceptedBlob === void 0) continue;
-			for (const call of calls) {
-				if (call.path !== rel) continue;
-				if (await this.callBlob(provider, call) === acceptedBlob) ids.push(call.callId);
-			}
+			for (const call of byPath.get(rel) ?? []) if (blobs.get(call.callId) === acceptedBlob) ids.push(call.callId);
 		}
 		return ids;
 	}
@@ -2347,9 +2532,17 @@ var RollbackRestore = class {
 			try {
 				const gitRestore = selected.value.git.filter((item) => item.inSnapshot);
 				const gitCreated = selected.value.git.filter((item) => !item.inSnapshot);
-				await provider.restorePaths(prepared.snapshot.tree ?? "", gitRestore.map((item) => item.rel));
-				for (const rel of gitRestore.map((item) => item.rel)) {
-					if (await provider.blobHash(prepared.snapshot.tree ?? "", rel) !== await provider.fileHash(rel)) throw new Error(`verification failed for ${rel}`);
+				const restoreRels = gitRestore.map((item) => item.rel);
+				const snapshotTree = prepared.snapshot.tree ?? "";
+				await provider.restorePaths(snapshotTree, restoreRels);
+				const expected = await provider.blobHashes(restoreRels.map((path) => ({
+					treeish: snapshotTree,
+					path
+				}))).catch(() => new Array(restoreRels.length));
+				const actual = await provider.hashBlobs(restoreRels).catch(() => /* @__PURE__ */ new Map());
+				for (let index = 0; index < restoreRels.length; index += 1) {
+					const rel = restoreRels[index];
+					if (expected[index] !== actual.get(rel)) throw new Error(`verification failed for ${rel}`);
 					restored.push(rel);
 				}
 				for (const item of gitCreated) {
@@ -3199,6 +3392,8 @@ var SnapshotManager = class {
 	ctx;
 	/** In-memory manifests for the current process (never persisted). */
 	manifests = /* @__PURE__ */ new Map();
+	/** Nested-repository roots per workspace cwd, refreshed by `capture`. */
+	nestedRootsCache = /* @__PURE__ */ new Map();
 	dshHome;
 	/** In-flight isolated repo inits, keyed by repo dir (dedupe across providers). */
 	isolatedInit = /* @__PURE__ */ new Map();
@@ -3241,6 +3436,22 @@ var SnapshotManager = class {
 		});
 		return init;
 	}
+	/**
+	* Workspace-relative roots of the nested git repositories under `cwd`.
+	*
+	* Discovery costs a full `readdir` + per-directory `lstat` walk of the
+	* workspace (seconds on a large checkout), so the result is cached per cwd
+	* and refreshed by every turn `capture`, which already discovers nested
+	* repositories while materializing the snapshot. Callers on the list path
+	* must never pay that walk per refresh.
+	*/
+	async nestedRoots(cwd, provider) {
+		const cached = this.nestedRootsCache.get(cwd);
+		if (cached !== void 0) return cached;
+		const roots = (await provider.listNestedRepos().catch(() => [])).map((repo) => repo.rel).filter((rel) => rel !== "");
+		this.nestedRootsCache.set(cwd, roots);
+		return roots;
+	}
 	/** Capture the turn-start point. Failures never block the agent. */
 	async capture(session, turn) {
 		const cwd = session.header.cwd;
@@ -3253,6 +3464,8 @@ var SnapshotManager = class {
 		const tree = captured?.tree;
 		const materialized = captured?.materialized ?? false;
 		if (tree === void 0) return void 0;
+		if (captured?.nested === void 0) this.nestedRootsCache.delete(cwd);
+		else this.nestedRootsCache.set(cwd, captured.nested);
 		const message = [
 			"turn point",
 			`session=${session.id}`,
@@ -3414,14 +3627,14 @@ var RollbackSafety = class {
 	async captureGuard(provider, context, paths) {
 		const unique = [...new Set(paths.map((item) => provider.normalizeRelPath(item)))];
 		const head = await provider.readRef(CHAIN_HEAD_REF);
-		const entries = [];
-		for (const rel of unique) {
-			const blob = await provider.writeBlob(provider.absolutePath(rel)).catch(() => void 0);
-			entries.push(blob === void 0 ? { path: rel } : {
+		const blobs = await provider.hashBlobs(unique, { write: true });
+		const entries = unique.map((rel) => {
+			const blob = blobs.get(rel);
+			return blob === void 0 ? { path: rel } : {
 				path: rel,
 				blob
-			});
-		}
+			};
+		});
 		const tree = await provider.withScratch(async (scratch) => {
 			await provider.readTree(scratch, head);
 			await provider.updateIndexInfo(scratch, entries);

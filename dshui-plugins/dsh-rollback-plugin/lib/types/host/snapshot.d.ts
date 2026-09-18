@@ -54,6 +54,8 @@ export declare class SnapshotManager {
     private readonly ctx?;
     /** In-memory manifests for the current process (never persisted). */
     private readonly manifests;
+    /** Nested-repository roots per workspace cwd, refreshed by `capture`. */
+    private readonly nestedRootsCache;
     private readonly dshHome;
     /** In-flight isolated repo inits, keyed by repo dir (dedupe across providers). */
     private readonly isolatedInit;
@@ -65,6 +67,16 @@ export declare class SnapshotManager {
      */
     providerFor(cwd: string, sessionId?: string): GitProvider;
     private ensureIsolatedRepo;
+    /**
+     * Workspace-relative roots of the nested git repositories under `cwd`.
+     *
+     * Discovery costs a full `readdir` + per-directory `lstat` walk of the
+     * workspace (seconds on a large checkout), so the result is cached per cwd
+     * and refreshed by every turn `capture`, which already discovers nested
+     * repositories while materializing the snapshot. Callers on the list path
+     * must never pay that walk per refresh.
+     */
+    nestedRoots(cwd: string, provider: GitProvider): Promise<string[]>;
     /** Capture the turn-start point. Failures never block the agent. */
     capture(session: Session, turn: number): Promise<RollbackSnapshotManifest | undefined>;
     /** Exact point first, then the newest earlier point for the same session. */

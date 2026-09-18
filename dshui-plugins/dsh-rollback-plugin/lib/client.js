@@ -353,6 +353,18 @@ window.__ModuleLoader__.load({
 		}
 		//#endregion
 		//#region lib/types/client/ModificationDock.js
+		/** Shared empty value, so the optimistic overlay never churns identities. */
+		const EMPTY_PATHS = /* @__PURE__ */ new Set();
+		/**
+		* Busy keys are one per (action, target): each button can then render the
+		* spinner for exactly the work it started, instead of every control in the
+		* dock going busy for any mutation.
+		*/
+		const ACCEPT_ALL_KEY = "accept:all";
+		const UNDO_ALL_KEY = "undo:all";
+		const acceptFileKey = (path) => `accept:file:${path}`;
+		const undoFileKey = (path) => `undo:file:${path}`;
+		const undoHunkKey = (path, index) => `undo:hunk:${path}:${index}`;
 		function unwrapRemote(remote) {
 			if (!remote.ok) return remote.error.message;
 			const business = remote.value;
@@ -388,6 +400,14 @@ window.__ModuleLoader__.load({
 			/** Path whose hunk list is expanded (hunk-level undo lives there). */
 			const [expanded, setExpanded] = (0, react.useState)(null);
 			const [actionError, setActionError] = (0, react.useState)(null);
+			/**
+			* Paths accepted locally the instant the user clicked, so the row leaves the
+			* unaccepted group immediately instead of after the host's git work plus a
+			* list reload. The overlay is dropped as soon as a list loaded *after* the
+			* optimistic write lands, and rolled back when the mutation fails.
+			*/
+			const [optimisticAccepted, setOptimisticAccepted] = (0, react.useState)(EMPTY_PATHS);
+			const optimisticVersion = (0, react.useRef)(0);
 			const dataRef = (0, react.useRef)(null);
 			dataRef.current = data;
 			const loadingRef = (0, react.useRef)(false);
@@ -399,6 +419,7 @@ window.__ModuleLoader__.load({
 				}
 				loadingRef.current = true;
 				if (!background) setLoading(true);
+				const version = optimisticVersion.current;
 				try {
 					const remote = await sessionChanges().catch((loadError) => {
 						setError(loadError instanceof Error ? loadError.message : String(loadError));
@@ -413,6 +434,7 @@ window.__ModuleLoader__.load({
 					setData(value);
 					setError(null);
 					setActionError(null);
+					if (optimisticVersion.current === version) setOptimisticAccepted(EMPTY_PATHS);
 				} finally {
 					loadingRef.current = false;
 					if (!background) setLoading(false);
@@ -430,7 +452,11 @@ window.__ModuleLoader__.load({
 				mounted.current = true;
 				return () => clearTimeout(timer);
 			}, [session]);
-			const changes = data?.changes ?? [];
+			const rawChanges = data?.changes ?? [];
+			const changes = optimisticAccepted.size === 0 ? rawChanges : rawChanges.map((change) => optimisticAccepted.has(change.path) && change.accepted !== true ? {
+				...change,
+				accepted: true
+			} : change);
 			const unaccepted = changes.filter((change) => change.accepted !== true);
 			const acceptedFiles = changes.filter((change) => change.accepted === true);
 			const markBusy = (key) => {
@@ -442,6 +468,16 @@ window.__ModuleLoader__.load({
 					next.delete(key);
 					return next;
 				});
+			};
+			/** Show `paths` as accepted right away; reconciled or rolled back later. */
+			const markOptimistic = (paths) => {
+				if (paths.length === 0) return;
+				optimisticVersion.current += 1;
+				setOptimisticAccepted((previous) => new Set([...previous, ...paths]));
+			};
+			const clearOptimistic = () => {
+				optimisticVersion.current += 1;
+				setOptimisticAccepted(EMPTY_PATHS);
 			};
 			const runMutation = async (key, call) => {
 				markBusy(key);
@@ -470,29 +506,33 @@ window.__ModuleLoader__.load({
 			const runAcceptFile = async (change) => {
 				const current = dataRef.current;
 				if (current === null) return;
-				if (await runMutation(`file:${change.path}`, () => acceptFile(change.path, current.listId))) load();
+				markOptimistic([change.path]);
+				if (await runMutation(acceptFileKey(change.path), () => acceptFile(change.path, current.listId))) load(true);
+				else clearOptimistic();
 			};
 			const runUndoFile = async (change) => {
 				setConfirming(null);
 				const current = dataRef.current;
 				if (current === null) return;
-				if (await runMutation(`file:${change.path}`, () => undoFile(change.path, current.listId))) load();
+				if (await runMutation(undoFileKey(change.path), () => undoFile(change.path, current.listId))) load();
 			};
 			const runUndoHunk = async (change, index) => {
 				const current = dataRef.current;
 				if (current === null) return;
-				if (await runMutation(`hunk:${change.path}:${String(index)}`, () => undoHunks(change.path, [index], current.listId))) load();
+				if (await runMutation(undoHunkKey(change.path, index), () => undoHunks(change.path, [index], current.listId))) load();
 			};
 			const runAcceptAll = async () => {
 				const current = dataRef.current;
 				if (current === null) return;
-				if (await runMutation("all", () => acceptAll(current.listId))) load();
+				markOptimistic(current.changes.filter((change) => change.accepted !== true).map((change) => change.path));
+				if (await runMutation(ACCEPT_ALL_KEY, () => acceptAll(current.listId))) load(true);
+				else clearOptimistic();
 			};
 			const runUndoAll = async () => {
 				setConfirmingAll(false);
 				const current = dataRef.current;
 				if (current === null) return;
-				if (await runMutation("all", () => undoAll(current.listId))) load();
+				if (await runMutation(UNDO_ALL_KEY, () => undoAll(current.listId))) load();
 			};
 			const openFile = (change) => {
 				const firstHunk = change.hunks?.[0] ?? change.toolCalls?.[0]?.hunks?.[0];
@@ -547,7 +587,9 @@ window.__ModuleLoader__.load({
 			}, [sessionEvents]);
 			if (data !== null && changes.length === 0) return null;
 			if (data === null && error === null) return null;
-			const allBusy = busy.has("all");
+			const acceptingAll = busy.has(ACCEPT_ALL_KEY);
+			const undoingAll = busy.has(UNDO_ALL_KEY);
+			const allBusy = acceptingAll || undoingAll;
 			return (0, react_jsx_runtime.jsx)("div", {
 				className: "dsh-mod-dock",
 				children: (0, react_jsx_runtime.jsxs)("div", {
@@ -599,7 +641,10 @@ window.__ModuleLoader__.load({
 									},
 									disabled: allBusy || unaccepted.length === 0,
 									"aria-label": t("dock.acceptAll"),
-									children: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconCheckOutline14, {})
+									children: acceptingAll ? (0, react_jsx_runtime.jsx)("span", {
+										className: "dsh-mod-spin",
+										children: "◌"
+									}) : (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconCheckOutline14, {})
 								})
 							}), confirmingAll ? (0, react_jsx_runtime.jsxs)("span", {
 								className: "dsh-mod-confirm",
@@ -630,7 +675,7 @@ window.__ModuleLoader__.load({
 									},
 									disabled: allBusy || unaccepted.length === 0,
 									"aria-label": t("dock.undoAll"),
-									children: allBusy ? (0, react_jsx_runtime.jsx)("span", {
+									children: undoingAll ? (0, react_jsx_runtime.jsx)("span", {
 										className: "dsh-mod-spin",
 										children: "◌"
 									}) : (0, react_jsx_runtime.jsx)(IconUndoOutline14, {})
@@ -680,7 +725,7 @@ window.__ModuleLoader__.load({
 								className: "dsh-mod-list",
 								children: unaccepted.map((change) => (0, react_jsx_runtime.jsx)(FileRow$1, {
 									change,
-									busy: busy.has(`file:${change.path}`),
+									busy,
 									confirmingKey: confirming,
 									t,
 									onOpenReview: () => {
@@ -769,13 +814,15 @@ window.__ModuleLoader__.load({
 			const { change, busy, confirmingKey, t, onOpenReview, onOpenFile, onAccept, onRequestUndo, onConfirmUndo, onCancelUndo, expanded, onToggleHunks, onUndoHunk } = props;
 			const hunks = change.hunks ?? [];
 			const fileConfirming = confirmingKey === `file:${change.path}`;
+			const busyAccept = busy.has(acceptFileKey(change.path));
+			const busyUndo = busy.has(undoFileKey(change.path));
 			const undoConfirm = (0, react_jsx_runtime.jsxs)("span", {
 				className: "dsh-mod-confirm",
 				children: [(0, react_jsx_runtime.jsx)("button", {
 					type: "button",
 					className: "dsh-mod-confirm-yes",
 					onClick: onConfirmUndo,
-					disabled: busy,
+					disabled: busyUndo,
 					children: t("confirm")
 				}), (0, react_jsx_runtime.jsx)("button", {
 					type: "button",
@@ -836,9 +883,12 @@ window.__ModuleLoader__.load({
 									type: "button",
 									className: "dsh-mod-action",
 									onClick: onAccept,
-									disabled: busy,
+									disabled: busyAccept || busyUndo,
 									"aria-label": t("dock.accept"),
-									children: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconCheckOutline14, {})
+									children: busyAccept ? (0, react_jsx_runtime.jsx)("span", {
+										className: "dsh-mod-spin",
+										children: "◌"
+									}) : (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconCheckOutline14, {})
 								})
 							}), fileConfirming ? undoConfirm : (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Tooltip, {
 								label: t("dock.undo"),
@@ -847,9 +897,9 @@ window.__ModuleLoader__.load({
 									type: "button",
 									className: "dsh-mod-action",
 									onClick: onRequestUndo,
-									disabled: busy,
+									disabled: busyUndo || busyAccept,
 									"aria-label": t("dock.undo"),
-									children: busy ? (0, react_jsx_runtime.jsx)("span", {
+									children: busyUndo ? (0, react_jsx_runtime.jsx)("span", {
 										className: "dsh-mod-spin",
 										children: "◌"
 									}) : (0, react_jsx_runtime.jsx)(IconUndoOutline14, {})
@@ -880,9 +930,12 @@ window.__ModuleLoader__.load({
 									onClick: () => {
 										onUndoHunk(index);
 									},
-									disabled: busy,
+									disabled: busy.has(undoHunkKey(change.path, index)),
 									"aria-label": t("dock.undoHunk"),
-									children: (0, react_jsx_runtime.jsx)(IconUndoOutline14, {})
+									children: busy.has(undoHunkKey(change.path, index)) ? (0, react_jsx_runtime.jsx)("span", {
+										className: "dsh-mod-spin",
+										children: "◌"
+									}) : (0, react_jsx_runtime.jsx)(IconUndoOutline14, {})
 								})
 							})
 						]

@@ -168,7 +168,7 @@ export class SessionChangeManager {
         });
         if (!accepted.ok)
             return failure('rollback-failed', `accepting "${rel}" failed`, { sessionId: request.sessionId, detail: accepted.reason });
-        return ok(await this.acceptValue(bound.value, [rel]));
+        return ok(await this.acceptValue(bound.value, [rel], accepted.blobs));
     }
     async acceptModification(request) {
         const bound = this.requireBound(request.listId, request.sessionId);
@@ -191,7 +191,7 @@ export class SessionChangeManager {
                 paths: [located.call.path],
             });
         }
-        return ok(await this.acceptValue(bound.value, [located.call.path]));
+        return ok(await this.acceptValue(bound.value, [located.call.path], accepted.blobs));
     }
     async acceptAll(request) {
         const bound = this.requireBound(request.listId, request.sessionId);
@@ -204,7 +204,12 @@ export class SessionChangeManager {
         });
         if (!accepted.ok)
             return failure('rollback-failed', 'accepting the modification list failed', { sessionId: request.sessionId, detail: accepted.reason });
-        return ok({ acceptedFiles: paths, acceptedModifications: await this.acceptedPatchIds(bound.value, paths) });
+        // `acceptPaths` already knows every accepted blob, so nothing here has to
+        // resolve the accepted tree again (this used to be 2 git spawns per file).
+        return ok({
+            acceptedFiles: paths,
+            acceptedModifications: await this.acceptedPatchIds(bound.value, paths, accepted.blobs),
+        });
     }
     async undoFile(request) {
         const bound = this.requireBound(request.listId, request.sessionId);
@@ -250,10 +255,11 @@ export class SessionChangeManager {
             const chain = (await this.tracker.loadCalls(bound.value.cwd, bound.value.sessionId))
                 .filter(call => call.path === rel && call.commit !== undefined);
             const acceptedBlob = await this.accepts.acceptedBlob(bound.value.cwd, bound.value.sessionId, rel);
+            const blobs = await this.callBlobs(provider, chain);
             const steps = [];
             const ids = [];
             for (const call of chain) {
-                const blob = await this.callBlob(provider, call);
+                const blob = blobs.get(call.callId);
                 if (blob !== undefined && blob === acceptedBlob)
                     continue;
                 steps.push({ path: rel, patch: await this.callPatch(provider, call) });
@@ -335,9 +341,9 @@ export class SessionChangeManager {
         const outcome = await this.withUndo(bound.value, paths, async () => {
             const restored = [];
             const deleted = [];
+            const accepted = await this.acceptedBlobMap(bound.value, provider, paths);
             for (const rel of paths) {
-                const acceptedBlob = await this.accepts.acceptedBlob(bound.value.cwd, bound.value.sessionId, rel);
-                if (acceptedBlob === undefined) {
+                if (accepted.get(rel) === undefined) {
                     await fs.promises.rm(provider.absolutePath(rel), { force: true });
                     deleted.push(rel);
                 }
@@ -372,10 +378,12 @@ export class SessionChangeManager {
             return live;
         const provider = this.snapshots.providerFor(bound.cwd, bound.sessionId);
         const unique = [...new Set(paths)];
+        // One `hash-object --stdin-paths` for the whole probe set instead of one
+        // spawn per path.
+        const current = await provider.hashBlobs(unique).catch(() => new Map());
         for (const rel of unique) {
             const expected = bound.probe.get(rel);
-            const current = await provider.fileHash(rel).catch(() => undefined);
-            if (current !== expected) {
+            if (current.get(rel) !== expected) {
                 return failure('workspace-changed', `"${rel}" changed after the list was read; refresh and try again`, {
                     sessionId: bound.sessionId,
                     paths: [rel],
@@ -505,8 +513,7 @@ export class SessionChangeManager {
         }));
     }
     async nestedRoots(provider) {
-        const repos = await provider.listNestedRepos().catch(() => []);
-        return repos.map(repo => repo.rel).filter(rel => rel !== '');
+        return this.snapshots.nestedRoots(provider.cwd, provider);
     }
     /**
      * Per-call patches of the session chain, with hunks and accept state. Also
@@ -523,11 +530,15 @@ export class SessionChangeManager {
             ? await provider.diffTreePatches(commits, { context: this.options.diffContextLines }).catch(() => new Map())
             : new Map();
         // Accepted blobs are needed for every patched path, including files that
-        // already left the list (their patches must still report as accepted).
+        // already left the list (their patches must still report as accepted). One
+        // `cat-file --batch-check` for all of them instead of one `rev-parse` each.
+        const patched = [...new Set(calls.map(call => call.path))];
+        const acceptedHashes = await provider
+            .blobHashes(patched.map(path => ({ treeish: accepted, path })))
+            .catch(() => new Array(patched.length));
         const acceptedBlobs = new Map();
-        for (const rel of new Set(calls.map(call => call.path))) {
-            acceptedBlobs.set(rel, await provider.blobHash(accepted, rel).catch(() => undefined));
-        }
+        patched.forEach((rel, index) => acceptedBlobs.set(rel, acceptedHashes[index]));
+        const blobs = await this.callBlobs(provider, calls);
         const byPath = new Map();
         for (const call of calls) {
             const list = byPath.get(call.path) ?? [];
@@ -542,7 +553,7 @@ export class SessionChangeManager {
             const raw = call.commit === undefined ? '' : patches.get(call.commit) ?? '';
             const view = patchFileViews(raw, this.options.maxDiffHunksPerFile, this.options.maxDiffBytesPerFile)
                 .find(item => item.path === call.path);
-            const blob = await this.callBlob(provider, call);
+            const blob = blobs.get(call.callId);
             const acceptedBlob = acceptedBlobs.get(call.path);
             const later = (byPath.get(call.path) ?? []).filter(item => item.seq > call.seq).map(item => item.callId);
             latestBlob.set(call.path, blob);
@@ -582,12 +593,33 @@ export class SessionChangeManager {
             .find(item => item.path === call.path);
         return { call, patch, ...(view === undefined ? {} : { view }) };
     }
-    async callBlob(provider, call) {
-        if (call.blob !== undefined)
-            return call.blob;
-        if (call.deleted === true || call.commit === undefined)
-            return undefined;
-        return provider.blobHash(call.commit, call.path).catch(() => undefined);
+    /**
+     * Post-image blob of every call, keyed by `callId`. Blobs already in memory
+     * (the common case) are used as-is; the rest — a cold read after a restart
+     * leaves `TrackedCall.blob` unset — are resolved in one
+     * `cat-file --batch-check` instead of one `rev-parse` per call.
+     */
+    async callBlobs(provider, calls) {
+        const result = new Map();
+        const pending = [];
+        for (const call of calls) {
+            if (call.blob !== undefined) {
+                result.set(call.callId, call.blob);
+                continue;
+            }
+            if (call.deleted === true || call.commit === undefined) {
+                result.set(call.callId, undefined);
+                continue;
+            }
+            pending.push(call);
+        }
+        if (pending.length > 0) {
+            const hashes = await provider
+                .blobHashes(pending.map(call => ({ treeish: call.commit, path: call.path })))
+                .catch(() => new Array(pending.length));
+            pending.forEach((call, index) => result.set(call.callId, hashes[index]));
+        }
+        return result;
     }
     async callPatch(provider, call) {
         if (call.commit === undefined)
@@ -599,30 +631,71 @@ export class SessionChangeManager {
         ]);
         return result.code === 0 ? result.stdout : '';
     }
-    async acceptValue(bound, paths) {
+    /**
+     * Accepted blob of many paths in one process. `AcceptBase.acceptedBlob`
+     * resolves the ref and spawns per path; the accept paths ask for every
+     * changed file at once. `known` entries (from the accept that just ran) are
+     * reused as-is, and only the paths it did not cover are resolved.
+     */
+    async acceptedBlobMap(bound, provider, paths, known) {
+        const result = new Map();
+        const missing = [];
+        for (const rel of [...new Set(paths)]) {
+            if (known !== undefined && known.has(rel))
+                result.set(rel, known.get(rel));
+            else
+                missing.push(rel);
+        }
+        if (missing.length > 0) {
+            const commit = await this.accepts.ref(bound.cwd, bound.sessionId);
+            const hashes = commit === undefined
+                ? new Array(missing.length)
+                : await provider
+                    .blobHashes(missing.map(path => ({ treeish: commit, path })))
+                    .catch(() => new Array(missing.length));
+            missing.forEach((rel, index) => result.set(rel, hashes[index]));
+        }
+        return result;
+    }
+    async acceptValue(bound, paths, acceptedBlobs) {
         const provider = this.snapshots.providerFor(bound.cwd, bound.sessionId);
+        const unique = [...new Set(paths)];
+        const accepted = await this.acceptedBlobMap(bound, provider, unique, acceptedBlobs);
+        const current = await provider.hashBlobs(unique).catch(() => new Map());
         const acceptedFiles = [];
-        for (const rel of paths) {
-            const acceptedBlob = await this.accepts.acceptedBlob(bound.cwd, bound.sessionId, rel);
-            const current = await provider.fileHash(rel).catch(() => undefined);
-            if (acceptedBlob !== undefined && acceptedBlob === current)
+        for (const rel of unique) {
+            const acceptedBlob = accepted.get(rel);
+            if (acceptedBlob !== undefined && acceptedBlob === current.get(rel))
                 acceptedFiles.push(rel);
         }
-        return { acceptedFiles, acceptedModifications: await this.acceptedPatchIds(bound, paths) };
+        return { acceptedFiles, acceptedModifications: await this.acceptedPatchIds(bound, unique, accepted) };
     }
-    /** Patch ids whose post-image already equals the accepted content. */
-    async acceptedPatchIds(bound, paths) {
+    /**
+     * Patch ids whose post-image already equals the accepted content. Pass
+     * `acceptedBlobs` (from the accept that just ran) to skip resolving the
+     * accepted tree again.
+     */
+    async acceptedPatchIds(bound, paths, acceptedBlobs) {
         const provider = this.snapshots.providerFor(bound.cwd, bound.sessionId);
+        const unique = [...new Set(paths)];
+        const wanted = new Set(unique);
+        const accepted = await this.acceptedBlobMap(bound, provider, unique, acceptedBlobs);
+        const calls = (await this.tracker.loadCalls(bound.cwd, bound.sessionId)).filter(call => wanted.has(call.path));
+        const blobs = await this.callBlobs(provider, calls);
+        const byPath = new Map();
+        for (const call of calls) {
+            const list = byPath.get(call.path) ?? [];
+            list.push(call);
+            byPath.set(call.path, list);
+        }
         const ids = [];
-        const calls = await this.tracker.loadCalls(bound.cwd, bound.sessionId);
-        for (const rel of [...new Set(paths)]) {
-            const acceptedBlob = await this.accepts.acceptedBlob(bound.cwd, bound.sessionId, rel);
+        // Path-major order, matching the previous per-path implementation.
+        for (const rel of unique) {
+            const acceptedBlob = accepted.get(rel);
             if (acceptedBlob === undefined)
                 continue;
-            for (const call of calls) {
-                if (call.path !== rel)
-                    continue;
-                if (await this.callBlob(provider, call) === acceptedBlob)
+            for (const call of byPath.get(rel) ?? []) {
+                if (blobs.get(call.callId) === acceptedBlob)
                     ids.push(call.callId);
             }
         }

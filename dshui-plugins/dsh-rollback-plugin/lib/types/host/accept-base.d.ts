@@ -33,7 +33,9 @@ export declare class AcceptBase {
     /**
      * Accept the current worktree content of each path (a file that disappeared
      * is accepted as a deletion). This is the only accept path that reads the
-     * worktree.
+     * worktree. The returned `blobs` map holds the accepted (post-image) blob of
+     * every requested path — `undefined` for a deletion — so callers can classify
+     * modifications without resolving the accepted tree again.
      */
     acceptPaths(cwd: string, sessionId: string, relPaths: readonly string[], options?: {
         seedTree?: string;
@@ -42,6 +44,7 @@ export declare class AcceptBase {
         ok: boolean;
         reason?: string;
         commit?: string;
+        blobs?: Map<string, string | undefined>;
     }>;
     /**
      * Accept one patch by applying its forward diff onto the accepted tree. The
@@ -57,5 +60,6 @@ export declare class AcceptBase {
         ok: boolean;
         reason?: string;
         commit?: string;
+        blobs?: Map<string, string | undefined>;
     }>;
 }

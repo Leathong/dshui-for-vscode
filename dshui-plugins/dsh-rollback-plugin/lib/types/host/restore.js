@@ -203,11 +203,19 @@ export class RollbackRestore {
             try {
                 const gitRestore = selected.value.git.filter(item => item.inSnapshot);
                 const gitCreated = selected.value.git.filter(item => !item.inSnapshot);
-                await provider.restorePaths(prepared.snapshot.tree ?? '', gitRestore.map(item => item.rel));
-                for (const rel of gitRestore.map(item => item.rel)) {
-                    const expected = await provider.blobHash(prepared.snapshot.tree ?? '', rel);
-                    const actual = await provider.fileHash(rel);
-                    if (expected !== actual)
+                const restoreRels = gitRestore.map(item => item.rel);
+                const snapshotTree = prepared.snapshot.tree ?? '';
+                await provider.restorePaths(snapshotTree, restoreRels);
+                // Batched verification: one `cat-file --batch-check` for the expected
+                // blobs and one `hash-object --stdin-paths` for the worktree, instead
+                // of two spawns per restored path.
+                const expected = await provider
+                    .blobHashes(restoreRels.map(path => ({ treeish: snapshotTree, path })))
+                    .catch(() => new Array(restoreRels.length));
+                const actual = await provider.hashBlobs(restoreRels).catch(() => new Map());
+                for (let index = 0; index < restoreRels.length; index += 1) {
+                    const rel = restoreRels[index];
+                    if (expected[index] !== actual.get(rel))
                         throw new Error(`verification failed for ${rel}`);
                     restored.push(rel);
                 }
