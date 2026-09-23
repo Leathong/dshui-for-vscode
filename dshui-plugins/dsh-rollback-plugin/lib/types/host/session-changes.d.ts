@@ -99,6 +99,8 @@ export declare class SessionChangeManager {
      */
     private acceptedPatchIds;
 }
+/** Short, bounded path list for a warning message. */
+export declare function summarize(paths: readonly string[], max?: number): string;
 /** Attach per-path tool-call patch lists to the file rows. */
 export declare function attachToolCalls(changes: RollbackFileChange[], modifications: readonly RollbackModification[]): void;
 /** The turn the session started at (first `turn/start`). */

@@ -59,9 +59,11 @@ export interface RollbackFileChange {
     /** Session modification list: the file's current state matches an accept marker. */
     accepted?: boolean;
     /**
-     * The path was already accepted, then changed outside this session's tool
-     * chain, so the worktree no longer matches the accepted content. The row stays
-     * in the unaccepted list, but the change is not attributable to this session.
+     * The change is not attributable to this session's tool chain: another
+     * session, an external editor or bash wrote it. In the rollback preview these
+     * rows are left unselected by default so a rollback cannot clobber work this
+     * session never made; in the modification list they are already-accepted files
+     * changed outside this session.
      */
     foreign?: boolean;
     createdAfterSnapshot?: boolean;

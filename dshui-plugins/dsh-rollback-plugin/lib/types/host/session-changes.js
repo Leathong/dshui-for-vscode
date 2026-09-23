@@ -715,7 +715,7 @@ function safeRel(provider, input) {
     }
 }
 /** Short, bounded path list for a warning message. */
-function summarize(paths, max = 3) {
+export function summarize(paths, max = 3) {
     const shown = paths.slice(0, max).join(', ');
     return paths.length > max ? `${shown}, … (+${paths.length - max})` : shown;
 }

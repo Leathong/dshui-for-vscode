@@ -2417,6 +2417,8 @@ var RollbackRestore = class {
 			messageId
 		});
 		const warnings = [...found.degraded ? [`snapshot is from turn ${found.manifest.turn}, before the requested turn ${boundary.targetTurn}`] : []];
+		await this.tracker.flush(sessionId).catch(() => void 0);
+		const calls = await this.tracker.loadCalls(cwd, sessionId).catch(() => []);
 		let preparedTree;
 		let changes = [];
 		if (found.manifest.tree !== void 0 && gitAvailable) {
@@ -2433,7 +2435,7 @@ var RollbackRestore = class {
 						absolutePath: provider.absolutePath(entry.path),
 						status: "created",
 						source: "git",
-						restorable: false,
+						restorable: true,
 						createdAfterSnapshot: true
 					});
 					continue;
@@ -2451,7 +2453,9 @@ var RollbackRestore = class {
 				});
 			}
 		} else if (found.manifest.tree !== void 0) warnings.push("the isolated snapshot store is unavailable; only the tracked call chain is available");
-		const modifications = await this.buildModifications(session, cwd, found.manifest.turn, provider);
+		const foreign = await this.attributeChanges(provider, calls, changes).catch(() => []);
+		if (foreign.length > 0) warnings.push(`${foreign.length} file(s) were not written by this session's tool calls (another session or an external edit) and are not selected by default: ${summarize(foreign)}`);
+		const modifications = await this.buildModifications(found.manifest.turn, provider, calls);
 		attachToolCalls(changes, modifications);
 		const prepareId = crypto.randomUUID();
 		const prepared = {
@@ -2646,7 +2650,7 @@ var RollbackRestore = class {
 		return ok(session);
 	}
 	async selectFilePaths(prepared, request, provider) {
-		const requested = request.scope === "files" ? request.paths : void 0;
+		const requested = request.scope === "modifications" ? void 0 : request.paths;
 		const normalizedRequested = requested?.map((item) => {
 			try {
 				return provider.normalizeRelPath(item);
@@ -2692,9 +2696,72 @@ var RollbackRestore = class {
 			git
 		});
 	}
+	/**
+	* Attribute every previewed change to this session's tool-call chain and flag
+	* the rest as `foreign`.
+	*
+	* A path is ours when the newest tracked call for it has no usable post-image
+	* (oversized, superseded, never frozen — the permissive legacy semantics) or
+	* when the worktree still matches that post-image. Everything else was
+	* written by another session or outside the tool chain, including a file this
+	* session wrote and somebody else overwrote afterwards.
+	*/
+	async attributeChanges(provider, calls, changes) {
+		if (changes.length === 0) return [];
+		const current = await provider.hashBlobs(changes.map((change) => change.path)).catch(() => /* @__PURE__ */ new Map());
+		const newest = /* @__PURE__ */ new Map();
+		for (const call of calls) {
+			const previous = newest.get(call.path);
+			if (previous === void 0 || call.seq >= previous.seq) newest.set(call.path, call);
+		}
+		const postImages = await this.callPostImages(provider, [...newest.values()]);
+		const foreign = [];
+		for (const change of changes) {
+			const call = newest.get(change.path);
+			if (call === void 0) {
+				change.foreign = true;
+				foreign.push(change.path);
+				continue;
+			}
+			if (!postImages.has(call.callId)) continue;
+			if (postImages.get(call.callId) !== current.get(change.path)) {
+				change.foreign = true;
+				foreign.push(change.path);
+			}
+		}
+		return foreign;
+	}
+	/**
+	* Post-image blob of each call, keyed by `callId`. Deletions map to
+	* `undefined`; calls without a usable post-image are absent from the map so
+	* callers can tell "the call removed the file" from "nothing recorded".
+	*/
+	async callPostImages(provider, calls) {
+		const result = /* @__PURE__ */ new Map();
+		const pending = [];
+		for (const call of calls) {
+			if (call.deleted === true) {
+				result.set(call.callId, void 0);
+				continue;
+			}
+			if (call.blob !== void 0) {
+				result.set(call.callId, call.blob);
+				continue;
+			}
+			if (call.commit !== void 0) pending.push(call);
+		}
+		if (pending.length > 0) {
+			const hashes = await provider.blobHashes(pending.map((call) => ({
+				treeish: call.commit,
+				path: call.path
+			}))).catch(() => new Array(pending.length));
+			pending.forEach((call, index) => result.set(call.callId, hashes[index]));
+		}
+		return result;
+	}
 	/** Per-call patches of one turn, read from the tracked commit chain. */
-	async buildModifications(session, cwd, turn, provider) {
-		const calls = (await this.tracker.loadCalls(cwd, session.id)).filter((call) => call.turn === turn);
+	async buildModifications(turn, provider, tracked) {
+		const calls = tracked.filter((call) => call.turn === turn);
 		if (calls.length === 0) return [];
 		const commits = calls.map((call) => call.commit).filter((commit) => commit !== void 0);
 		const patches = commits.length > 0 ? await provider.diffTreePatches(commits, { context: 3 }).catch(() => /* @__PURE__ */ new Map()) : /* @__PURE__ */ new Map();
@@ -4464,6 +4531,6 @@ function installTrackingListeners(ctx, service) {
 	});
 }
 //#endregion
-export { ACCEPTED_REF, AcceptBase, CHAIN_BASE_REF, CHAIN_HEAD_REF, CallTracker, DEFAULT_ROLLBACK_CONFIG, GitProvider, POINTS_PREFIX, RollbackService, SessionChangeManager, SnapshotManager, apply, applyHunkUndo, attachToolCalls, boundaryInfo, buildFileChange, changeLedgerRoot, diffGitPath, encodeSessionSegment, findPreviousTurnEnd, hunkFingerprint, inject, installTrackingListeners, isHash, journalsPath, locksDir, manifestsPath, name, parseDiffHunks, parseDiffTreeZ, patchFileViews, pointRef, projectDirKey, readJsonFile, replayPatches, resolveBoundary, resolveBoundaryForTurn, resolveDshHome, sessionDirFor, sessionSnapshotRepo, sessionStartTurn, spawnGit, splitDiffByPath, splitDiffSections, splitPatchFiles, unquoteGitPath, writeJsonFileAtomic };
+export { ACCEPTED_REF, AcceptBase, CHAIN_BASE_REF, CHAIN_HEAD_REF, CallTracker, DEFAULT_ROLLBACK_CONFIG, GitProvider, POINTS_PREFIX, RollbackService, SessionChangeManager, SnapshotManager, apply, applyHunkUndo, attachToolCalls, boundaryInfo, buildFileChange, changeLedgerRoot, diffGitPath, encodeSessionSegment, findPreviousTurnEnd, hunkFingerprint, inject, installTrackingListeners, isHash, journalsPath, locksDir, manifestsPath, name, parseDiffHunks, parseDiffTreeZ, patchFileViews, pointRef, projectDirKey, readJsonFile, replayPatches, resolveBoundary, resolveBoundaryForTurn, resolveDshHome, sessionDirFor, sessionSnapshotRepo, sessionStartTurn, spawnGit, splitDiffByPath, splitDiffSections, splitPatchFiles, summarize, unquoteGitPath, writeJsonFileAtomic };
 
 //# sourceMappingURL=index.js.map

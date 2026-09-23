@@ -27,6 +27,23 @@ export declare class RollbackRestore {
     openAt(sessionId: string, request: OpenAtRequest): Promise<RollbackResult<OpenAtValue>>;
     private liveSession;
     private selectFilePaths;
+    /**
+     * Attribute every previewed change to this session's tool-call chain and flag
+     * the rest as `foreign`.
+     *
+     * A path is ours when the newest tracked call for it has no usable post-image
+     * (oversized, superseded, never frozen — the permissive legacy semantics) or
+     * when the worktree still matches that post-image. Everything else was
+     * written by another session or outside the tool chain, including a file this
+     * session wrote and somebody else overwrote afterwards.
+     */
+    private attributeChanges;
+    /**
+     * Post-image blob of each call, keyed by `callId`. Deletions map to
+     * `undefined`; calls without a usable post-image are absent from the map so
+     * callers can tell "the call removed the file" from "nothing recorded".
+     */
+    private callPostImages;
     /** Per-call patches of one turn, read from the tracked commit chain. */
     private buildModifications;
     /**

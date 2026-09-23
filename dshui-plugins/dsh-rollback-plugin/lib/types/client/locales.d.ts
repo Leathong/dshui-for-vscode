@@ -1,6 +1,6 @@
 import type { LocaleDictOf } from '@deepseek-ai/dsh-client-ui-slots';
 export declare const NS = "rollback";
-export type RollbackLocaleKey = 'action' | 'title' | 'loading' | 'snapshot' | 'targetTurn' | 'degraded' | 'changes' | 'modifications' | 'file' | 'modification' | 'status.modified' | 'status.deleted' | 'status.created' | 'status.typechange' | 'status.ignored' | 'status.binary' | 'status.nested-repo' | 'wholeTurn' | 'selectedFiles' | 'selectedModifications' | 'createdPolicy.keep' | 'createdPolicy.delete' | 'deleteCreated' | 'confirm' | 'cancel' | 'turn1NoFork' | 'merge' | 'fileOnly' | 'unsupported' | 'conflictRisk' | 'success' | 'failed' | 'empty' | 'openAt' | 'openInEditor' | 'workspaceChanged' | 'bridgeUnavailable' | 'dock.title' | 'dock.refresh' | 'dock.empty' | 'dock.modificationsOnly' | 'dock.accepted' | 'dock.foreign' | 'dock.foreignHint' | 'dock.showAccepted' | 'dock.hideAccepted' | 'dock.accept' | 'dock.acceptAll' | 'dock.undo' | 'dock.undoHunk' | 'dock.hunks' | 'dock.undoAll' | 'dock.undoing' | 'dock.baseline' | 'dock.patches' | 'dock.stale' | 'dock.fileRestoreHint' | 'dock.updated';
+export type RollbackLocaleKey = 'action' | 'title' | 'loading' | 'snapshot' | 'targetTurn' | 'degraded' | 'changes' | 'modifications' | 'file' | 'modification' | 'status.modified' | 'status.deleted' | 'status.created' | 'status.typechange' | 'status.ignored' | 'status.binary' | 'status.nested-repo' | 'wholeTurn' | 'selectedFiles' | 'selectedModifications' | 'selectAll' | 'selectOwn' | 'selectedCount' | 'foreign' | 'foreignHint' | 'foreignNotice' | 'createdPolicy.keep' | 'createdPolicy.delete' | 'deleteCreated' | 'confirm' | 'cancel' | 'turn1NoFork' | 'merge' | 'fileOnly' | 'unsupported' | 'conflictRisk' | 'success' | 'failed' | 'empty' | 'openAt' | 'openInEditor' | 'workspaceChanged' | 'bridgeUnavailable' | 'dock.title' | 'dock.refresh' | 'dock.empty' | 'dock.modificationsOnly' | 'dock.accepted' | 'dock.foreign' | 'dock.foreignHint' | 'dock.showAccepted' | 'dock.hideAccepted' | 'dock.accept' | 'dock.acceptAll' | 'dock.undo' | 'dock.undoHunk' | 'dock.hunks' | 'dock.undoAll' | 'dock.undoing' | 'dock.baseline' | 'dock.patches' | 'dock.stale' | 'dock.fileRestoreHint' | 'dock.updated';
 declare module '@deepseek-ai/dsh-client-ui-slots' {
     interface LocaleNamespaceMap {
         rollback: RollbackLocaleKey;
@@ -27,6 +27,12 @@ export declare const zh: {
     wholeTurn: string;
     selectedFiles: string;
     selectedModifications: string;
+    selectAll: string;
+    selectOwn: string;
+    selectedCount: string;
+    foreign: string;
+    foreignHint: string;
+    foreignNotice: string;
     'createdPolicy.keep': string;
     'createdPolicy.delete': string;
     deleteCreated: string;
@@ -87,6 +93,12 @@ export declare const en: {
     wholeTurn: string;
     selectedFiles: string;
     selectedModifications: string;
+    selectAll: string;
+    selectOwn: string;
+    selectedCount: string;
+    foreign: string;
+    foreignHint: string;
+    foreignNotice: string;
     'createdPolicy.keep': string;
     'createdPolicy.delete': string;
     deleteCreated: string;

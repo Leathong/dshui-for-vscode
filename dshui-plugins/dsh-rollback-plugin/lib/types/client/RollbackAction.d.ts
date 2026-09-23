@@ -1,8 +1,8 @@
 import type { ReactElement } from 'react';
+import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots';
 import type { SessionId } from '@deepseek-ai/dsh-session/types';
 import type { TurnLocation } from '@deepseek-ai/dsh-client-ui-conversation/client';
 import type { OpenAtResult, RollbackExecuteRequest, RollbackExecuteResult, RollbackPrepareResult } from '../shared/types.ts';
-import type { RollbackLocaleKey } from './locales.ts';
 /** Rollback anchor: a finalized assistant message or a turn number. */
 export interface RollbackTarget {
     messageId?: string;
@@ -33,7 +33,7 @@ export interface RollbackActionProps {
     openAt: RollbackActionInjected['openAt'];
     forkAt: RollbackActionInjected['forkAt'];
     restart: RollbackActionInjected['restart'];
-    t: (key: RollbackLocaleKey) => string;
+    t: TranslateNS<'rollback'>;
 }
 export declare function RollbackAction(props: RollbackActionProps): ReactElement;
 /** User-message entry: rollback anchored to the Turn the message opens. The
@@ -48,6 +48,6 @@ export declare function UserRollbackAction(props: {
     openAt: RollbackActionInjected['openAt'];
     forkAt: RollbackActionInjected['forkAt'];
     restart: RollbackActionInjected['restart'];
-    t: (key: RollbackLocaleKey) => string;
+    t: TranslateNS<'rollback'>;
 }): ReactElement;
 export {};

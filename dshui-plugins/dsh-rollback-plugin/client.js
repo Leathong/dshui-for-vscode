@@ -27,9 +27,15 @@ window.__ModuleLoader__.load({
 			"status.ignored": "ignored",
 			"status.binary": "二进制",
 			"status.nested-repo": "嵌套仓库",
-			"wholeTurn": "整体回滚（含会话分支）",
-			"selectedFiles": "仅恢复选中文件",
+			"wholeTurn": "整体回滚（按勾选恢复 + 分支会话）",
+			"selectedFiles": "仅恢复选中文件（不分支会话）",
 			"selectedModifications": "仅撤销选中修改",
+			"selectAll": "全选",
+			"selectOwn": "仅选本会话",
+			"selectedCount": "已勾选 {selected} / {total} 个文件",
+			"foreign": "非本会话改动",
+			"foreignHint": "该文件不是本会话工具写入的（其他会话或外部编辑）；默认不勾选，勾选后会随本次回滚一起被覆盖。",
+			"foreignNotice": "{count} 个文件不是本会话写入，默认未勾选；如需一并回滚请手动勾选。",
 			"createdPolicy.keep": "保留新建文件",
 			"createdPolicy.delete": "删除本轮新建文件",
 			"deleteCreated": "删除新建文件",
@@ -87,9 +93,15 @@ window.__ModuleLoader__.load({
 			"status.ignored": "Ignored",
 			"status.binary": "Binary",
 			"status.nested-repo": "Nested repo",
-			"wholeTurn": "Whole turn (with session fork)",
-			"selectedFiles": "Restore selected files only",
+			"wholeTurn": "Whole turn (restores the checked files + forks the session)",
+			"selectedFiles": "Restore selected files only (no session fork)",
 			"selectedModifications": "Undo selected modifications only",
+			"selectAll": "Select all",
+			"selectOwn": "Select session files",
+			"selectedCount": "{selected} of {total} file(s) selected",
+			"foreign": "Other session",
+			"foreignHint": "Not written by this session's tools (another session or an external edit); it is unchecked by default and is overwritten if you check it.",
+			"foreignNotice": "{count} file(s) were not written by this session and are unchecked by default; check them manually to roll them back too.",
 			"createdPolicy.keep": "Keep created files",
 			"createdPolicy.delete": "Delete files created this turn",
 			"deleteCreated": "Delete created files",
@@ -995,7 +1007,7 @@ window.__ModuleLoader__.load({
 				const loaded = business.value;
 				setData(loaded);
 				setScope("turn");
-				setPaths(new Set(loaded.changes.filter((change) => change.restorable).map((change) => change.path)));
+				setPaths(new Set(loaded.changes.filter((change) => change.restorable && change.foreign !== true).map((change) => change.path)));
 				setModificationIds(new Set(loaded.modifications.filter((item) => item.restorable === "merge").map((item) => item.modificationId)));
 				setLoading(false);
 			};
@@ -1008,17 +1020,14 @@ window.__ModuleLoader__.load({
 					createdPolicy,
 					prepareId: data.prepareId
 				};
-				const remote = await execute(target, scope === "turn" ? {
-					...base,
-					scope: "turn"
-				} : scope === "files" ? {
-					...base,
-					scope: "files",
-					paths: [...paths]
-				} : {
+				const remote = await execute(target, scope === "modifications" ? {
 					...base,
 					scope: "modifications",
 					modificationIds: [...modificationIds]
+				} : {
+					...base,
+					scope,
+					paths: [...paths]
 				}).catch((executeError) => {
 					setResultError(executeError instanceof Error ? executeError.message : String(executeError));
 					return null;
@@ -1049,7 +1058,6 @@ window.__ModuleLoader__.load({
 				}
 			};
 			const togglePath = (path) => {
-				setScope("files");
 				const next = new Set(paths);
 				if (next.has(path)) next.delete(path);
 				else next.add(path);
@@ -1109,6 +1117,9 @@ window.__ModuleLoader__.load({
 				scope,
 				t
 			]);
+			const selectablePaths = (0, react.useMemo)(() => (data?.changes ?? []).filter((change) => change.restorable).map((change) => change.path), [data]);
+			const ownPaths = (0, react.useMemo)(() => (data?.changes ?? []).filter((change) => change.restorable && change.foreign !== true).map((change) => change.path), [data]);
+			const foreignCount = (0, react.useMemo)(() => (data?.changes ?? []).filter((change) => change.foreign === true).length, [data]);
 			const emptySelection = scope === "files" ? paths.size === 0 : scope === "modifications" ? modificationIds.size === 0 : false;
 			return (0, react_jsx_runtime.jsxs)("span", {
 				style: {
@@ -1223,7 +1234,48 @@ window.__ModuleLoader__.load({
 										}
 									}), t("createdPolicy.delete")]
 								}),
-								(0, react_jsx_runtime.jsxs)("div", { children: [(0, react_jsx_runtime.jsx)("h4", { children: t("changes") }), fileRows.length === 0 ? (0, react_jsx_runtime.jsx)("div", { children: t("empty") }) : fileRows] }),
+								(0, react_jsx_runtime.jsxs)("div", { children: [
+									(0, react_jsx_runtime.jsx)("h4", { children: t("changes") }),
+									selectablePaths.length > 0 ? (0, react_jsx_runtime.jsxs)("div", {
+										style: {
+											display: "flex",
+											gap: 8,
+											marginBottom: 6,
+											alignItems: "center"
+										},
+										children: [
+											(0, react_jsx_runtime.jsx)("button", {
+												type: "button",
+												onClick: () => {
+													setPaths(new Set(selectablePaths));
+												},
+												children: t("selectAll")
+											}),
+											(0, react_jsx_runtime.jsx)("button", {
+												type: "button",
+												onClick: () => {
+													setPaths(new Set(ownPaths));
+												},
+												children: t("selectOwn")
+											}),
+											scope === "modifications" ? null : (0, react_jsx_runtime.jsx)("span", {
+												style: { opacity: .75 },
+												children: t("selectedCount", {
+													selected: paths.size,
+													total: selectablePaths.length
+												})
+											})
+										]
+									}) : null,
+									foreignCount > 0 ? (0, react_jsx_runtime.jsx)("div", {
+										style: {
+											marginBottom: 6,
+											opacity: .85
+										},
+										children: t("foreignNotice", { count: foreignCount })
+									}) : null,
+									fileRows.length === 0 ? (0, react_jsx_runtime.jsx)("div", { children: t("empty") }) : fileRows
+								] }),
 								data.warnings.length > 0 ? (0, react_jsx_runtime.jsx)("div", {
 									style: {
 										marginTop: 8,
@@ -1336,7 +1388,15 @@ window.__ModuleLoader__.load({
 							style: { opacity: .75 },
 							children: t(`status.${change.status}`)
 						}),
-						change.createdAfterSnapshot === true ? (0, react_jsx_runtime.jsx)("span", { children: t("status.created") }) : null
+						change.createdAfterSnapshot === true ? (0, react_jsx_runtime.jsx)("span", { children: t("status.created") }) : null,
+						change.foreign === true ? (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Tooltip, {
+							label: t("foreignHint"),
+							side: "bottom",
+							children: (0, react_jsx_runtime.jsx)("span", {
+								style: { color: "#b8860b" },
+								children: t("foreign")
+							})
+						}) : null
 					]
 				}), modificationScope && modifications.length > 0 ? (0, react_jsx_runtime.jsx)("div", {
 					style: { marginLeft: 20 },

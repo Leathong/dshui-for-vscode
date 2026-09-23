@@ -4,7 +4,7 @@ import * as path from 'node:path';
 import { ok, fail } from "./errors.js";
 import { resolveBoundary, resolveBoundaryForTurn, boundaryInfo } from "./boundary.js";
 import { patchFileViews, replayPatches } from "./hunk-undo.js";
-import { attachToolCalls } from "./session-changes.js";
+import { attachToolCalls, summarize } from "./session-changes.js";
 export class RollbackRestore {
     ctx;
     snapshots;
@@ -65,6 +65,12 @@ export class RollbackRestore {
             return fail('snapshot-expired', 'the snapshot objects are no longer available (the session store was removed or garbage collected)', { sessionId, messageId });
         }
         const warnings = [...(found.degraded ? [`snapshot is from turn ${found.manifest.turn}, before the requested turn ${boundary.targetTurn}`] : [])];
+        // Freeze pending calls before anything else: attribution compares the
+        // worktree against each path's newest tracked post-image, and `loadCalls`
+        // only rebuilds frozen calls from the chain (unfrozen ones would look like
+        // somebody else's writes).
+        await this.tracker.flush(sessionId).catch(() => undefined);
+        const calls = await this.tracker.loadCalls(cwd, sessionId).catch(() => []);
         let preparedTree;
         let changes = [];
         if (found.manifest.tree !== undefined && gitAvailable) {
@@ -83,7 +89,10 @@ export class RollbackRestore {
                         absolutePath: provider.absolutePath(entry.path),
                         status: 'created',
                         source: 'git',
-                        restorable: false,
+                        // Selectable like any other row: with the selection defining the
+                        // rollback scope, the created-policy checkbox decides whether a
+                        // selected new file is kept or deleted.
+                        restorable: true,
                         createdAfterSnapshot: true,
                     });
                     continue;
@@ -104,7 +113,14 @@ export class RollbackRestore {
         else if (found.manifest.tree !== undefined) {
             warnings.push('the isolated snapshot store is unavailable; only the tracked call chain is available');
         }
-        const modifications = await this.buildModifications(session, cwd, found.manifest.turn, provider);
+        // Session attribution: the preview diff is workspace-wide, so it also lists
+        // files another session (or an editor/bash) touched since the snapshot.
+        // Those rows are marked `foreign` and are left unselected by the client.
+        const foreign = await this.attributeChanges(provider, calls, changes).catch(() => []);
+        if (foreign.length > 0) {
+            warnings.push(`${foreign.length} file(s) were not written by this session's tool calls (another session or an external edit) and are not selected by default: ${summarize(foreign)}`);
+        }
+        const modifications = await this.buildModifications(found.manifest.turn, provider, calls);
         attachToolCalls(changes, modifications);
         const prepareId = crypto.randomUUID();
         const prepared = {
@@ -324,11 +340,13 @@ export class RollbackRestore {
         return ok(session);
     }
     async selectFilePaths(prepared, request, provider) {
-        // scope=files distinguishes an absent paths field (undefined → every
-        // restorable change, the documented legacy meaning) from an explicit
-        // selection: a present but empty array means the user unchecked every
-        // file, which must restore nothing instead of falling back to "all".
-        const requested = request.scope === 'files' ? request.paths : undefined;
+        // `paths` is the selection for both `files` and `turn`: the preview
+        // checkboxes are the selection UI in either mode, and turn only adds the
+        // session fork on top. An absent field keeps the legacy meaning ("every
+        // restorable change", used by older clients); a present but empty array
+        // means the user unchecked every file, which must restore nothing instead
+        // of falling back to "all".
+        const requested = request.scope === 'modifications' ? undefined : request.paths;
         const normalizedRequested = requested?.map(item => {
             try {
                 return provider.normalizeRelPath(item);
@@ -380,9 +398,78 @@ export class RollbackRestore {
         }
         return ok({ all, git });
     }
+    /**
+     * Attribute every previewed change to this session's tool-call chain and flag
+     * the rest as `foreign`.
+     *
+     * A path is ours when the newest tracked call for it has no usable post-image
+     * (oversized, superseded, never frozen — the permissive legacy semantics) or
+     * when the worktree still matches that post-image. Everything else was
+     * written by another session or outside the tool chain, including a file this
+     * session wrote and somebody else overwrote afterwards.
+     */
+    async attributeChanges(provider, calls, changes) {
+        if (changes.length === 0)
+            return [];
+        const current = await provider
+            .hashBlobs(changes.map(change => change.path))
+            .catch(() => new Map());
+        // `calls` is in chain order, so the last write per path wins.
+        const newest = new Map();
+        for (const call of calls) {
+            const previous = newest.get(call.path);
+            if (previous === undefined || call.seq >= previous.seq)
+                newest.set(call.path, call);
+        }
+        const postImages = await this.callPostImages(provider, [...newest.values()]);
+        const foreign = [];
+        for (const change of changes) {
+            const call = newest.get(change.path);
+            if (call === undefined) {
+                change.foreign = true;
+                foreign.push(change.path);
+                continue;
+            }
+            if (!postImages.has(call.callId))
+                continue;
+            if (postImages.get(call.callId) !== current.get(change.path)) {
+                change.foreign = true;
+                foreign.push(change.path);
+            }
+        }
+        return foreign;
+    }
+    /**
+     * Post-image blob of each call, keyed by `callId`. Deletions map to
+     * `undefined`; calls without a usable post-image are absent from the map so
+     * callers can tell "the call removed the file" from "nothing recorded".
+     */
+    async callPostImages(provider, calls) {
+        const result = new Map();
+        const pending = [];
+        for (const call of calls) {
+            if (call.deleted === true) {
+                result.set(call.callId, undefined);
+                continue;
+            }
+            if (call.blob !== undefined) {
+                result.set(call.callId, call.blob);
+                continue;
+            }
+            if (call.commit !== undefined)
+                pending.push(call);
+        }
+        if (pending.length > 0) {
+            const hashes = await provider
+                .blobHashes(pending.map(call => ({ treeish: call.commit, path: call.path })))
+                .catch(() => new Array(pending.length));
+            pending.forEach((call, index) => result.set(call.callId, hashes[index]));
+        }
+        return result;
+    }
     /** Per-call patches of one turn, read from the tracked commit chain. */
-    async buildModifications(session, cwd, turn, provider) {
-        const calls = (await this.tracker.loadCalls(cwd, session.id)).filter(call => call.turn === turn);
+    async buildModifications(turn, provider, tracked) {
+        const calls = tracked.filter(call => call.turn === turn);
         if (calls.length === 0)
             return [];
         const commits = calls.map(call => call.commit).filter((commit) => commit !== undefined);
