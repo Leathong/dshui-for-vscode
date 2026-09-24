@@ -4,6 +4,12 @@
  * dsh 升级（或重新检出源码）后运行：`node scripts/verify-patches.mjs`。
  * 逐个检查每个改动文件的关键标记；缺失即说明该补丁需要重新套用。
  * 退出码：全部就位为 0，有缺失为 1。
+ *
+ * 注意：0.1.7 起上游把会话行操作改成 slot 目录（`sidebar.workspaces.session.menu.item`
+ * 与 `...row.action`），dshui 的「删除会话」因此落在
+ * `ui-workspace/src/client/session-actions/DeleteSession.tsx`，Rows.tsx 本身不再改。
+ * 会话界面的 SCOPE 逻辑也随之从 ConversationRoot.tsx 拆到
+ * `ui-conversation/src/client/skeleton/dshui-scope.ts` 与 ConversationContent.tsx。
  */
 import * as fs from 'node:fs'
 import * as path from 'node:path'
@@ -12,7 +18,7 @@ import { fileURLToPath } from 'node:url'
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const src = path.join(root, '.dsh-src')
 
-/** 每个改动文件需要存在的标记（一项即可视为该文件已补丁）。 */
+/** 每个改动文件需要存在的标记（全部命中才视为该文件已补丁）。 */
 const CHECKS = [
   {
     file: 'packages/client/tsdown.client.ts',
@@ -24,19 +30,19 @@ const CHECKS = [
   },
   {
     file: 'packages/client/ui-workspace/src/client/rows/WorkspaceBrowser.tsx',
-    markers: ['scopedWorkspacePath', 'onSessionDelete', 'deletedSessionIds'],
+    markers: ['scopedWorkspacePath', 'useDeletedSessions', 'deletedSessionIds'],
   },
   {
     file: 'packages/client/ui-workspace/src/client/contract/slots.ts',
-    markers: ['deleteSession: (sessionId: SessionId) => Promise<void>'],
+    markers: ['DeleteSessionInjected', 'deletedSessions: HostObservable'],
   },
   {
     file: 'packages/client/ui-workspace/src/client/index.ts',
     markers: ["type: 'dshui:deleteSession'", "window.parent.postMessage({ type: 'dshui:deleteSession', sessionId, cwd }"],
   },
   {
-    file: 'packages/client/ui-workspace/src/client/rows/Rows.tsx',
-    markers: ["t('menu.deleteSession')", 'onDelete'],
+    file: 'packages/client/ui-workspace/src/client/session-actions/DeleteSession.tsx',
+    markers: ["t('menu.deleteSession')", 'deleteSession(sessionId)'],
   },
   {
     file: 'packages/client/ui-workspace/src/client/locales.ts',
@@ -47,8 +53,16 @@ const CHECKS = [
     markers: ["clientBundle('dshui-client-ui-workspace'"],
   },
   {
-    file: 'packages/client/ui-conversation/src/client/skeleton/ConversationRoot.tsx',
-    markers: ['data-dshui-scope', "staticChip={SCOPE !== ''}"],
+    file: 'packages/client/ui-conversation/src/client/skeleton/dshui-scope.ts',
+    markers: ['export const DSHUI_SCOPE'],
+  },
+  {
+    file: 'packages/client/ui-conversation/src/client/skeleton/ConversationMainPanel.tsx',
+    markers: ['data-dshui-scope'],
+  },
+  {
+    file: 'packages/client/ui-conversation/src/client/skeleton/ConversationContent.tsx',
+    markers: ["staticChip={DSHUI_SCOPE !== ''}", "DSHUI_SCOPE === '' && renderSlot('conversation.hero.workspace'"],
   },
   {
     file: 'packages/client/ui-conversation/src/client/skeleton/EmptyHero.tsx',
@@ -99,12 +113,12 @@ const CHECKS = [
     markers: ["'conversation.chat.user-actions'", 'UserActionOwnerProps'],
   },
   {
-    file: 'packages/client/ui-chat/tests/chat-branch-tails.client.spec.tsx',
-    markers: ["'conversation.chat.user-actions'", 'openFile'],
+    file: 'packages/client/ui-chat/src/client/apply.ts',
+    markers: ['dshuiClickOrigin'],
   },
   {
-    file: 'packages/client/ui-chat/tests/chat-view.client.spec.tsx',
-    markers: ['SteeringMessageNodeView'],
+    file: 'packages/client/ui-settings-general/src/client/settings-document-store.ts',
+    markers: ['dshuiClickOrigin'],
   },
   {
     file: 'packages/extensions/cordis-client-runner/src/client/slot-catalog.ts',
@@ -113,6 +127,18 @@ const CHECKS = [
   {
     file: 'packages/api/session-controller/src/commands.ts',
     markers: ['child.agent.inbox.clear()'],
+  },
+  {
+    file: 'packages/api/session-controller/src/index.ts',
+    markers: ['dshuiOrigin'],
+  },
+  {
+    file: 'packages/api/settings-controller/src/index.ts',
+    markers: ['dshuiOrigin'],
+  },
+  {
+    file: 'packages/mcp/mcp-client/src/index.ts',
+    markers: ["startup: 'eager' | 'lazy'", "config.startup === 'eager'"],
   },
 ]
 

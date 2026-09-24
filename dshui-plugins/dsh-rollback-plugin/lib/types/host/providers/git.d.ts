@@ -220,6 +220,19 @@ export declare class GitProvider {
      * the diff, which is also what keeps the diff bounded to session paths.
      */
     stagePaths(indexFile: string, relPaths: readonly string[], signal?: AbortSignal): Promise<void>;
+    /**
+     * Stage worktree paths from their **content** (`hash-object -w` +
+     * `update-index --index-info`) instead of `git add -f`.
+     *
+     * `git add -f` records no index entry for a path inside an embedded git
+     * repository that has no resolvable HEAD (it exits 0 and writes nothing), so a
+     * file this session *created* in such a directory would be missing from every
+     * tree-vs-worktree diff — untracked paths never appear in `git diff <tree>`.
+     * Feeding the blob hash to the index is content-addressed, never asks git to
+     * index the embedded worktree, and covers created, modified and ignored files
+     * alike.
+     */
+    stagePathsByContent(indexFile: string, relPaths: readonly string[], signal?: AbortSignal): Promise<void>;
     /** Write index entries from an index file into the worktree. */
     checkoutIndex(indexFile: string, relPaths: readonly string[], signal?: AbortSignal): Promise<void>;
     /**

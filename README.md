@@ -34,7 +34,8 @@ agentic coding 框架，主张「一切皆插件」）的 Web UI 嵌入 VS Code 
 同处一个窗口。
 
 核心思路：**你在 VS Code 中打开的文件夹就是 dsh 的工作区**。扩展以该文件夹为工作目录启动内嵌的
-`dsh web` 服务器（随包内置 CLI 运行时，无需单独安装 Node），并将其注册为持久化 dsh Workspace。
+`dsh web` 服务器（dsh CLI 随包内置，运行时自动使用本机 Node ≥ 22.19，见[环境要求](#环境要求)），
+并将其注册为持久化 dsh Workspace。
 会话聊天、工具卡片、goal、subagent、后台任务等 dsh 能力原样可用，同时获得与 VS Code 深度集成的体验。
 
 <p align="center">
@@ -52,8 +53,8 @@ agentic coding 框架，主张「一切皆插件」）的 Web UI 嵌入 VS Code 
 2. **侧边栏仅列出当前工作区的会话**。其他工作区、Ungrouped 桶、分组/排序等视图选项均被隐藏，
    所见即当前文件夹。
 3. **输入框常驻底部**。移除居中的「新会话」hero，composer 在任意状态下都固定在底部。
-4. **会话菜单为「删除」而非「归档」**。删除操作由扩展宿主经 VS Code 文件 API 直接移除
-   `~/.dsh/sessions/...` 下的会话日志（不经 dsh 的归档 RPC，dsh 自身行为不变）。
+4. **会话可直接删除**（菜单里同时保留 dsh 自带的「归档」）。删除操作由扩展宿主经 VS Code 文件 API
+   直接移除 `~/.dsh/sessions/...` 下的会话日志（不经 dsh 的归档 RPC，dsh 自身行为不变）。
 5. **用户消息中的 markdown 链接可点击**。`[label](url)` 形式的 http/https/mailto 链接在系统浏览器
    打开；相对路径（如 `[Makefile](Makefile)`）按会话 cwd 解析并在当前窗口打开对应文件。
 
@@ -79,7 +80,10 @@ agentic coding 框架，主张「一切皆插件」）的 Web UI 嵌入 VS Code 
 
 - VS Code ≥ 1.105（内置 dsh ≥ rc7 需要扩展宿主 Node ≥ 22.19；VS Code 1.105 起内嵌 Node 22.19，
   1.104 及更早不满足——`engines.vscode` 会在安装时就拦截，运行时也有守卫提示）
-- 无需单独安装 Node：扩展使用扩展宿主内置的 Node（`ELECTRON_RUN_AS_NODE`）运行 dsh CLI。
+- dsh CLI 用**本机 Node ≥ 22.19** 启动（自动探测 `PATH` 与 Homebrew / nvm / fnm / asdf / Volta
+  等常见安装位置，也可用 `dshui.server.nodePath` 指定）。dsh ≥ 0.1.6 启动时要经原生插件读取
+  Node 内部模块，该插件无法在 VS Code 的 Electron 运行时里加载，所以本机没有可用 Node 时服务器
+  起不来（扩展会退化为内置 Electron 运行时，并在日志与报错里提示；该退化只对 dsh ≤ 0.1.5 有效）。
 - 仅当需要**从源码重建客户端 bundle** 时才需要本机 Node ≥ 22.19 与 pnpm 11.7.0（见
   [开发流程](#开发流程)）。
 
@@ -116,6 +120,12 @@ npx @vscode/vsce package                # 产出 dshui-for-vscode-<version>.vsix
 > 打包（vsce 的 `vscode:prepublish`＝compile + copy:clients + sync:dsh）与 `npm install` 的
 > postinstall 都会自动跑 `sync-dsh`；`scripts/copy-clients.mjs` 在检出缺失时会自动跳过，使用随包
 > 提交的预编译客户端 bundle。
+>
+> 升级 dsh 时还要保证根 `package.json` 声明了运行时闭包用到的全部**第三方**依赖：`@deepseek-ai/*`
+> 的依赖表在 `sync-dsh` 落盘时被清空，只有根清单能安装它们。`sync-dsh`（preinstall）校验声明，
+> `npm run verify:deps` 连已安装版本一起校验（打包前的 `vscode:prepublish` 必跑）；漏一个就会让相关
+> 插件在启动时报 `failed to import`（0.1.7 升级时的 `execa` / `@modelcontextprotocol/client` /
+> `@deepseek-ai/libreoffice-kit` 即此类）。
 
 开发调试：按 **F5**（仓库自带 `.vscode/launch.json`），或运行
 `code --extensionDevelopmentPath="$PWD" <文件夹>`。
@@ -157,12 +167,20 @@ VS Code 的**输出面板**（View → Output → 下拉选择 **dsh UI**，或�
 同一份日志（时间戳 + 级别前缀）还会追加写入 `~/.dsh/dshui-logs/extension.log`（dsh home 下），
 便于命令行/无头环境排查；扩展宿主内部的未捕获异常与未处理的 Promise rejection 也会记录到输出面板。
 
+启动日志里的 `launching dsh web with system Node.js v… (…)` 记录了本次实际使用的 Node；若本机没有
+可用 Node，会先出现 `no system Node.js >= 22.19.0 found …` 告警，随后 dsh 报
+`host preparation failed: node-addon-require-builtin unsupported: Unsupported/no-realm`（原生插件
+版本较新时可能显示 `Unsupported/no-context` 与 `unsupported Electron runtime fingerprint`）——此时
+安装 Node.js ≥ 22.19（或把 `dshui.server.nodePath` 指向一个 Node 二进制），再运行
+**dsh UI: Restart dsh Server** 即可，无需重载窗口。
+
 ### 设置
 
 | 设置 | 默认 | 说明 |
 | --- | --- | --- |
 | `dshui.autoOpen` | `true` | 打开文件夹时自动显示侧边栏视图 |
 | `dshui.server.port` | `61370` | 内嵌服务器端口。固定端口兼作共享后端会合点：所有窗口复用同一个服务器（各按 `?dshui_workspace` 作用域），localStorage 按工作区隔离，各工作区跨启动恢复自己上次打开的会话；设为 `0` 则由系统分配（无共享、无保持）。固定端口被占用时直接报错并提示更换端口 |
+| `dshui.server.nodePath` | 空 | 用来启动 dsh CLI 的 Node ≥ 22.19 可执行文件。留空 = 自动探测（`PATH`，再到 Homebrew / nvm / fnm / asdf / Volta / Program Files 等常见位置）；填 `electron` = 强制使用 VS Code 内置 Electron 运行时（仅 dsh ≤ 0.1.5 可用）。改完需运行 **dsh UI: Restart dsh Server** |
 | `dshui.openFilesInVscode` | `true` | 聊天中的文件链接在**当前 VS Code** 中打开（经扩展内桥接，无系统弹窗），而非系统默认编辑器 |
 | `dshui.checkDshUpdates` | `true` | 启动时异步查询 npm 上的最新 dsh 版本，内置版本过旧时通知（24 小时节流，同一新版本仅提示一次；可关闭） |
 
@@ -310,9 +328,15 @@ VS Code 侧边栏视图（webview）
     重做 = Shift+Cmd/Ctrl+Z 或 Cmd/Ctrl+Y）、Cmd/Ctrl+N 新建
     会话处理器（拦截 workbench 的「新窗口」快捷键，改走侧边栏「新建会话」按钮），以及文件/代码
     引用写入处理器（接收扩展右键菜单经 webview 外壳转发的引用消息，写入 composer 草稿）；
-  - `dshui-client-ui-workspace` / `dshui-client-ui-conversation`——两个原版客户端包的**重新构建产物**，
-    内含侧边栏过滤、底部输入框改动与「删除会话」菜单（删除经 webview 外壳 → 扩展宿主以 VS Code
-    文件 API 完成）。
+  - `dshui-client-ui-workspace` / `dshui-client-ui-conversation`——两个原版客户端包的**重新构建产物**
+    （补丁把这两个包的 tsdown bundle id 改成 dshui 名；`patch.yml` 停用原生 `ui-workspace` /
+    `ui-conversation` 行，再插入同名新行，产物经 `scripts/copy-clients.mjs` 拷入 `dshui-plugins/`）。
+    内含侧边栏过滤、底部输入框改动与「删除会话」菜单（删除经 webview 外壳 → 扩展宿主以 VS Code 文件
+    API 完成）。关键约束：**行 id 必须等于 bundle 内 `window.__ModuleLoader__.load({ id })` 声明的 id**
+    （0.1.7 的客户端加载器按后者建工厂表，不匹配则整行加载失败）；而该行一失败，它提供的
+    `uiWorkspace` / `uiConversation` 服务就缺席，20 多个注入这两个服务的客户端插件会永远停在 PENDING
+    ——浏览器表现为 **Failed to load plugins**。因此拷贝前必须先 `pnpm run build:lib:client`
+    （陈旧产物仍声明上游 `@deepseek-ai/...` id），`copy-clients.mjs` 会校验并在不匹配时报错。
   - `dsh-rollback-plugin`——修改回滚插件：记录 agent 的 `write` / `edit` 修改与会话基线快照，
     提供「修改列表」dock 与原生 Diff 审查（详见 [修改回滚](#修改回滚)）。
   - `@xmanrui/dsh-im`——第三方 IM 机器人插件（**来源：
@@ -320,8 +344,9 @@ VS Code 侧边栏视图（webview）
     把飞书、微信、钉钉等九个平台的 IM 机器人接入 dsh（详见 [IM 机器人](#im-机器人)）。其宿主
     bundle 将 `qrcode`、`dingtalk-stream` 等 5 个包声明为外部运行时依赖，因此插件目录自带生产
     依赖 `node_modules/`，由 `installPlugins()` 一并安装。
-- **删除会话**：dsh 本身只有「归档」（隐藏会话、不删文件），没有删除 RPC。插件将会话行菜单的
-  「归档会话」改为「删除会话」：点击后插件向 webview 外壳 postMessage（`dshui:deleteSession`，
+- **删除会话**：dsh 自带「归档」（隐藏会话、不删文件），但没有删除 RPC。插件在会话行菜单与悬停
+  操作里**新增**「删除会话」（0.1.7 起上游把会话行操作改成 slot 条目，删除与归档/置顶并存）：点击后
+  插件向 webview 外壳 postMessage（`dshui:deleteSession`，
   携带会话 id 与其工作区目录），外壳转发给扩展宿主；宿主按 dsh 的会话路径规则
   （`$DSH_HOME/sessions/<工作区目录编码>/<会话 id>/`，与 `dsh-session-persistence-jsonl` 的
   `projectKey`/`encodeSegment` 一致）定位会话目录，用 **VS Code 文件 API**
@@ -405,8 +430,8 @@ code --extensionDevelopmentPath="$PWD" <文件夹>
 1. **运行时与 host 源码**：`@deepseek-ai/*` 不再从 npm 下载，而是由 `.dsh-src` 构建产物填充
    （根 `package.json` 只声明一个锚点 `@deepseek-ai/dsh`，闭包是其清单的传递依赖；`preinstall`
    的 `sync-dsh` 先落好源码产物，`npm list`/`npm install` 不再走 registry）。dshui 对 host 的
-   改动经 `patches/dshui-bundles.patch` 固化并烘焙进构建产物（当前 `0.1.5-rc.1`）。
-2. **客户端 bundle 的源码**：`.dsh-src` 检出（当前对应 `dsh-v0.1.5-rc.1` 并重套 dshui
+   改动经 `patches/dshui-bundles.patch` 固化并烘焙进构建产物（当前 `0.1.7-rc.1`）。
+2. **客户端 bundle 的源码**：`.dsh-src` 检出（当前对应 `dsh-v0.1.7-rc.1` 并重套 dshui
    客户端补丁——自 0.1.2 起上游重构了会话/聊天客户端，补丁需按 `scripts/verify-patches.mjs`
    重新套用到新结构；由于仓库 master 可能落后于 npm 发布，对齐方式是查看各包 `package.json`
    的版本号，并以实际运行测试为准）。
@@ -420,45 +445,73 @@ cd .dsh-src && git fetch origin <基提交> && git checkout FETCH_HEAD \
   && git apply ../patches/dshui-bundles.patch
 
 # 1. 在 .dsh-src 内安装依赖并构建（host + client）
-pnpm install && pnpm run build:lib:host && pnpm run build:lib:client
+#    换基升级必须先 clean：上一版留在 lib/types 与 *.tsbuildinfo 里的 typert remote 声明
+#    是陈旧的，不清掉 tsc -b 会复用旧产物并抛大量「remote 方法不存在」的假错误。
+pnpm install && pnpm run clean \
+  && pnpm run build:lib:host && pnpm run build:lib:client \
+  && pnpm run gen-client-catalog   # 槽目录跟随 ui-chat 的槽声明重新生成
 
 # 2. 检查补丁是否仍完整——核心一步（在扩展根目录）
 cd .. && node scripts/verify-patches.mjs   # 逐个标记缺失即说明该文件需要重新套用补丁
 #    改动已固化为 patches/dshui-bundles.patch：对基提交能干净应用则直接使用；
 #    出现漂移则按步骤 3 的清单重套，并重新导出：
-#    git -C .dsh-src diff > patches/dshui-bundles.patch
+#    git -C .dsh-src diff <基提交> > patches/dshui-bundles.patch
 
 # 3. 缺失的补丁按以下清单重新套用（改动都很小，按文件内注释即可）
-#    - ui-workspace/src/client/tree.ts                 加 scopedWorkspacePath 与各 derive 的 scope 参数与 deletedSessionIds
-#    - ui-workspace/src/client/WorkspaceBrowser.tsx    SCOPE 常量、workspaces/ungrouped 过滤、隐藏添加/视图选项、rail 隐藏 sectionHeader、会话删除行隐藏
-#    - ui-workspace/src/client/contract/slots.ts       archiveSession 改为 deleteSession
-#    - ui-workspace/src/client/index.ts                会话删除：postMessage 请扩展宿主删除日志文件（含 15s 超时与监听器清理）
-#    - ui-workspace/src/client/rows/Rows.tsx           会话菜单「删除会话」（垃圾桶图标、danger 样式）、onArchive 改为 onDelete
-#    - ui-workspace/src/client/locales.ts              menu.archiveSession 改为 menu.deleteSession
+#    - ui-workspace/src/client/tree.ts                 加 scopedWorkspacePath 与各 derive 的 scope / deletedSessionIds 参数
+#    - ui-workspace/src/client/rows/WorkspaceBrowser.tsx  scopedWorkspacePath + useDeletedSessions 接线、会话删除行隐藏
+#    - ui-workspace/src/client/contract/slots.ts       DeleteSessionInjected 与 deletedSessions 可观察量
+#    - ui-workspace/src/client/index.ts                deleted-sessions store + deleteSession：postMessage 请扩展宿主删除日志文件
+#    - ui-workspace/src/client/session-actions/DeleteSession.tsx  0.1.7 起会话行操作是 slot 条目：注册「删除会话」
+#    - ui-workspace/src/client/locales.ts              新增 menu.deleteSession / actions.delete
 #    - ui-workspace/tsdown.config.ts                   bundle id 改为 dshui-client-ui-workspace
-#    - ui-workspace/tests/{rows,workspace-browser,tree}.client.spec.*  会话删除相关测试
-#    - ui-conversation/.../ConversationRoot.tsx        SCOPE 常量、静态 chip、hero 隐藏、data-dshui-scope
-#    - ui-conversation/.../EmptyHero.tsx               WorkspaceChip 的 staticChip prop
-#    - ui-conversation/.../ConversationRoot.module.css  scoped hero 贴底
-#    - ui-conversation/.../HeroShell.module.css        .workspaceStatic
+#    - ui-conversation/src/client/skeleton/dshui-scope.ts          SCOPE 常量（DSHUI_SCOPE）
+#    - ui-conversation/src/client/skeleton/ConversationMainPanel.tsx  data-dshui-scope 根标记
+#    - ui-conversation/src/client/skeleton/ConversationContent.tsx    静态 chip、hero 隐藏、scope 下输入框恒不 inert
+#    - ui-conversation/src/client/skeleton/EmptyHero.tsx              WorkspaceChip 的 staticChip prop
+#    - ui-conversation/src/client/skeleton/ConversationRoot.module.css  scoped hero 贴底
+#    - ui-conversation/src/client/skeleton/HeroShell.module.css       .workspaceStatic
 #    - ui-conversation/tsdown.config.ts                bundle id 改为 dshui-client-ui-conversation
-#    - ui-conversation/tests/apply-inject.client.spec.tsx  openFile 经 host + click origin 打开（无 cwd 回退、宿主失败静默）
+#    - ui-chat/src/client/chat/MessageItem.tsx         UserMessageNodeView / SteeringMessageNodeView 拆分与 user-actions 子槽、markdown 链接投影
+#    - ui-chat/src/client/chat/register-node-renderers.ts  user 带 user-actions 子槽、steering 用无槽渲染器
+#    - ui-chat/src/client/contract/slots.ts            UserActionOwnerProps 与 conversation.chat.user-actions 槽声明
 #    - packages/client/tsdown.client.ts                workspaceManifest 对 dshui-client-* id 按包目录回退（rc.1 起按包名校验）
 #    - packages/util/native-command/src/path-opener.ts  darwin 分支改桥接/CLI/vscode://file + dshuiOrigin
-#    - packages/client/connection/src/browser-auth.ts     token 交换重定向保留 dshui 查询参数
-#    - packages/api/session-controller/src/commands.ts    fork 子会话创建后 inbox.clear()，不继承源会话排队消息
-#    - packages/api/session-controller/tests/*.host.spec.ts  子会话 inbox 为空用例 + 假 Agent 补 inbox
+#    - packages/client/connection/src/browser-auth.ts     token 交换重定向保留 dshui 查询参数（0.1.7 起基址是 ./）
+#    - packages/api/session-controller/src/{index,types}.ts  openWorkspacePath 透传 dshuiOrigin
+#    - packages/api/settings-controller/src/index.ts         openSettingsDocument(dshuiOrigin, signal)
+#    - packages/client/ui-chat/src/client/apply.ts           客户端附上窗口作用域 dshuiClickOrigin
+#    - packages/mcp/mcp-client/src/index.ts                  startup: eager|lazy
 
 # 4. 重建并拷入
 pnpm run build:lib:host && pnpm run build:lib:client   # 在 .dsh-src 内
-node scripts/copy-clients.mjs                          # 客户端 bundle 拷入 dshui-plugins/
+pnpm run build:web                                     # 浏览器 shell（勿漏，见下方风险点）
+pnpm run gen-client-catalog                            # 槽目录（唯一生成物，勿手改）
 node scripts/sync-dsh.mjs                              # @deepseek-ai/* 拷入 node_modules
+node scripts/copy-clients.mjs                          # 两个 UI 包的 client.js 覆盖进该闭包（须在后）
 
-# 5. 重新编译扩展并打包（vscode:prepublish 会再跑 copy:clients + sync:dsh）
+# 5. 重新编译扩展并打包（vscode:prepublish 会再跑 sync:dsh + copy:clients）
 npm run compile && npx @vscode/vsce package
 ```
 
 其他随版本漂移的风险点（升级后应逐项检查）：
+
+- **`@deepseek-ai/dsh-web-frontend` 的浏览器 shell（`apps/web/dist`）必须重建**：`pnpm run build:lib`
+  只构建 host/client 库，**不含** `pnpm run build:web`。shell 是客户端插件运行的页面，里面打包了它们运行时
+  `require` 的共享模块（`react`、`@deepseek-ai/dsh-client-ui-slots`、`@deepseek-ai/dsh-client-ui-primitives` …）。
+  shell 停在旧版本时，新版插件会全部加载失败：浏览器弹 **Failed to load plugins**，典型报错
+  `settingsNumberField is not a function`（0.1.7 的 settings 卡片调用了旧 shell 里没有的新 API），而
+  host 侧日志一切正常。`scripts/sync-dsh.mjs` 现在会做新鲜度检查：`dist` 比 `src` 旧时直接报错并提示
+  `cd .dsh-src && pnpm run build:web`（跳过请设 `DSHUI_ALLOW_STALE_WEB=1`）。
+
+- **构建顺序：`build:lib:host` → `build:lib:client` → `build:web` → `sync:dsh` → `copy:clients`**：
+  - host 构建会顺带重新生成 typert 的 `lib/typert.remote-client.d.ts`。只跑 `build:lib:client` 时，
+    client 会拿到旧签名（例如 `openSettingsDocument(signal?)`）而补丁里的新调用点
+    （`openSettingsDocument(dshuiOrigin, signal)`）直接类型报错——改过 host 服务签名后必须先跑 host。
+  - `copy:clients` 校验产物 bundle 的注册 id 是否等于 `dshui-client-ui-*`：不相等即说明 client 包没重建
+    （bundle 仍带上游 id），此时对应行无法加载并连带拖垮 20 多个依赖者，脚本直接报错而不是静默打包。
+  - 替换 UI 用的是「换 bundle id + 停用原生行 + 插入新行」，不是「保留原行只换文件」：后者会让
+    `patch.yml` 的行名与包名不匹配而被 loader 跳过。
 
 - **`patches/dshui-bundles.patch` 的 host 部分**：定位的是 `packages/util/native-command/src/path-opener.ts`
   的 darwin 打开分支、`packages/client/connection/src/browser-auth.ts` 的 token 交换重定向，以及
@@ -468,9 +521,30 @@ npm run compile && npx @vscode/vsce package
   apply` 报错），按新源码重写即可；桥接不可用时会自动回退 `vscode://file`。
 - **`scripts/sync-dsh.mjs`**：拷贝 `@deepseek-ai/dsh` 运行时闭包含的包；若某包在 `.dsh-src`
   未构建出 `lib/`，脚本会告警列名，此时不要打包发布。
+- **升级 dsh 版本后不能只用 `make sync`**：`make sync` 只覆盖 `out/`、`dshui-plugins/`、`patch.yml`、
+  `package.json`，**不动 `node_modules/@deepseek-ai`**。宿主闭包仍是旧版时，新版客户端 bundle 会加载
+  失败（浏览器报 `Failed to load plugins`，例如 `settingsNumberField is not a function`）。请改用
+  `make deploy` 完整重装。`make install` 末尾会自动运行 `scripts/clean-profile-links.mjs`，清掉旧版
+  link backend 留在 `$DSH_HOME/profiles/node_modules` 里指向上一版扩展的软链（指向旧版的可用软链会
+  遮蔽新版包，悬空软链则直接解析失败）；该脚本可随时手动执行（`--dry-run` 只预览），换版后建议再跑。
 - **`patch.yml`**：覆盖的行 id（`ui-workspace` / `ui-conversation`）与插入的
   `dshui-host-ensure-workspace` 依赖 `web-app` bundle 中的行名与 `workspaceRegistry` / `webServer`
   服务名；这些若有变化，需同步更新。
+- **`patch.yml` 的沙箱缝隙必须成对出现（当前整段未启用）**：`bash-sandbox` / `fs-sandbox` 是
+  `shell` / `fs` 两个服务的唯一提供者，`dsh-whitelist-sandbox` 行是用白名单子类接手的替换实现。
+  只把前者 `disabled: true` 而把后者的 insert 注释掉（或反过来只 insert 不停用），会得到一个
+  「能启动但半死」的服务端：会话列表加载不出来、设置页报错、插件面板显示 `tool-bash: waiting for
+  shell`、`tool-fs: waiting for fs`，且 `present`、`workflow-ptc`、`tool-workflow`、`permission`、
+  `session-controller`、`workspace-files` 等全部停在 PENDING。`scripts/verify-overlay.mjs` 会在
+  `make package` / `make deploy` / `make sync` 这一步拦下这种组合，并顺带校验每个 insert 行都指向
+  真实存在的 `dshui-plugins/<name>`。**0.1.7 上该替换行暂时保持注释**：白名单插件还没移植
+  （host 侧 `confine()` 在 0.1.7 变成 async、`SettingsForms.installSection` 被删除、client 侧
+  `settingsScope` 与两个图标被改名），所以现在挂的是原生 provider；移植完成后要在同一次改动里
+  重新启用上面两行 `disabled: true` 并取消注释该 insert 行。
+- **白名单的 operator 私有路径不写进本仓库**：`extraWritableRoots` 属于运维数据，放
+  `$DSH_HOME/profiles/web/cordis.patch.yml`。注意补丁层是「后层整体覆盖前层」的语义：profile 层
+  在本 overlay **之前**应用，既不能给 overlay 插入的行配 config，也无法覆盖 overlay 已给的
+  `config:`，所以该 insert 行在启用时必须不带 `config:`，把 roots 留给用户层。
 - **`dshui-plugins/*/package.json`**：`dsh.client.inject` 列表仅为信息性依赖边，一般无需改动。
 - **数据兼容**：dsh 处于预发布（rc）阶段，升级可能改变持久化格式（`~/.dsh` 下的
   sessions/storages）。升级前留意 release 说明；必要时备份 `~/.dsh`。

@@ -30,107 +30,16 @@
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { runtimeClosure, workspacePackages } from './lib/dsh-closure.mjs'
+import { assertDependencies } from './verify-deps.mjs'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const src = path.join(root, '.dsh-src')
 /** node_modules/@deepseek-ai — real source-built copies the dsh loader resolves. */
 const targetRoot = path.join(root, 'node_modules', '@deepseek-ai')
+/** Browser shell package whose `dist/` bundles the client plugins' shared modules. */
+const WEB_FRONTEND = '@deepseek-ai/dsh-web-frontend'
 
-/** Workspace directories that contain `@deepseek-ai/*` packages. */
-const WORKSPACE_GLOBS = [
-  'packages/*/*',
-  'apps/*',
-  'vendor/*',
-  'native/landlock-run',
-  'native/landlock-run/packages/*',
-  'native/system',
-  'native/system/packages/*',
-]
-
-/** Directory patterns to skip entirely (no runtime payload). */
-const SKIP_DIRS = new Set(['node_modules', '.git', 'lib', 'types', 'src', 'tests', 'dist'])
-
-/** Expand a `*` segment (no `**`) against one level; recursive for `**`. */
-function expandGlob(base, segments, out) {
-  const [head, ...rest] = segments
-  if (head === undefined) {
-    if (base !== '' && fs.existsSync(base)) out.push(base)
-    return
-  }
-  let parent = base
-  const pattern = head
-  if (head === '**') {
-    // Recursively collect directories, then continue with the rest.
-    const walk = (dir, acc) => {
-      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-        if (!entry.isDirectory() || SKIP_DIRS.has(entry.name)) continue
-        const p = path.join(dir, entry.name)
-        acc.push(p)
-        walk(p, acc)
-      }
-    }
-    const acc = []
-    if (parent !== '' && fs.existsSync(parent)) walk(parent, acc)
-    for (const sub of acc) expandGlob(sub, rest, out)
-    return
-  }
-  if (!fs.existsSync(parent)) return
-  for (const entry of fs.readdirSync(parent, { withFileTypes: true })) {
-    if (pattern === '*') {
-      if (entry.isDirectory()) expandGlob(path.join(parent, entry.name), rest, out)
-    } else if (entry.name === pattern) {
-      expandGlob(path.join(parent, entry.name), rest, out)
-    }
-  }
-}
-
-/** Resolve every workspace package dir (`@deepseek-ai/*` keyed by name). */
-function workspacePackages() {
-  const entries = []
-  for (const glob of WORKSPACE_GLOBS) {
-    const segments = glob.split('/')
-    const matched = []
-    expandGlob(src, segments, matched)
-    for (const dir of matched) {
-      if (fs.existsSync(path.join(dir, 'package.json'))) {
-        entries.push({ dir, pkg: path.join(dir, 'package.json') })
-      }
-    }
-  }
-  const byName = new Map()
-  for (const entry of entries) {
-    let pkg
-    try { pkg = JSON.parse(fs.readFileSync(entry.pkg, 'utf8')) } catch { continue }
-    if (typeof pkg.name !== 'string' || !pkg.name.startsWith('@deepseek-ai/')) continue
-    byName.set(pkg.name, { ...entry, pkgObj: pkg })
-  }
-  return byName
-}
-
-/** Runtime dependency closure from the CLI over deps + peerDeps (deepseek-ai only). */
-function runtimeClosure(byName) {
-  const start = '@deepseek-ai/dsh'
-  if (!byName.has(start)) throw new Error(`workspace has no ${start} (missing .dsh-src?)`)
-  const seen = new Set([start])
-  const stack = [start]
-  while (stack.length > 0) {
-    const name = stack.pop()
-    const entry = byName.get(name)
-    if (entry === undefined) continue
-    const { pkgObj } = entry
-    const deps = new Set([
-      ...Object.keys(pkgObj.dependencies ?? {}),
-      ...Object.keys(pkgObj.peerDependencies ?? {}),
-      ...Object.keys(pkgObj.optionalDependencies ?? {}),
-    ])
-    for (const dep of deps) {
-      if (!dep.startsWith('@deepseek-ai/') || seen.has(dep)) continue
-      seen.add(dep)
-      stack.push(dep)
-    }
-  }
-  return seen
-}
 
 /** Rewrite `workspace:` protocol references in a copied package.json. */
 function rewriteWorkspaceRefs(pkg, versionFor) {
@@ -284,19 +193,75 @@ function writePackage(entry, name, versionFor, targetDir, dshDeps) {
 /** Sync package.json `dependencies`: keep a single @deepseek-ai anchor (`@deepseek-ai/dsh`)
  *  whose own manifest lists the whole @deepseek-ai closure as transitive deps. This keeps the
  *  root manifest clean (one @deepseek-ai entry) while npm list (vsce) still sees the closure as
- *  installed and in the tree. */
+ *  installed and in the tree.
+ *
+ *  Only WORKSPACE packages are dropped: this script copies those from `.dsh-src` and strips their
+ *  dependency tables, so npm must not fetch them. A published `@deepseek-ai/*` package that is not
+ *  in the workspace (e.g. `@deepseek-ai/libreoffice-kit`) is an ordinary third-party dependency —
+ *  nothing here builds it, so the root manifest is its only installer and the entry must survive. */
 function syncPackageJsonDeps(closure, byName) {
   const pkgPath = path.join(root, 'package.json')
   const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'))
   const deps = pkg.dependencies ?? {}
   for (const name of Object.keys(deps)) {
-    if (name.startsWith('@deepseek-ai/')) delete deps[name]
+    if (name.startsWith('@deepseek-ai/') && byName.has(name)) delete deps[name]
   }
   const anchor = byName.get('@deepseek-ai/dsh')
   if (anchor !== undefined) deps['@deepseek-ai/dsh'] = `^${anchor.pkgObj.version}`
   pkg.dependencies = deps
   fs.writeFileSync(pkgPath, `${JSON.stringify(pkg, null, 2)}\n`)
   return deps
+}
+
+/** Newest modification time under `dir` (`0` when the tree is missing/empty). */
+function newestMtime(dir, skip = new Set()) {
+  let newest = 0
+  const stack = [dir]
+  while (stack.length > 0) {
+    const current = stack.pop()
+    let entries
+    try { entries = fs.readdirSync(current, { withFileTypes: true }) } catch { continue }
+    for (const entry of entries) {
+      if (skip.has(entry.name)) continue
+      const full = path.join(current, entry.name)
+      if (entry.isDirectory()) { stack.push(full); continue }
+      try { newest = Math.max(newest, fs.statSync(full).mtimeMs) } catch { /* unreadable entry */ }
+    }
+  }
+  return newest
+}
+
+/**
+ * Fail when the browser shell (`@deepseek-ai/dsh-web-frontend/dist`) is older
+ * than its sources.
+ *
+ * The shell is the page every client plugin bundle runs inside, and it bundles
+ * the shared modules those bundles `require` at runtime (`react`,
+ * `@deepseek-ai/dsh-client-ui-slots`, `@deepseek-ai/dsh-client-ui-primitives`,
+ * ...). `pnpm run build:lib` rebuilds the host/client libraries but NOT this
+ * Vite app, so after a dsh upgrade a stale shell silently keeps exporting the
+ * previous release's shared modules: the 0.1.7 settings plugins then die with
+ * `settingsNumberField is not a function` ("Failed to load plugins") while
+ * every other artifact looks correct.
+ * @param byName - workspace packages keyed by name.
+ */
+function assertWebFrontendFresh(byName) {
+  if (process.env.DSHUI_ALLOW_STALE_WEB === '1') return
+  const entry = byName.get(WEB_FRONTEND)
+  if (entry === undefined) return
+  const distNewest = newestMtime(path.join(entry.dir, 'dist'))
+  const srcNewest = newestMtime(path.join(entry.dir, 'src'))
+  if (distNewest === 0) {
+    throw new Error(`[sync-dsh] ${WEB_FRONTEND} 缺少 dist/ 构建产物：先在 .dsh-src 执行 pnpm run build:web`)
+  }
+  if (srcNewest > distNewest) {
+    throw new Error(
+      `[sync-dsh] ${WEB_FRONTEND}/dist 比源码旧（${new Date(distNewest).toISOString()} < ${new Date(srcNewest).toISOString()}）。\n`
+      + '  浏览器 shell 里打包了客户端插件运行时 require 的共享模块（react / ui-slots / ui-primitives …）；\n'
+      + '  shell 过旧会让新版插件全部加载失败（Failed to load plugins / settingsNumberField is not a function）。\n'
+      + '  修复：cd .dsh-src && pnpm run build:web（几秒即可）。确需跳过请设 DSHUI_ALLOW_STALE_WEB=1。',
+    )
+  }
 }
 
 async function main() {
@@ -309,10 +274,20 @@ async function main() {
     return
   }
   console.log(`[sync-dsh] 从 ${src} 同步 @deepseek-ai/* 到 ${targetRoot}`)
-  const byName = workspacePackages()
+  const byName = workspacePackages(src)
   console.log(`[sync-dsh] workspace @deepseek-ai 包：${byName.size}`)
+  assertWebFrontendFresh(byName)
   const closure = runtimeClosure(byName)
   console.log(`[sync-dsh] @deepseek-ai/dsh 运行时闭包含 ${closure.size} 个包`)
+  // Fail fast when the root manifest does not declare a third-party package the
+  // closure imports: this runs as npm's preinstall, so the error lands before a
+  // broken tree is built (the version check runs later, in verify-deps).
+  try {
+    assertDependencies(false)
+  } catch (error) {
+    console.error(`\n${error.message}\n`)
+    process.exit(1)
+  }
   const deps = syncPackageJsonDeps(closure, byName)
   console.log(`[sync-dsh] package.json dependencies 已更新：${Object.keys(deps).length} 项`)
 

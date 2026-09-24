@@ -1,5 +1,6 @@
 # Development-only trees and files that must not ship in the vsix.
 .dsh-src/**
+tmp/**
 .tools/**
 .pnpm-store/**
 .git/**
@@ -40,6 +41,12 @@ node_modules/**/.nycrc*
 node_modules/**/.npmignore
 node_modules/**/.gitignore
 # 保留 node_modules/**/LICENSE*（各包许可证，法律合规要求）。
+
+# npm 会顺着上游 package-lock 里 @deepseek-ai/dsh-experimental-speech-to-text-sensevoice
+# 的依赖边把 sherpa-onnx 装上（33MB 平台原生包），但该实验包不在 web profile 的组合树里，
+# 扩展从不加载它（见 scripts/lib/dsh-closure.mjs 的 NOT_SHIPPED_DEPS）：不进 vsix。
+node_modules/sherpa-onnx-node/**
+node_modules/sherpa-onnx-*/**
 
 # Keep: out/ (compiled extension), dshui-plugins/ (dshui plugin packages),
 # patch.yml, scripts/, media/, README.md, and node_modules/ (the bundled dsh runtime).

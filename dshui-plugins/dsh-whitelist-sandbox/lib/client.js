@@ -7,7 +7,6 @@ window.__ModuleLoader__.load({
 		let react = require("react");
 		let react_jsx_runtime = require("react/jsx-runtime");
 		let _deepseek_ai_dsh_client_ui_primitives = require("@deepseek-ai/dsh-client-ui-primitives");
-		let _deepseek_ai_dsh_client_store = require("@deepseek-ai/dsh-client-store");
 		//#region \0@oxc-project+runtime@0.135.0/helpers/esm/typeof.js
 		function _typeof(o) {
 			"@babel/helpers - typeof";
@@ -48,94 +47,69 @@ window.__ModuleLoader__.load({
 		//#endregion
 		//#region lib/types/client/store.js
 		/**
-		* Whitelist settings store: reads the `sandbox-whitelist` settings namespace
-		* through `settingsScope.describe()` and writes `extraWritableRoots` as one
-		* revision-checked `settings.mutate`. Split from the React section so the
-		* logic is unit-testable without pulling in the browser bundle.
+		* Whitelist settings store: the browser-side projection of this plugin's own
+		* profile entry, read and written through the shared `configForms` service.
+		* The entry id IS the settings namespace (0.1.7 moved settings from
+		* `$DSH_HOME/settings.yaml` sections into the profile patch document, keyed by
+		* loader entry id), and `extraWritableRoots` is the one volatile field.
+		* Split from the React section so the logic is unit-testable without pulling
+		* in the browser bundle.
 		*/
-		/** The settings-document namespace this section reads/writes. */
-		const SETTINGS_NS = "sandbox-whitelist";
+		/** This plugin's profile entry id — the settings namespace its Host row
+		* carries. Must match `cordis.patch.yml`'s inserted id. */
+		const SETTINGS_NS = "dsh-whitelist-sandbox";
+		/** The single config field this page edits. */
 		const SETTINGS_FIELD = "extraWritableRoots";
+		/**
+		* Read-only projection plus the one write of `extraWritableRoots`. The derived
+		* snapshot is cached by the underlying form snapshot's identity so
+		* `useSyncExternalStore` sees a stable reference between real changes.
+		*/
 		var WhitelistSettingsStore = class {
-			constructor(settingsScope, settingsRemote) {
-				_defineProperty(this, "settingsRemote", void 0);
-				_defineProperty(this, "store", (0, _deepseek_ai_dsh_client_store.createSnapshotStore)({
+			constructor(form) {
+				_defineProperty(this, "form", void 0);
+				_defineProperty(this, "lastForm", void 0);
+				_defineProperty(this, "cached", {
 					status: "loading",
 					writable: false,
 					roots: [],
 					revision: void 0
-				}));
-				_defineProperty(this, "disposed", false);
-				_defineProperty(this, "describeFace", void 0);
-				this.settingsRemote = settingsRemote;
-				this.describeFace = settingsScope.describe();
+				});
+				this.form = form;
 			}
 			getSnapshot() {
-				return this.store.getSnapshot();
+				const snapshot = this.form.getSnapshot();
+				if (snapshot !== this.lastForm) {
+					this.lastForm = snapshot;
+					this.cached = {
+						status: snapshot.status,
+						writable: snapshot.writable,
+						roots: snapshot.status === "ready" && Array.isArray(snapshot.value?.extraWritableRoots) ? [...snapshot.value.extraWritableRoots] : [],
+						revision: snapshot.revision
+					};
+				}
+				return this.cached;
 			}
 			subscribe(listener) {
-				return this.store.subscribe(listener);
-			}
-			async load() {
-				if (this.disposed) return;
-				try {
-					await this.describeFace.ensure();
-				} catch {
-					return;
-				}
-				const mirrored = this.describeFace.getSnapshot();
-				if (mirrored.view === void 0) {
-					this.store.update((draft) => {
-						draft.writable = false;
-						draft.status = "unavailable";
-						draft.roots = [];
-						draft.revision = void 0;
-					});
-					return;
-				}
-				const view = mirrored.view.namespaces.find((candidate) => candidate.ns === SETTINGS_NS);
-				this.store.update((draft) => {
-					draft.writable = mirrored.view.writable === true;
-					if (view === void 0) {
-						draft.status = "unavailable";
-						draft.roots = [];
-						draft.revision = void 0;
-						return;
-					}
-					draft.status = "ready";
-					draft.revision = view.revision;
-					draft.roots = Array.isArray(view.value?.extraWritableRoots) ? view.value.extraWritableRoots : [];
-				});
+				return this.form.subscribe(listener);
 			}
 			async save(roots) {
-				if (this.disposed) return {
-					ok: false,
-					error: "disposed"
-				};
-				const revision = this.getSnapshot().revision;
-				let response;
+				let accepted;
 				try {
-					response = await this.settingsRemote.mutate(SETTINGS_NS, [{
-						op: "set",
-						path: [SETTINGS_FIELD],
-						value: roots
-					}], revision);
+					accepted = await this.form.set(SETTINGS_FIELD, roots);
 				} catch (error) {
 					return {
 						ok: false,
 						error: String(error)
 					};
 				}
-				if (response.ok !== true) return {
+				return accepted ? { ok: true } : {
 					ok: false,
-					error: response.error?.message ?? "settings write rejected"
+					error: "settings write rejected"
 				};
-				await this.load();
-				return { ok: true };
 			}
-			dispose() {
-				this.disposed = true;
-			}
+			/** The form is owned by the shared `configForms` provider; nothing to release. */
+			dispose() {}
 		};
 		//#endregion
 		//#region lib/types/client/locales.js
@@ -176,14 +150,15 @@ window.__ModuleLoader__.load({
 		* whitelist.
 		*
 		* Security contract (mirrors the host plugin's):
-		*  - The form reads/writes ONLY the `sandbox-whitelist:` settings-document
-		*    section through the existing settings transport
-		*    (`settingsScope.describe()` + `ctx.remote.settings.mutate`) — the same
-		*    channel the Models page uses. There is no second, bypass write path.
+		*  - The form reads/writes ONLY this plugin's own profile entry through the
+		*    shared `configForms` service (`get(entryId)` + the form's `set`) — the
+		*    same settings transport the stock Shell page uses. There is no second,
+		*    bypass write path, and no direct `remote.settings` access (0.1.7 removed
+		*    `settingsScope` and moved writes behind the provider-owned form).
 		*  - The authoritative guard (reject roots covering $DSH_HOME /
-		*    settings.yaml, keep-last-good) runs host-side in dsh-whitelist-sandbox
-		*    when the change is applied; the UI shows the document value and a
-		*    notice that final application is subject to that guard.
+		*    the policy document, refuse before persist) runs host-side in
+		*    dsh-whitelist-sandbox when the change is applied; the UI shows the
+		*    document value and a notice that final application is subject to it.
 		*  - Nothing model-controlled is ever rendered into this form; inputs are
 		*    operator-typed paths only.
 		*/
@@ -247,7 +222,7 @@ window.__ModuleLoader__.load({
 				}), (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Button, {
 					variant: "ghost",
 					size: "sm",
-					icon: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconTrashOutline16, {}),
+					icon: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconTrashOutlineRegular, {}),
 					"aria-label": t("remove"),
 					onClick: () => remove(index)
 				})]
@@ -301,7 +276,7 @@ window.__ModuleLoader__.load({
 						}), (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Button, {
 							variant: "outline",
 							size: "sm",
-							icon: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconPlusOutline16, {}),
+							icon: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconPlusOutlineRegular, {}),
 							disabled: !editable || draft.trim() === "",
 							onClick: add,
 							children: t("add")
@@ -350,23 +325,20 @@ window.__ModuleLoader__.load({
 			});
 		}
 		/**
-		* Required client services. Both the base `remote` service and the
-		* `remote.settings` namespace must be injected: `ctx.remote` builds the
-		* accessor receiver, and `remote.settings` (the settings-document Remote
-		* namespace mounted by dsh-api-remotes) is the exposed sub-service the
-		* section reads/writes through `ctx.remote.settings`.
+		* Required client services. `configForms` (provided by
+		* `@deepseek-ai/dsh-client-ui-settings`) owns the settings mirror and the write
+		* transport, so this bundle no longer injects `remote` / `remote.settings`.
 		*/
 		const inject = [
 			"slots",
 			"locale",
-			"settingsScope",
-			"remote",
-			"remote.settings"
+			"configForms"
 		];
 		/**
-		* Register the whitelist section once the `settings.section` declaration
-		* is on the ledger, wire its store to the settings scope, and refresh on
-		* every pushed settings invalidation.
+		* Publish the whitelist section into the settings nav while the Host serves
+		* this plugin's entry, and bind it to that entry's shared configuration form.
+		* The form already derives from the settings mirror, so there is no separate
+		* refresh-on-invalidation wiring: its own subscription drives re-renders.
 		*/
 		function apply(ctx) {
 			ctx.effect(() => ctx.locale.register(COPY_NS, {
@@ -374,29 +346,17 @@ window.__ModuleLoader__.load({
 				en
 			}), "dsh-whitelist-sandbox: dictionaries");
 			const t = ctx.locale.bind(COPY_NS);
-			const controller = new WhitelistSettingsStore(ctx.settingsScope, ctx.remote.settings);
-			const injected = () => ({
-				controller,
-				t
-			});
-			ctx.effect(() => {
-				const refresh = () => {
-					controller.load();
-				};
-				controller.load();
-				const dispose = controller.describeFace.subscribe(refresh);
-				return () => {
-					dispose();
-					controller.dispose();
-				};
-			}, "dsh-whitelist-sandbox: settings scope");
-			ctx.slots.inject("settings.section", () => ctx.slots.register({
+			const controller = new WhitelistSettingsStore(ctx.configForms.get(SETTINGS_NS));
+			ctx.effect(() => ctx.configForms.whileServed([SETTINGS_NS], () => ctx.slots.inject("settings.section", () => ctx.slots.register({
 				name: "settings.section",
 				id: "whitelist",
 				order: 20,
 				label: () => t("nav"),
-				inject: injected
-			}, WhitelistSection));
+				inject: () => ({
+					controller,
+					t
+				})
+			}, WhitelistSection))), "dsh-whitelist-sandbox: settings page");
 		}
 		//#endregion
 		exports.WhitelistSection = WhitelistSection;

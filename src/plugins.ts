@@ -93,6 +93,65 @@ export function installPlugins(
   return installed
 }
 
+/** The profile `dshServer` boots (`dsh --profile web`). */
+const PROFILE_NAME = 'web'
+
+/** The one dshui plugin that must be a PROFILE BUNDLE rather than a `--patch`
+ * row: only a bundle-layer row (layer 1) is visible when `configEditor` writes
+ * the settings row into the profile patch (layer 2). Its own
+ * `cordis.patch.yml` atomically disables `bash-sandbox` / `fs-sandbox` and
+ * inserts the whitelist replacement, so a missing package degrades to the
+ * stock sandbox instead of stripping `shell`/`fs`. */
+const PROFILE_BUNDLE_PLUGIN = 'dsh-whitelist-sandbox'
+
+/** Bundles the shipped `web` profile template starts from, mirrored from
+ * `@deepseek-ai/dsh-app-boot`'s `PROFILE_TEMPLATES.web`. The extension host is
+ * CJS and cannot `require` that ESM package, so the seed is duplicated here. */
+const WEB_PROFILE_BUNDLES = ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app'] as const
+
+/** `initProfile`'s empty user patch layer, mirrored for profile bootstrap. */
+const PROFILE_PATCH_TEMPLATE = '# Your patch layer for this dsh profile, applied after every bundle layer:\n[]\n'
+/** `initProfile`'s pnpm settings for out-of-tree plugins, mirrored for bootstrap. */
+const PROFILE_PNPM_WORKSPACE = 'packages:\n  - .\n\nnodeLinker: hoisted\nautoInstallPeers: false\n'
+
+/** The subset of a dsh profile manifest this module reads and extends. */
+interface ProfileManifestLike {
+  name?: string
+  private?: boolean
+  dependencies?: Record<string, string>
+  dsh?: { profile?: { bundles?: string[] } }
+  [key: string]: unknown
+}
+
+/**
+ * Ensure the booted profile lists {@link PROFILE_BUNDLE_PLUGIN} in
+ * `dsh.profile.bundles`, so the plugin's own bundle patch (layer 1) runs
+ * before the user patch (layer 2) the settings page edits. Also bootstraps the
+ * profile's companion files when it does not exist yet, mirroring
+ * `initProfile`; existing files are only ever extended, never replaced.
+ * @param dshHome - the dsh home (defaults to `~/.dsh`).
+ * @param profileName - the profile `dshServer` boots (defaults to `web`).
+ * @returns whether the manifest changed.
+ */
+export function ensureProfileBundle(dshHome = resolveDshHome(), profileName = PROFILE_NAME): boolean {
+  const dir = path.join(dshHome, 'profiles', profileName)
+  fs.mkdirSync(dir, { recursive: true })
+  const patchPath = path.join(dir, 'cordis.patch.yml')
+  if (!fs.existsSync(patchPath)) fs.writeFileSync(patchPath, PROFILE_PATCH_TEMPLATE)
+  const workspacePath = path.join(dir, 'pnpm-workspace.yaml')
+  if (!fs.existsSync(workspacePath)) fs.writeFileSync(workspacePath, PROFILE_PNPM_WORKSPACE)
+  const manifestPath = path.join(dir, 'package.json')
+  const manifest: ProfileManifestLike = fs.existsSync(manifestPath)
+    ? JSON.parse(fs.readFileSync(manifestPath, 'utf8')) as ProfileManifestLike
+    : { name: `dsh-profile-${profileName}`, private: true, dependencies: {}, dsh: { profile: { bundles: [...WEB_PROFILE_BUNDLES] } } }
+  const declared = manifest.dsh?.profile?.bundles
+  const bundles = Array.isArray(declared) ? declared : [...WEB_PROFILE_BUNDLES]
+  if (bundles.includes(PROFILE_BUNDLE_PLUGIN)) return false
+  manifest.dsh = { ...manifest.dsh, profile: { ...manifest.dsh?.profile, bundles: [...bundles, PROFILE_BUNDLE_PLUGIN] } }
+  fs.writeFileSync(manifestPath, JSON.stringify(manifest, undefined, 2) + '\n')
+  return true
+}
+
 /**
  * Remove the dshui plugin packages from the dsh home. Used on extension
  * deactivation so uninstalling the extension leaves no residue.

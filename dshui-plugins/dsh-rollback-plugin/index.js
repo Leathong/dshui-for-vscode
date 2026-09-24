@@ -1017,6 +1017,43 @@ var GitProvider = class {
 			if (result.code !== 0) throw new Error(`git add -f failed for ${chunk.join(", ")}: ${result.stderr.trim()}`);
 		}
 	}
+	/**
+	* Stage worktree paths from their **content** (`hash-object -w` +
+	* `update-index --index-info`) instead of `git add -f`.
+	*
+	* `git add -f` records no index entry for a path inside an embedded git
+	* repository that has no resolvable HEAD (it exits 0 and writes nothing), so a
+	* file this session *created* in such a directory would be missing from every
+	* tree-vs-worktree diff — untracked paths never appear in `git diff <tree>`.
+	* Feeding the blob hash to the index is content-addressed, never asks git to
+	* index the embedded worktree, and covers created, modified and ignored files
+	* alike.
+	*/
+	async stagePathsByContent(indexFile, relPaths, signal) {
+		const unique = [...new Set(relPaths)];
+		if (unique.length === 0) return;
+		const existing = [];
+		for (const rel of unique) {
+			this.assertSafeRelPath(rel);
+			try {
+				if (fs.statSync(path.resolve(this.cwd, rel)).isFile()) existing.push(rel);
+			} catch {}
+		}
+		if (existing.length === 0) return;
+		const blobs = await this.hashBlobs(existing, {
+			write: true,
+			...signal === void 0 ? {} : { signal }
+		});
+		const entries = [];
+		for (const rel of existing) {
+			const blob = blobs.get(rel);
+			if (blob !== void 0) entries.push({
+				path: rel,
+				blob
+			});
+		}
+		await this.updateIndexInfo(indexFile, entries, signal);
+	}
 	/** Write index entries from an index file into the worktree. */
 	async checkoutIndex(indexFile, relPaths, signal) {
 		const unique = [...new Set(relPaths.map((item) => this.normalizeRelPath(item)))];
@@ -1724,9 +1761,14 @@ var SessionChangeManager = class {
 			return failure("rollback-failed", "no accepted baseline could be established for this session", { sessionId });
 		}
 		const trackedPaths = [...new Set((await this.tracker.loadCalls(cwd, sessionId)).map((call) => call.path))];
+		const nestedRoots = await this.nestedRoots(provider);
+		const isNestedPath = (rel) => nestedRoots.some((root) => rel === root || rel.startsWith(`${root}/`));
+		const nestedPaths = trackedPaths.filter(isNestedPath);
+		const plainPaths = trackedPaths.filter((rel) => !isNestedPath(rel));
 		const allViews = patchFileViews(await provider.withScratch(async (scratch) => {
 			await provider.readTree(scratch, accepted);
-			await provider.stagePaths(scratch, trackedPaths);
+			await provider.stagePaths(scratch, plainPaths);
+			await provider.stagePathsByContent(scratch, nestedPaths);
 			return provider.diffPatch(accepted, void 0, [], {
 				context: this.options.diffContextLines,
 				indexFile: scratch
@@ -1734,18 +1776,17 @@ var SessionChangeManager = class {
 		}), this.options.maxDiffHunksPerFile, this.options.maxDiffBytesPerFile);
 		const sessionPaths = new Set(trackedPaths);
 		const views = allViews.filter((view) => sessionPaths.has(view.path));
-		const nestedRoots = await this.nestedRoots(provider);
 		const probe = /* @__PURE__ */ new Map();
 		const changes = views.map((view) => {
 			probe.set(view.path, view.newBlob);
-			const nested = nestedRoots.some((root) => view.path === root || view.path.startsWith(`${root}/`));
+			const nested = isNestedPath(view.path);
 			const created = view.status === "added";
 			return {
 				path: view.path,
 				absolutePath: provider.absolutePath(view.path),
 				status: created ? "created" : view.status === "deleted" ? "deleted" : view.binary ? "binary" : "modified",
 				source: "git",
-				restorable: !view.binary && !nested,
+				restorable: !view.binary,
 				accepted: false,
 				...created ? { createdAfterSnapshot: true } : {},
 				...view.binary ? { binary: true } : {},
@@ -3034,6 +3075,10 @@ var CallTracker = class {
 	/**
 	* Record one observed write/edit. Synchronous by contract (`fs/observed` is a
 	* synchronous event); the blob write runs on the session's serial queue.
+	*
+	* Paths inside a nested git repository are tracked like any other: the call is
+	* captured from the file's bytes, so the embedded worktree never has to be
+	* indexed (the list path stages those paths from their blob).
 	*/
 	observe(target, observation, actor) {
 		const callId = actor?.callId;
@@ -3049,7 +3094,6 @@ var CallTracker = class {
 		if (rel === "" || rel === ".." || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)) return;
 		const relPath = rel.split(path.sep).join("/");
 		const track = this.track(session.id, cwd);
-		if (this.isInsideNestedRepo(track, abs)) return;
 		const position = positionForCall(session, callId);
 		const fallback = sessionTurnPosition(session);
 		const observed = statIdentity(abs);
@@ -3244,8 +3288,7 @@ var CallTracker = class {
 			sessionId,
 			cwd,
 			calls: [],
-			queue: Promise.resolve(),
-			nestedCache: /* @__PURE__ */ new Map()
+			queue: Promise.resolve()
 		};
 		this.tracks.set(sessionId, created);
 		return created;
@@ -3272,37 +3315,6 @@ var CallTracker = class {
 		track.base = commit;
 		track.head = commit;
 		return commit;
-	}
-	/**
-	* A path inside an embedded git repository is invisible to `git add -f`
-	* (git exits 0 but records nothing), so callers-level patches would silently
-	* vanish. Reject those paths; nested repositories stay covered by the
-	* materialized turn snapshots (docs/git-only-plan.md §4.3).
-	*/
-	isInsideNestedRepo(track, absPath) {
-		let dir = path.dirname(absPath);
-		const root = path.resolve(track.cwd);
-		for (let depth = 0; depth < 64; depth += 1) {
-			const resolved = path.resolve(dir);
-			if (resolved === root || !resolved.startsWith(root)) return false;
-			const cached = track.nestedCache.get(resolved);
-			if (cached === true) return true;
-			if (cached === void 0) {
-				let hasGit = false;
-				try {
-					const stat = fs.lstatSync(path.join(resolved, ".git"));
-					hasGit = stat.isDirectory() || stat.isFile();
-				} catch {
-					hasGit = false;
-				}
-				track.nestedCache.set(resolved, hasGit);
-				if (hasGit) return true;
-			}
-			const parent = path.dirname(resolved);
-			if (parent === resolved) return false;
-			dir = parent;
-		}
-		return false;
 	}
 	trim(track) {
 		const overflow = track.calls.length - this.maxCalls;
@@ -4267,9 +4279,9 @@ function jsonCodec(typeSymbol) {
 	return {
 		mode: "strict",
 		typeSymbol,
-		schema: { parse(value) {
+		create: () => ({ parse(value) {
 			return value;
-		} }
+		} })
 	};
 }
 //#endregion

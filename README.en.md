@@ -34,8 +34,9 @@ open-source agentic coding framework — "everything is a plugin") into the VS C
 sessions and your coding workflow live in the same window.
 
 The core idea: **the folder you have open in VS Code IS the dsh workspace**. The extension starts an
-embedded `dsh web` server with that folder as its working directory (the CLI runtime ships inside the
-extension, so no separate Node installation is needed) and registers it as a persistent dsh Workspace.
+embedded `dsh web` server with that folder as its working directory (the dsh CLI ships inside the
+extension and runs on your local Node ≥ 22.19 — see [Requirements](#requirements)) and registers it as
+a persistent dsh Workspace.
 All dsh capabilities — session chat, tool cards, goals, subagents, background tasks — work as-is, with
 a deeply integrated VS Code experience on top.
 
@@ -58,9 +59,9 @@ Compared with the stock browser UI, this extension differs in five main ways:
    see belongs to the folder you have open.
 3. **The input box stays pinned to the bottom.** The centered "new session" hero is removed; the
    composer is fixed at the bottom in every state, like an active session.
-4. **The session menu deletes instead of archiving.** Deleting is performed by the extension host via
-   the VS Code file API, which removes the session log files under `~/.dsh/sessions/...` directly
-   (bypassing dsh's archive RPC; dsh itself is unchanged).
+4. **Sessions can be deleted directly** (dsh's own archive action stays available in the same menu).
+   Deleting is performed by the extension host via the VS Code file API, which removes the session log
+   files under `~/.dsh/sessions/...` directly (bypassing dsh's archive RPC; dsh itself is unchanged).
 5. **Markdown links in user messages are clickable.** `[label](url)` links over http/https/mailto open
    in the system browser; relative paths (e.g. `[Makefile](Makefile)`) resolve against the session cwd
    and open the file in the current window.
@@ -93,8 +94,12 @@ deep VS Code integrations:
 - VS Code ≥ 1.105 (bundled dsh ≥ rc7 needs extension-host Node ≥ 22.19; VS Code 1.105+ embeds Node
   22.19, 1.104 and earlier do not satisfy it — `engines.vscode` blocks them at install time, with a
   runtime guard as backstop)
-- No separate Node installation: the extension runs the dsh CLI with the Node bundled inside the
-  extension host (`ELECTRON_RUN_AS_NODE`).
+- Node ≥ 22.19 on the machine launches the dsh CLI (auto-detected from `PATH` and the usual
+  Homebrew / nvm / fnm / asdf / Volta locations; `dshui.server.nodePath` overrides it). dsh ≥ 0.1.6
+  reads Node internals through a native addon during boot, and that addon cannot load inside VS
+  Code's Electron runtime, so the server cannot start without a usable Node (the extension then
+  degrades to the embedded Electron runtime with a warning — that fallback only works for
+  dsh ≤ 0.1.5).
 - A local Node ≥ 22.19 and pnpm 11.7.0 are only needed when **rebuilding the client bundles from
   source** (see [Development](#development)).
 
@@ -119,6 +124,13 @@ npx @vscode/vsce package              # produces dshui-for-vscode-<version>.vsix
 > Packaging from source does **not** require the upstream source: `.dsh-src/` and `.tools/` are not
 > committed and don't exist in a fresh clone; `scripts/copy-clients.mjs` skips them automatically when
 > the checkout is missing and uses the prebuilt client bundles shipped with the package.
+>
+> A dsh upgrade also has to declare every **third-party** dependency of the runtime closure in the root
+> `package.json`: `sync-dsh` strips the dependency tables of the `@deepseek-ai/*` copies it writes, so
+> only the root manifest can install them. `sync-dsh` (preinstall) checks the declarations and
+> `npm run verify:deps` also checks the installed versions (`vscode:prepublish` runs it before
+> packaging); a gap leaves the affected plugins at `failed to import` (the 0.1.7 upgrade missed
+> `execa`, `@modelcontextprotocol/client` and `@deepseek-ai/libreoffice-kit`).
 
 For development, press **F5** (the repo ships `.vscode/launch.json`), or run
 `code --extensionDevelopmentPath="$PWD" <folder>`.
@@ -166,12 +178,20 @@ The same log lines (timestamp + level prefix) are also appended to
 `~/.dsh/dshui-logs/extension.log` (under your dsh home) for headless/CLI debugging, and uncaught
 exceptions and unhandled promise rejections inside the extension host are recorded as well.
 
+The startup line `launching dsh web with system Node.js v… (…)` names the Node actually used. When no
+usable Node is installed, a `no system Node.js >= 22.19.0 found …` warning appears first and dsh then
+fails with `host preparation failed: node-addon-require-builtin unsupported: Unsupported/no-realm`
+(newer addon builds may instead report `Unsupported/no-context` plus `unsupported Electron runtime
+fingerprint`): install Node.js ≥ 22.19 (or point `dshui.server.nodePath` at a Node binary) and run
+**dsh UI: Restart dsh Server** — no window reload needed.
+
 ### Settings
 
 | Setting | Default | Description |
 | --- | --- | --- |
 | `dshui.autoOpen` | `true` | Automatically show the sidebar view when a folder is opened |
 | `dshui.server.port` | `61370` | Port of the embedded server. The fixed port doubles as the shared-backend rendezvous: all windows reuse ONE server (each scoped via `?dshui_workspace`), and localStorage is scoped per workspace so each folder remembers its own last-opened session across launches. Set to `0` for an OS-assigned port (no sharing, no persistence). If the fixed port is taken, startup reports an error and asks you to change the port (no random-port fallback) |
+| `dshui.server.nodePath` | empty | Node ≥ 22.19 binary used to launch the dsh CLI. Empty = auto-detect (`PATH`, then Homebrew / nvm / fnm / asdf / Volta / Program Files locations); `electron` = force VS Code's embedded Electron runtime (only works for dsh ≤ 0.1.5). Run **dsh UI: Restart dsh Server** after changing it |
 | `dshui.openFilesInVscode` | `true` | Open file links from chat in **the current VS Code** window (via the extension's bridge, no system popup) instead of the OS default editor |
 | `dshui.checkDshUpdates` | `true` | Check the npm registry for newer dsh releases at startup and notify when the bundled version is outdated (throttled to once per 24h; each new version is announced once; can be disabled) |
 
@@ -350,9 +370,18 @@ VS Code sidebar view (webview)
     Session" button), and a file/code reference writer (receives reference messages forwarded by the
     webview shell from the extension's context-menu commands and writes them into the composer draft).
   - `dshui-client-ui-workspace` / `dshui-client-ui-conversation` — **rebuilt artifacts** of the two
-    stock client packages, containing the sidebar filtering, the bottom-pinned input box, and the
-    "Delete Session" menu (deletion goes through the webview shell → the extension host via the VS
-    Code file API).
+    stock client packages (the patch renames their tsdown bundle id to the dshui name; `patch.yml`
+    disables the stock `ui-workspace` / `ui-conversation` rows and inserts fresh rows under those
+    names, and `scripts/copy-clients.mjs` copies the build into `dshui-plugins/`). They carry the
+    sidebar filtering, the bottom-pinned input box, and the "Delete Session" menu (deletion goes
+    through the webview shell → the extension host via the VS Code file API). The hard constraint is
+    that **a row id must equal the id declared inside its bundle by
+    `window.__ModuleLoader__.load({ id })`** — dsh 0.1.7's client loader keys factories by the
+    declared id, so a mismatch makes the whole row unloadable; and once that row is gone the
+    `uiWorkspace` / `uiConversation` services it provides vanish, leaving 20+ client plugins
+    injecting them PENDING forever (**Failed to load plugins** in the browser). Rebuild with
+    `pnpm run build:lib:client` before copying (a stale build still declares the upstream
+    `@deepseek-ai/...` id); `copy-clients.mjs` verifies the id and fails loudly on a mismatch.
   - `dsh-rollback-plugin` — the modification-rollback plugin: records the agent's `write` / `edit`
     modifications and the session baseline snapshot, and provides the "Modifications" dock and native
     diff review (see [Rollback (Reviewing Modifications)](#rollback-reviewing-modifications)).
@@ -362,9 +391,11 @@ VS Code sidebar view (webview)
     `qrcode`, `dingtalk-stream`, and three more packages as external runtime dependencies, so the
     plugin directory ships a production-only `node_modules/` that `installPlugins()` installs along
     with it.
-- **Deleting sessions:** dsh itself only offers "archive" (hide the session, keep the files) and has no
-  delete RPC. The plugin renames the session-row menu entry from "Archive Session" to "Delete Session":
-  on click, the plugin posts a message to the webview shell (`dshui:deleteSession`, with the session id
+- **Deleting sessions:** dsh itself offers "archive" (hide the session, keep the files) but has no
+  delete RPC. The plugin **adds** a "Delete Session" entry to the session row menu and its hover
+  actions (since 0.1.7 upstream moved the row actions into slot entries, so delete sits beside the
+  stock archive/pin entries): on click, the plugin posts a message to the webview shell
+  (`dshui:deleteSession`, with the session id
   and its workspace directory), and the shell forwards it to the extension host. The host resolves the
   session directory using dsh's session path rules (`$DSH_HOME/sessions/<encoded workspace dir>/<session
   id>/`, matching the `projectKey`/`encodeSegment` of `dsh-session-persistence-jsonl`) and deletes its
@@ -455,8 +486,8 @@ workflow below.
 
 The extension binds two dsh versions together, and both must be aligned on upgrade:
 
-1. **CLI runtime:** `dependencies["@deepseek-ai/dsh"]` in `package.json` (currently `0.1.5-rc.1`).
-2. **Client bundle source:** the `.dsh-src` checkout (currently `dsh-v0.1.5-rc.1` with the dshui
+1. **CLI runtime:** `dependencies["@deepseek-ai/dsh"]` in `package.json` (currently `0.1.7-rc.1`).
+2. **Client bundle source:** the `.dsh-src` checkout (currently `dsh-v0.1.7-rc.1` with the dshui
    client patch re-applied — since 0.1.2 the session/chat clients were restructured, so re-apply the
    patch to the new structure per `scripts/verify-patches.mjs`; since the repo's master may lag behind
    the npm release, align by checking each package's version in its `package.json` and confirm with
@@ -473,41 +504,80 @@ Upgrade steps:
 # 1. Upgrade the bundled CLI
 npm install @deepseek-ai/dsh@<new version>
 
+# 1b. Rebuild the source checkout. On a rebase you MUST clean first: the previous version's stale
+#     typert remote declarations in each package's lib/types and *.tsbuildinfo otherwise make tsc -b
+#     reuse them and raise dozens of bogus "remote method does not exist" errors.
+cd .dsh-src && pnpm install && pnpm run clean \
+  && pnpm run build:lib:host && pnpm run build:lib:client \
+  && pnpm run gen-client-catalog
+
 # 2. Check that the patch is still complete — the core step
 node scripts/verify-patches.mjs      # each file flagged as missing needs its patch re-applied
 #    The changes are frozen in patches/dshui-bundles.patch: if it applies cleanly to the base
 #    commit, use it as-is; if it drifted, re-apply per the checklist in step 3 and re-export with:
-#    git -C .dsh-src diff > patches/dshui-bundles.patch
+#    git -C .dsh-src diff <base commit> > patches/dshui-bundles.patch
 
 # 3. Re-apply any missing patches per the checklist below (the changes are small; follow the comments
 #    in each file)
-#    - ui-workspace/src/client/tree.ts                 add scopedWorkspacePath, scope params to derives, deletedSessionIds
-#    - ui-workspace/src/client/WorkspaceBrowser.tsx    SCOPE constant, workspaces/ungrouped filtering, hide add/view options, rail sectionHeader, session-delete row hiding
-#    - ui-workspace/src/client/contract/slots.ts       archiveSession → deleteSession
-#    - ui-workspace/src/client/index.ts                session delete: postMessage asks the extension host to delete log files (15s timeout + listener cleanup)
-#    - ui-workspace/src/client/rows/Rows.tsx           "Delete Session" menu (trash icon, danger style), onArchive → onDelete
-#    - ui-workspace/src/client/locales.ts              menu.archiveSession → menu.deleteSession
+#    - ui-workspace/src/client/tree.ts                 scopedWorkspacePath, scope/deletedSessionIds params on the derives
+#    - ui-workspace/src/client/rows/WorkspaceBrowser.tsx  scopedWorkspacePath + useDeletedSessions wiring, deleted-row hiding
+#    - ui-workspace/src/client/contract/slots.ts       DeleteSessionInjected and the deletedSessions observable
+#    - ui-workspace/src/client/index.ts                deleted-sessions store + deleteSession postMessage
+#    - ui-workspace/src/client/session-actions/DeleteSession.tsx  since 0.1.7 row actions are slot entries: register "Delete Session"
+#    - ui-workspace/src/client/locales.ts              add menu.deleteSession / actions.delete
 #    - ui-workspace/tsdown.config.ts                   bundle id → dshui-client-ui-workspace
-#    - ui-workspace/tests/{rows,workspace-browser,tree}.client.spec.*  session-delete tests
-#    - ui-conversation/.../ConversationRoot.tsx        SCOPE constant, static chip, hero hiding, data-dshui-scope
-#    - ui-conversation/.../EmptyHero.tsx               staticChip prop for WorkspaceChip
-#    - ui-conversation/.../ConversationRoot.module.css  scoped hero pinned to the bottom
-#    - ui-conversation/.../HeroShell.module.css        .workspaceStatic
+#    - ui-conversation/src/client/skeleton/dshui-scope.ts          SCOPE constant (DSHUI_SCOPE)
+#    - ui-conversation/src/client/skeleton/ConversationMainPanel.tsx  data-dshui-scope root marker
+#    - ui-conversation/src/client/skeleton/ConversationContent.tsx    static chip, hero hiding, scope keeps the composer live
+#    - ui-conversation/src/client/skeleton/EmptyHero.tsx              staticChip prop for WorkspaceChip
+#    - ui-conversation/src/client/skeleton/ConversationRoot.module.css  scoped hero pinned to the bottom
+#    - ui-conversation/src/client/skeleton/HeroShell.module.css       .workspaceStatic
 #    - ui-conversation/tsdown.config.ts                bundle id → dshui-client-ui-conversation
-#    - ui-conversation/tests/apply-inject.client.spec.tsx  openFile opens via host + click origin (falls back without cwd; silent host failure)
+#    - ui-chat/src/client/chat/MessageItem.tsx         UserMessageNodeView / SteeringMessageNodeView split, user-actions child slot, markdown link projection
+#    - ui-chat/src/client/chat/register-node-renderers.ts  user declares the user-actions child; steering uses the strip-free renderer
+#    - ui-chat/src/client/contract/slots.ts            UserActionOwnerProps and the conversation.chat.user-actions slot
 #    - packages/client/tsdown.client.ts                workspaceManifest resolves dshui-client-* ids by package directory (rc.1 validates by package name)
-#    - packages/api/session-controller/src/commands.ts  clear the forked child's inherited inbox after creation
-#    - packages/api/session-controller/tests/*.host.spec.ts  child-empty-inbox case + fake Agent gains inbox
+#    - packages/util/native-command/src/path-opener.ts  darwin bridge/CLI/vscode://file branch + dshuiOrigin
+#    - packages/client/connection/src/browser-auth.ts   keep dshui query params through the token redirect (0.1.7 base is ./)
+#    - packages/api/session-controller/src/{index,types}.ts  openWorkspacePath threads dshuiOrigin
+#    - packages/api/settings-controller/src/index.ts         openSettingsDocument(dshuiOrigin, signal)
+#    - packages/client/ui-chat/src/client/apply.ts           client attaches the window scope (dshuiClickOrigin)
+#    - packages/mcp/mcp-client/src/index.ts                  startup: eager|lazy
 
 # 4. Rebuild and copy in
 pnpm run build:lib:host && pnpm run build:lib:client   # inside .dsh-src
-node scripts/copy-clients.mjs
+pnpm run build:web                                     # browser shell (do not skip — see the drift list)
+pnpm run gen-client-catalog                            # the slot catalog is generated; never hand-edit
+node scripts/sync-dsh.mjs
+node scripts/copy-clients.mjs                          # patches the two UI bundles into that closure (after sync)
 
 # 5. Recompile the extension and package
 npm run compile && npx @vscode/vsce package
 ```
 
 Other drift-prone spots to check after every upgrade:
+
+- **The `@deepseek-ai/dsh-web-frontend` browser shell (`apps/web/dist`) must be rebuilt:** `pnpm run
+  build:lib` builds the host/client libraries but **not** `pnpm run build:web`. The shell is the page
+  client plugin bundles run in, and it bundles the shared modules they `require` at runtime (`react`,
+  `@deepseek-ai/dsh-client-ui-slots`, `@deepseek-ai/dsh-client-ui-primitives`, ...). A shell left at the
+  previous release makes every new plugin fail to load: the browser reports **Failed to load plugins**
+  (typically `settingsNumberField is not a function`, because the 0.1.7 settings cards call APIs the old
+  shell does not export) while the host logs look perfectly healthy. `scripts/sync-dsh.mjs` now checks
+  freshness and refuses to sync when `dist` is older than `src`, printing
+  `cd .dsh-src && pnpm run build:web` (set `DSHUI_ALLOW_STALE_WEB=1` to bypass).
+
+- **Build order: `build:lib:host` → `build:lib:client` → `build:web` → `sync:dsh` → `copy:clients`**:
+  - the host build also regenerates typert's `lib/typert.remote-client.d.ts`. Running only
+    `build:lib:client` leaves the client with the old signature (e.g. `openSettingsDocument(signal?)`),
+    so a patched call site such as `openSettingsDocument(dshuiOrigin, signal)` fails to type-check —
+    always run the host build first after changing a host service signature.
+  - `copy:clients` asserts that the built bundle registers the `dshui-client-ui-*` id: a mismatch means
+    the client packages were not rebuilt (the bundle still carries the upstream id), in which case the
+    row cannot load and drags 20+ dependents down with it — the script fails instead of packaging it.
+  - the UI replacement works by renaming the bundle id, disabling the stock rows, and inserting fresh
+    rows; keeping the stock rows and only swapping their file would make the patch's row-name/package
+    mismatch skip those rows entirely.
 
 - **The host part of `patches/dshui-bundles.patch`**: it targets the darwin-open branch of
   `packages/util/native-command/src/path-opener.ts`, the token-exchange redirect in
@@ -518,9 +588,37 @@ Other drift-prone spots to check after every upgrade:
   unavailable), and `DSHUI_BRIDGES_FILE`. If dsh changes that code the patch fails safely
   (`git apply` errors) — just rewrite it for the new source; when the bridge is unavailable the opener
   automatically falls back to `vscode://file`.
+- **A dsh version bump needs `make deploy`, not just `make sync`:** `make sync` only copies `out/`,
+  `dshui-plugins/`, `patch.yml`, and `package.json` — it **does not touch
+  `node_modules/@deepseek-ai`**. With the old host closure in place the new client bundles fail to
+  load (`Failed to load plugins` in the browser, e.g. `settingsNumberField is not a function`). Use
+  `make deploy` for a full reinstall; `make install` now also runs
+  `scripts/clean-profile-links.mjs`, which drops the links an older link backend left in
+  `$DSH_HOME/profiles/node_modules` pointing at the previous extension (a live link to an old
+  version shadows the new package; a dangling one breaks resolution). The script is safe to run by
+  hand any time (`--dry-run` previews) and is worth re-running after each version change.
 - **`patch.yml`:** the overridden row ids (`ui-workspace` / `ui-conversation`) and the inserted
   `dshui-host-ensure-workspace` depend on the row names in the `web-app` bundle and on the
   `workspaceRegistry` / `webServer` service names; update them in sync if these change.
+- **The sandbox seam in `patch.yml` is a pair (currently not overridden at all):**
+  `bash-sandbox` / `fs-sandbox` are the only providers of the `shell` / `fs` services, and the
+  `dsh-whitelist-sandbox` row is the replacement that provides both through whitelist-aware
+  subclasses. Disabling the former while commenting out the latter (or inserting the replacement
+  without disabling them) ships a server that boots but is half dead: the session list never loads,
+  settings error out, and the plugin panel shows `tool-bash: waiting for shell`, `tool-fs: waiting for
+  fs`, `present`, `workflow-ptc`, `tool-workflow`, `permission`, `session-controller`,
+  `workspace-files`, ... all PENDING forever. `scripts/verify-overlay.mjs` rejects that composition
+  during `make package` / `make deploy` / `make sync`, and also checks that every inserted row names a
+  package that ships in `dshui-plugins/`. **On 0.1.7 the replacement row stays commented out** — the
+  whitelist plugin is not ported yet (its host `confine()` override is synchronous while 0.1.7 made
+  the base async, `SettingsForms.installSection` was removed, and the client half injects the removed
+  `settingsScope` plus two renamed icons), so the stock providers are mounted. When the port lands,
+  re-enable both `disabled: true` rows and uncomment that insert in the same change.
+- **Operator-specific whitelist roots do not belong in this repository:** `extraWritableRoots` is
+  deployment data and goes into `$DSH_HOME/profiles/web/cordis.patch.yml`. Patch layers replace a
+  whole key rather than deep-merging, and the profile layer is applied *before* this overlay, so it
+  can neither configure the row this file inserts nor override a `config:` this file already set —
+  the insert row must therefore carry no `config:` at all when it is re-enabled.
 - **`dshui-plugins/*/package.json`:** the `dsh.client.inject` list is only an informational dependency
   edge; it usually needs no changes.
 - **Data compatibility:** dsh is pre-release (rc); upgrades may change the persistence format

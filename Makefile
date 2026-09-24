@@ -23,6 +23,9 @@
 # 填充（scripts/sync-dsh.mjs）。打包（vsce 的 vscode:prepublish）会自动跑 sync:dsh；
 # 手动 npm install 后 postinstall 也会跑一次，故开发机需先 clone 并构建 .dsh-src
 # （可直接 make dsh-build 一键完成；仅同步已构建产物用 make sync-dsh）。
+# 闭包用到的第三方依赖必须出现在根 package.json 的 dependencies 里（sync-dsh 清空了
+# @deepseek-ai/* 的依赖表，只有根清单能安装它们）：sync-dsh（preinstall）校验声明，
+# make verify-deps 连已安装版本一起校验，vscode:prepublish 打包前必跑。
 
 # 以下均从 package.json 动态读取，改 publisher/name/version 后无需改 Makefile。
 NAME      := $(shell node -p "require('./package.json').name")
@@ -56,7 +59,7 @@ GH_TAG    ?= v$(VERSION)
 GH_REPO   ?=
 
 .PHONY: all deploy package install compile dsh-build dsh-apply-patch dsh-gen-patch sync-dsh \
-        sync clean help login verify-pat publish publish-vsix publish-ovsx release unpublish
+        verify-deps sync clean help login verify-pat publish publish-vsix publish-ovsx release unpublish
 
 all: deploy
 
@@ -72,21 +75,25 @@ DSH_SRC ?= .dsh-src
 # DSH_REPO  — 上游仓库
 DSH_REPO ?= https://github.com/deepseek-ai/deepseek-harness.git
 # DSH_BASE  — 锁定基提交（来自 patches/README.md，不能漂移，漂移会导致补丁无法套用）
-DSH_BASE ?= 183f08e9c6dde7e36cd2318eaee70b0da08fb35e
+DSH_BASE ?= 46a7f68b0922371ce7144b668b90e377d8e799f4
 # DSH_PATCH — dshui 未归档改动（client bundle + host 运行时）
 DSH_PATCH := patches/dshui-bundles.patch
 # DSH_PNPM — 包管理器，需要 pnpm 11.7.0、Node ^22.19 || >=24
 DSH_PNPM ?= pnpm
 
-# 从 dsh 源码全新构建：clone/切基提交/套补丁 → pnpm install → build host+client →
-# copy-clients（客户端 bundle 拷入 dshui-plugins/）→ sync-dsh（@deepseek-ai/* 拷入 node_modules）。
-# 之后即可 make package / make deploy 打包安装。
+# 从 dsh 源码全新构建：clone/切基提交/套补丁 → pnpm install → build host+client+web →
+# gen-client-catalog（槽目录）→ copy-clients（客户端 bundle 拷入 dshui-plugins/）→
+# sync-dsh（@deepseek-ai/* 拷入 node_modules）。之后即可 make package / make deploy 打包安装。
+# build:web 不能漏：浏览器 shell 里打包了客户端插件 require 的共享模块（react / ui-slots /
+# ui-primitives …），漏掉它会让新版客户端插件全部加载失败（Failed to load plugins）。
 dsh-build:
 	cd $(DSH_SRC) && $(DSH_PNPM) clean && $(DSH_PNPM) install
 	cd $(DSH_SRC) && $(DSH_PNPM) run build:lib:host
 	cd $(DSH_SRC) && $(DSH_PNPM) run build:lib:client
-	node scripts/copy-clients.mjs
+	cd $(DSH_SRC) && $(DSH_PNPM) run build:web
+	cd $(DSH_SRC) && $(DSH_PNPM) run gen-client-catalog
 	npm run sync:dsh
+	node scripts/copy-clients.mjs
 	@echo ""
 	@echo "dsh 源码构建完成。现在可 make package（打包 vsix）或 make deploy（打包并安装）。"
 
@@ -139,6 +146,10 @@ dsh-gen-patch:
 sync-dsh:
 	npm run sync:dsh
 
+# 校验根 package.json 覆盖了 dsh 运行时闭包的第三方依赖，且已安装版本不低于上游要求。
+verify-deps:
+	npm run verify:deps
+
 # vsce package 内部会先执行 vscode:prepublish（compile + copy:clients），
 # 因此打包无需显式依赖 compile（见 `Executing prepublish script` 输出）。
 package:
@@ -148,10 +159,15 @@ install: package
 	# 注意：--install-extension 后必须紧跟文件名，--force 放前面会被 CLI
 	# 当成独立布尔参数，导致「requires a non empty value」。
 	code --install-extension $(VSIX) --force
+	@# dsh ≤ 0.1.5 的 link backend 会在 $$DSH_HOME/profiles/node_modules 留下指向
+	@# 上一版扩展的软链：指向旧版的可用软链会遮蔽新版的包，悬空软链则直接解析失败
+	@# （0.1.5 宿主 + 0.1.7 客户端 bundle 混装时表现为 "Failed to load plugins"）。
+	@# dsh 0.1.7 不再维护这些投射，装完清一次；失败不阻断安装。
+	-node scripts/clean-profile-links.mjs
 
 deploy: install
 	@echo ""
-	@echo "已安装 $(VSIX)。重载窗口使新版本生效：Cmd+Shift+P → Developer: Reload Window"
+	@echo "已安装 $(VSIX) 并清理了旧的 profile 软链。重载窗口使新版本生效：Cmd+Shift+P → Developer: Reload Window"
 
 # ---- 发布到市场 ----
 # 首次发布前先 make login（会要求输入 Azure DevOps PAT），或直接导出 VSCE_PAT。
@@ -202,11 +218,12 @@ unpublish:
 	$(VSCE) unpublish $(EXT_ID) $(AUTH_FLAG)
 
 # 开发期快速同步：把运行产物拷入已安装副本，免重新打包 vsix。
-# 同步内容：out/（扩展主程序）、dshui-plugins/（host 插件 + 客户端 bundle）、
-# patch.yml、media/、package.json。注意：node_modules/@deepseek-ai（源码构建）
+# 同步内容：out/（扩展主程序）、dshui-plugins/（host 插件 + 被替换的 UI 客户端
+# bundle）、patch.yml、media/、package.json。注意：node_modules/@deepseek-ai
 # 不在同步范围，依赖变更后请改用 make deploy 完整重装。
 sync: compile
 	@test -d "$(EXT_DIR)" || (echo "错误：未找到已安装副本 $(EXT_DIR)，请先 make install" && exit 1)
+	@node scripts/verify-overlay.mjs
 	@DEST="$(EXT_DIR)" && \
 	echo "同步到 $$DEST ..." && \
 	rm -rf "$$DEST/out" "$$DEST/dshui-plugins" && \
@@ -230,6 +247,7 @@ help:
 	@echo "  make dsh-apply-patch  （子步骤）准备 .dsh-src 检出并套补丁；RESET=1 重置到基提交重套"
 	@echo "  make dsh-gen-patch   （漂移后）从基提交重新导出 patches/dshui-bundles.patch"
 	@echo "  make sync-dsh   从 .dsh-src 源码构建产物同步 @deepseek-ai/* 到 node_modules"
+	@echo "  make verify-deps 校验根 package.json 覆盖了运行时闭包的第三方依赖"
 	@echo "  make sync       快速同步运行产物到已安装副本（免打包）"
 	@echo "  make login      登录 VS Code 市场（发布前一次性操作，或导出 VSCE_PAT）"
 	@echo "  make verify-pat 校验认证是否有效（PAT 或 AZURE=1 的 Entra ID 身份）"

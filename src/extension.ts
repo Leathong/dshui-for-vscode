@@ -16,7 +16,7 @@ import { installCrashHandlers, logger, setLogFile } from './logger'
 import { killProcessOnPort } from './killPort'
 import { OpenBridge } from './openBridge'
 import { isObject, RollbackReviewManager, type RollbackFileChange } from './rollbackReview'
-import { installPlugins, resolveDshHome, type InstalledPlugin } from './plugins'
+import { ensureProfileBundle, installPlugins, resolveDshHome, type InstalledPlugin } from './plugins'
 import {
   bridgesPath, readRegistry, registerBridge, registerServerUser, startServerUserHeartbeat,
   unregisterBridge, unregisterServerUser, writeWorkspaceMarker,
@@ -249,6 +249,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   try {
     const installed = installPlugins(pluginsDir, dshHome, path.join(extensionRoot, 'node_modules'))
     logger.info(`[dshui] installed ${installed.length} plugin(s) (${installed.map(p => p.name).join(', ')}) into ${path.join(dshHome, 'profiles', 'node_modules')}`)
+    const bundlesChanged = ensureProfileBundle(dshHome)
+    logger.info(`[dshui] web profile bundle registration ${bundlesChanged ? 'updated' : 'already current'}`)
   } catch (error) {
     logger.error('[dshui] failed to install dshui plugins:', error)
     vscode.window.showErrorMessage(`dshui: failed to install dshui plugins: ${String(error)}`)
@@ -384,6 +386,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }
     if (serverStart !== null) return serverStart
     const configPort = vscode.workspace.getConfiguration('dshui').get<number>('server.port') ?? 0
+    // dsh ≥ 0.1.6 probes Node/V8 internals through a native addon that cannot
+    // load in VS Code's Electron runtime, so the CLI runs on an external
+    // Node.js binary when one is available; empty = auto-detect and fall back
+    // to Electron (see resolveDshRuntime).
+    const nodePath = vscode.workspace.getConfiguration('dshui').get<string>('server.nodePath') ?? ''
     const shared = configPort > 0
     const port = configPort > 0 ? configPort : 0
     /** In-flight shared-user removal (see the retire block); awaited before re-registering. */
@@ -492,6 +499,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         patchPath,
         cliPath,
         port,
+        nodePath,
         sharedBackend: shared,
         onReady: notifyReady,
         onExit: (code, signal) => {

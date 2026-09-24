@@ -35,28 +35,25 @@ import z from "@deepseek-ai/schemastery";
 * markers, per-call mode stamping, and the `sandbox_permissions` escalation
 * channel behave exactly as stock.
 *
-* ── Configuration ─────────────────────────────────────────────────────────
-* Two layers, both validated by the same schema (`extraWritableRoots`):
-*   1. The composition row config (`patch.yml` → `dsh-whitelist-sandbox`
-*      row), read at boot. Unsafe values FAIL the plugin load (loud).
-*   2. A live settings section (`$DSH_HOME/settings.yaml`, hot-reloaded):
-*      ```yaml
-*      sandbox-whitelist:
-*        extraWritableRoots: [/extra/path/one, /extra/path/two]
-*      ```
-*      The settings layer merges over the composition base. A change that
-*      fails the security guard is REJECTED with a loud log and the previous
-*      whitelist is kept (fail closed); it never bricks the document.
+* ── Configuration (dsh 0.1.7) ─────────────────────────────────────────────
+* One source: this plugin's own profile entry config (`extraWritableRoots`),
+* declared as a schemastery `volatile()` field. The settings page edits that
+* entry live through the client `configForms` service; the loader swaps the
+* volatile reference in place, so nothing remounts and both enforcement sides
+* read the new roots on their next call. An unsafe write is refused BEFORE it
+* persists by the `internal/config` waterfall registered in `apply`, so the
+* policy document never holds a widened root.
 *
 * ── Security guard (jailbreak containment) ────────────────────────────────
 * The model must never be able to modify its own sandbox policy. `$DSH_HOME`
-* holds exactly that state — `settings.yaml` (hot-reloaded), credentials,
-* session logs. A whitelist root that lexically contains `settings.yaml` or
-* `$DSH_HOME` would let a prompt-injected/jailbroken model rewrite the policy
-* document (self-extend the whitelist, no approval, no restart), so such
-* roots are rejected on BOTH configuration paths. This keeps the stock
-* invariant — policy state lives outside the model's writable set — intact
-* even when the operator widens the sandbox.
+* holds exactly that state — the profile patch document the settings page
+* writes, credentials, session logs. A whitelist root that lexically contains
+* `$DSH_HOME` (or the live settings document) would let a prompt-injected/
+* jailbroken model rewrite the policy document and self-extend the whitelist,
+* so such roots are refused on write (`internal/config`) and again on every
+* read. The read-time refusal keeps the last good whitelist and never fails
+* the plugin load: an unsafe value already present in the document must not
+* strip `shell`/`fs` from the whole tree by failing this row.
 *
 * ── Boundaries (honest limits) ────────────────────────────────────────────
 *  - The persistent terminal backend (`dsh-terminal-bash`) confines through
@@ -64,7 +61,7 @@ import z from "@deepseek-ai/schemastery";
 *    profile.
 *  - Windows is unsupported for extra roots: the ACL restricted-token runner
 *    grants per-workspace write SIDs only, so any non-empty whitelist is
-*    rejected (boot config fails load; settings changes keep last-good).
+*    refused on write and at read time (keep-last-good; never fails load).
 *  - A configured root that does not exist grants nothing (the fence's
 *    containment is lexical/identity based and the profile grants are
 *    no-ops); bwrap mounts are skipped for missing roots because a missing
@@ -178,12 +175,12 @@ function canonicalizeExtraRoots(roots, logger) {
 }
 /**
 * The security guard: a whitelist root must never make the DSH policy state
-* writable. `$DSH_HOME` holds the hot-reloaded `settings.yaml`, credentials,
-* and session logs — if a root lexically contains them, a jailbroken model
-* could rewrite the policy document and widen its own sandbox. Throws on the
-* first offending root (callers decide: fail load or keep-last-good).
+* writable. `$DSH_HOME` holds the profile patch document the settings page
+* writes, credentials, and session logs — if a root lexically contains them, a
+* jailbroken model could rewrite the policy document and widen its own
+* sandbox. Throws on the first offending root.
 * @param roots - canonical whitelist roots.
-* @param store - canonical settings-document path and harness home.
+* @param store - the live settings-document path and harness home.
 */
 function assertSafeWhitelistRoots(roots, store) {
 	for (const root of roots) {
@@ -191,36 +188,53 @@ function assertSafeWhitelistRoots(roots, store) {
 		if (isLexicallyUnder(store.settingsPath, root, process.platform !== "win32")) throw new Error(`whitelist root ${JSON.stringify(root)} would make the DSH settings/policy document writable (${store.settingsPath}); a jailbroken model could rewrite it to widen its own sandbox — refusing`);
 	}
 }
+/** Reject a non-empty whitelist on Windows: the ACL restricted-token runner
+* grants per-workspace write SIDs only, so extra roots cannot be enforced. */
+function assertSupportedWhitelistPlatform(roots) {
+	if (roots.length > 0 && process.platform === "win32") throw new Error("extraWritableRoots is not supported on Windows yet (the ACL restricted-token runner grants per-workspace write SIDs only); remove extraWritableRoots or run on macOS/Linux");
+}
 /**
-* Live whitelist source: holds the currently-applied canonical roots and
-* revalidates every write through the canonicalization + security guard. Both
+* Live whitelist source over a schemastery `volatile()` reference: both
 * enforcement sides read `roots` per call, so a settings hot-reload applies
-* immediately without restarting anything.
+* immediately without restarting anything. Every read re-runs canonicalization
+* and the security guard; a rejected value is logged loudly and the previous
+* good whitelist is kept, so a bad stored value can neither widen the sandbox
+* nor fail the plugin load.
 */
 var WhitelistRoots = class {
-	logger;
+	read;
 	store;
+	logger;
+	lastRaw;
 	value = [];
-	constructor(logger, store) {
-		this.logger = logger;
+	constructor(read, store, logger) {
+		this.read = read;
 		this.store = store;
+		this.logger = logger;
+		this.refresh();
 	}
 	/** The currently applied canonical extra roots. */
 	get roots() {
+		if (this.read() !== this.lastRaw) this.refresh();
 		return this.value;
 	}
 	/**
-	* Apply a new raw root list: canonicalize, run the security guard, then
-	* commit. Throws on an unsafe or (on Windows) non-empty list, leaving the
-	* previous value intact — the caller decides whether that fails load or
-	* keeps last-good.
+	* Recompute the effective roots from the current volatile value. The
+	* volatile reference is a frozen snapshot the loader swaps wholesale, so an
+	* identity change is exactly "the operator changed the configuration".
+	* A guard failure keeps the previous value (fail closed, never brick).
 	*/
-	apply(rawRoots) {
-		const canonical = canonicalizeExtraRoots(rawRoots, this.logger);
-		assertSafeWhitelistRoots(canonical, this.store);
-		if (canonical.length > 0 && process.platform === "win32") throw new Error("extraWritableRoots is not supported on Windows yet (the ACL restricted-token runner grants per-workspace write SIDs only); remove extraWritableRoots or run on macOS/Linux");
-		this.value = canonical;
-		return canonical;
+	refresh() {
+		const raw = this.read() ?? [];
+		this.lastRaw = raw;
+		try {
+			const canonical = canonicalizeExtraRoots(raw, this.logger);
+			assertSafeWhitelistRoots(canonical, this.store);
+			assertSupportedWhitelistPlatform(canonical);
+			this.value = canonical;
+		} catch (error) {
+			this.logger?.error(`dsh-whitelist-sandbox: refusing ${JSON.stringify(raw)} (${error.message}); keeping the previous whitelist`);
+		}
 	}
 };
 /**
@@ -233,8 +247,8 @@ var WhitelistBashExecutor = class extends SandboxBashExecutor {
 		super(ctx, config);
 		this.rootsSource = rootsSource;
 	}
-	confine(command, policy) {
-		const confined = SandboxBashExecutor.prototype.confine.call(this, command, policy);
+	async confine(command, policy, signal) {
+		const confined = await SandboxBashExecutor.prototype.confine.call(this, command, policy, signal);
 		const extraRoots = this.rootsSource.roots;
 		if (extraRoots.length === 0) return confined;
 		const argv = injectExtraRootGrants(confined.argv, extraRoots);
@@ -279,45 +293,45 @@ const inject = [
 	"sandbox",
 	"sandboxPolicy"
 ];
-/** Shared schema for the composition row config and the live settings section. */
-const WhitelistConfigSchema = z.object({ extraWritableRoots: z.array(z.string()).default([]) });
-const Config = WhitelistConfigSchema;
-/** `$DSH_HOME/settings.yaml` top-level section key for this plugin. */
-const SETTINGS_NAMESPACE = "sandbox-whitelist";
+/** This plugin's profile entry id — also the settings namespace the client
+* `configForms.get(...)` reads. It must match the row id of whatever patch
+* layer mounts this plugin (the extension registers the package as a profile
+* bundle, whose `cordis.patch.yml` inserts exactly this id). */
+const SETTINGS_ENTRY = "dsh-whitelist-sandbox";
+/** Runtime schema for {@link WhitelistConfig}. */
+const Config = z.object({ extraWritableRoots: z.array(z.string()).default([]).volatile() });
 /**
-* Live settings layer: the `sandbox-whitelist:` section of settings.yaml
-* merges over the composition base. Guard failures keep the previous roots
-* with a loud error — never brick the document, never widen unsafely.
+* Validate a candidate config BEFORE it persists. Registered on the loader's
+* `internal/config` waterfall, which `configEditor.edit` runs before writing
+* the profile patch, so an unsafe root refuses the save and leaves the
+* document untouched. Boot-time composition bypasses this hook (it is
+* registered by `apply`, after the row's own config resolved); the read-time
+* guard in {@link WhitelistRoots} covers that path instead.
 */
-function installWhitelistSettings(ctx, rootsSource, baseEntry) {
-	let source = () => baseEntry;
-	ctx.inject(["settings"], (settingsCtx) => {
-		settingsCtx.settings.installSection(ctx, SETTINGS_NAMESPACE, WhitelistConfigSchema, baseEntry, {
-			setSource: (current) => {
-				source = current;
-			},
-			onChange: () => {
-				const section = source();
-				try {
-					rootsSource.apply(section.extraWritableRoots);
-				} catch (error) {
-					ctx.logger.error(`dsh-whitelist-sandbox: rejected settings update (${error.message}); keeping the previous whitelist`);
-				}
-			}
-		});
+function installWhitelistWriteGuard(ctx, store) {
+	ctx.on("internal/config", function(_config, next) {
+		const raw = next();
+		if (this !== ctx.fiber) return raw;
+		const canonical = canonicalizeExtraRoots(Config(raw).extraWritableRoots.get(), ctx.logger);
+		assertSafeWhitelistRoots(canonical, store);
+		assertSupportedWhitelistPlatform(canonical);
+		return raw;
 	});
 }
 function apply(ctx, config) {
 	const dshHome = canonicalPath(resolveDshHome());
-	const settingsPath = canonicalPath(join(dshHome, "settings.yaml"));
-	const rootsSource = new WhitelistRoots(ctx.logger, {
-		settingsPath,
+	const store = {
+		settingsPath: canonicalPath(join(dshHome, "settings.yaml")),
 		dshHome
-	});
-	rootsSource.apply(config.extraWritableRoots);
+	};
+	const rootsSource = new WhitelistRoots(() => config.extraWritableRoots.get(), store, ctx.logger);
 	new WhitelistBashExecutor(ctx, LocalBashExecutor.Config({ timeoutMs: 6e4 }), rootsSource);
 	new WhitelistFileSystem(ctx, LocalFileSystem.Config({}), rootsSource);
-	installWhitelistSettings(ctx, rootsSource, config);
+	installWhitelistWriteGuard(ctx, store);
+	ctx.inject(["settings"], (scope) => {
+		scope.effect(() => scope.settings.configure({ auto: false }, ctx.fiber));
+		store.settingsPath = canonicalPath(scope.settings.documentPath);
+	});
 	ctx.inject(["systemPrompt"], (scope) => {
 		scope.systemPrompt.context({
 			name: "whitelist:extra-roots",
@@ -332,6 +346,6 @@ function apply(ctx, config) {
 	ctx.logger.info(`dsh-whitelist-sandbox: ${applied.length} extra writable root(s)${applied.length > 0 ? ` (${applied.join(", ")})` : ""}`);
 }
 //#endregion
-export { Config, WhitelistBashExecutor, WhitelistFileSystem, WhitelistRoots, apply, assertSafeWhitelistRoots, canonicalizeExtraRoots, inject, injectExtraRootGrants, name };
+export { Config, SETTINGS_ENTRY, WhitelistBashExecutor, WhitelistFileSystem, WhitelistRoots, apply, assertSafeWhitelistRoots, assertSupportedWhitelistPlatform, canonicalizeExtraRoots, inject, injectExtraRootGrants, name };
 
 //# sourceMappingURL=index.js.map

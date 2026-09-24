@@ -70,6 +70,10 @@ export declare class CallTracker {
     /**
      * Record one observed write/edit. Synchronous by contract (`fs/observed` is a
      * synchronous event); the blob write runs on the session's serial queue.
+     *
+     * Paths inside a nested git repository are tracked like any other: the call is
+     * captured from the file's bytes, so the embedded worktree never has to be
+     * indexed (the list path stages those paths from their blob).
      */
     observe(target: FsTarget, observation: FsObservation, actor: RollbackToolActor | undefined): void;
     /** Wait for every queued hash of one session (used before asserting on blobs). */
@@ -117,12 +121,5 @@ export declare class CallTracker {
     private track;
     /** Session base commit: a full worktree capture, committed once per session. */
     private createBase;
-    /**
-     * A path inside an embedded git repository is invisible to `git add -f`
-     * (git exits 0 but records nothing), so callers-level patches would silently
-     * vanish. Reject those paths; nested repositories stay covered by the
-     * materialized turn snapshots (docs/git-only-plan.md §4.3).
-     */
-    private isInsideNestedRepo;
     private trim;
 }

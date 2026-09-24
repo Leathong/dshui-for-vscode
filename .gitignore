@@ -5,6 +5,7 @@ node_modules/
 out/
 # 源码构建的 @deepseek-ai 运行时产物（.dsh-src 构建），直接写入 node_modules，不进 git。
 .dsh-src/
+tmp/
 .tools/
 *.vsix
 *.bak

@@ -1,4 +1,4 @@
-import type { Context } from '@deepseek-ai/cordis';
+import type { Context, Volatile } from '@deepseek-ai/cordis';
 import type { ConfinedArgv, SandboxExecutionPolicy, SandboxPolicy } from '@deepseek-ai/dsh-sandbox';
 import type { FsTarget } from '@deepseek-ai/dsh-fs';
 import { SandboxedFileSystem } from '@deepseek-ai/dsh-fs-sandbox';
@@ -28,42 +28,54 @@ export declare function canonicalizeExtraRoots(roots: readonly string[] | undefi
 } | undefined): string[];
 /**
  * The security guard: a whitelist root must never make the DSH policy state
- * writable. `$DSH_HOME` holds the hot-reloaded `settings.yaml`, credentials,
- * and session logs — if a root lexically contains them, a jailbroken model
- * could rewrite the policy document and widen its own sandbox. Throws on the
- * first offending root (callers decide: fail load or keep-last-good).
+ * writable. `$DSH_HOME` holds the profile patch document the settings page
+ * writes, credentials, and session logs — if a root lexically contains them, a
+ * jailbroken model could rewrite the policy document and widen its own
+ * sandbox. Throws on the first offending root.
  * @param roots - canonical whitelist roots.
- * @param store - canonical settings-document path and harness home.
+ * @param store - the live settings-document path and harness home.
  */
-export declare function assertSafeWhitelistRoots(roots: readonly string[], store: {
+export declare function assertSafeWhitelistRoots(roots: readonly string[], store: WhitelistGuardStore): void;
+/** Reject a non-empty whitelist on Windows: the ACL restricted-token runner
+ * grants per-workspace write SIDs only, so extra roots cannot be enforced. */
+export declare function assertSupportedWhitelistPlatform(roots: readonly string[]): void;
+/** Logger surface the whitelist source uses; a cordis logger satisfies it. */
+export interface WhitelistLogger {
+    warn(message: string): void;
+    error(message: string): void;
+}
+/** Policy-state locations the security guard must keep unwritable. */
+export interface WhitelistGuardStore {
+    /** Live settings/policy document (the active profile patch) when known,
+     * otherwise the legacy `$DSH_HOME/settings.yaml`. */
     settingsPath: string;
+    /** Canonical harness home. */
     dshHome: string;
-}): void;
+}
 /**
- * Live whitelist source: holds the currently-applied canonical roots and
- * revalidates every write through the canonicalization + security guard. Both
+ * Live whitelist source over a schemastery `volatile()` reference: both
  * enforcement sides read `roots` per call, so a settings hot-reload applies
- * immediately without restarting anything.
+ * immediately without restarting anything. Every read re-runs canonicalization
+ * and the security guard; a rejected value is logged loudly and the previous
+ * good whitelist is kept, so a bad stored value can neither widen the sandbox
+ * nor fail the plugin load.
  */
 export declare class WhitelistRoots {
-    private readonly logger;
+    private readonly read;
     private readonly store;
+    private readonly logger;
+    private lastRaw;
     private value;
-    constructor(logger: {
-        warn(message: string): void;
-    } | undefined, store: {
-        settingsPath: string;
-        dshHome: string;
-    });
+    constructor(read: () => readonly string[] | undefined, store: WhitelistGuardStore, logger: WhitelistLogger | undefined);
     /** The currently applied canonical extra roots. */
     get roots(): string[];
     /**
-     * Apply a new raw root list: canonicalize, run the security guard, then
-     * commit. Throws on an unsafe or (on Windows) non-empty list, leaving the
-     * previous value intact — the caller decides whether that fails load or
-     * keeps last-good.
+     * Recompute the effective roots from the current volatile value. The
+     * volatile reference is a frozen snapshot the loader swaps wholesale, so an
+     * identity change is exactly "the operator changed the configuration".
+     * A guard failure keeps the previous value (fail closed, never brick).
      */
-    apply(rawRoots: readonly string[]): string[];
+    private refresh;
 }
 /**
  * bash side: keeps the stock wrap, injects the extra grants into the selected
@@ -72,7 +84,7 @@ export declare class WhitelistRoots {
 export declare class WhitelistBashExecutor extends SandboxBashExecutor {
     private readonly rootsSource;
     constructor(ctx: Context, config: SandboxBashConfig, rootsSource: WhitelistRoots);
-    confine(command: string, policy: SandboxPolicy): ConfinedArgv;
+    confine(command: string, policy: SandboxPolicy, signal?: AbortSignal): Promise<ConfinedArgv>;
 }
 /**
  * fs side: when the stock fence denies under workspace-write, fall back to the
@@ -88,13 +100,20 @@ export declare class WhitelistFileSystem extends SandboxedFileSystem {
 export declare const name = "dsh-whitelist-sandbox";
 /** Runs after the sandbox stack this plugin builds on is mounted. */
 export declare const inject: string[];
-/** Plugin config (also the live settings section's schema). */
+/** This plugin's profile entry id — also the settings namespace the client
+ * `configForms.get(...)` reads. It must match the row id of whatever patch
+ * layer mounts this plugin (the extension registers the package as a profile
+ * bundle, whose `cordis.patch.yml` inserts exactly this id). */
+export declare const SETTINGS_ENTRY = "dsh-whitelist-sandbox";
+/** Plugin config: extra writable roots, a volatile field so the settings page
+ * can edit it live without remounting the plugin. */
 export interface WhitelistConfig {
-    extraWritableRoots: string[];
+    extraWritableRoots: Volatile<string[]>;
 }
-export declare const Config: z<Schemastery.ObjectS<{
-    extraWritableRoots: z<string[], string[]>;
-}>, Schemastery.ObjectT<{
-    extraWritableRoots: z<string[], string[]>;
-}>>;
+/** Runtime schema for {@link WhitelistConfig}. */
+export declare const Config: z<Schemastery.ObjectS<NoInfer<{
+    extraWritableRoots: z<NoInfer<string[]>, NoInfer<string[]>, "volatile-defined">;
+}>>, Schemastery.ObjectT<NoInfer<{
+    extraWritableRoots: z<NoInfer<string[]>, NoInfer<string[]>, "volatile-defined">;
+}>>, "plain">;
 export declare function apply(ctx: Context, config: WhitelistConfig): void;

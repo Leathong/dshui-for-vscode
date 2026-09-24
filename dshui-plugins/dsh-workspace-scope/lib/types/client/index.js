@@ -115,24 +115,23 @@ const CSS = [
     ".wsc-hint{font-size:12px;color:var(--dsw-alias-label-secondary);line-height:1.6;margin:0}",
     "@media (max-width: 680px){.wsc-cards{grid-template-columns:minmax(0,1fr)}}",
 ].join("\n");
-// ── shared modal open state between the bar and the overlay modal ───────────
-let modalOpen = false;
+let modalState = { open: false };
 const modalListeners = new Set();
-function setModal(open) {
-    modalOpen = open;
+function setModal(next) {
+    modalState = next;
     for (const fn of modalListeners)
         fn();
 }
 function useModalOpen() {
-    const [open, setOpenState] = React.useState(modalOpen);
+    const [state, setOpenState] = React.useState(modalState);
     React.useEffect(() => {
-        const fn = () => setOpenState(modalOpen);
+        const fn = () => setOpenState(modalState);
         modalListeners.add(fn);
         return () => {
             modalListeners.delete(fn);
         };
     }, []);
-    return [open, setModal];
+    return [state, setModal];
 }
 // ── icons (exact glyphs from @deepseek-ai/dsh-client-ui-primitives) ─────────
 function PresetIcon(props) {
@@ -169,29 +168,31 @@ function WscSwitch(props) {
 }
 // ── entry (new-session screen only) ─────────────────────────────────────────
 function ScopeBar(props) {
-    const [open, setModalFn] = useModalOpen();
+    const [modal, setModalFn] = useModalOpen();
     // The scope shapes the startup context of a new conversation, so the entry
     // lives on the new-session screen only; ongoing conversations never show it
-    // (their config is already locked in).
-    const blank = props.useSessions !== undefined
+    // (their config is already locked in). The composer slot only renders once a
+    // Session exists, so "new-session screen" means the selected Session row is
+    // still blank.
+    const sessionId = props.sessionId;
+    const blank = props.useSessions !== undefined && sessionId !== undefined
         ? props.useSessions((s) => {
-            if (!s.current)
-                return undefined;
-            const row = s.byId[s.current];
+            const row = s.byId[sessionId];
             return row ? !!row.blank : undefined;
         })
         : false;
     if (blank !== true)
         return null;
     // Compact chip inside the hero composer tool row.
-    return (React.createElement("button", { type: "button", className: "wsc-chip", onClick: () => setModalFn(!open), "aria-expanded": open, title: "\u6309\u5DE5\u4F5C\u533A\u914D\u7F6E\u65B0\u5BF9\u8BDD\u542F\u7528\u7684 Skill \u4E0E Host \u5168\u5C40 MCP" },
+    return (React.createElement("button", { type: "button", className: "wsc-chip", onClick: () => setModalFn({ open: !modal.open, sessionId }), "aria-expanded": modal.open, title: "\u6309\u5DE5\u4F5C\u533A\u914D\u7F6E\u65B0\u5BF9\u8BDD\u542F\u7528\u7684 Skill \u4E0E Host \u5168\u5C40 MCP" },
         React.createElement(PresetIcon, { className: "wsc-seat-icon" }),
         React.createElement("span", null, "\u5DE5\u4F5C\u533A\u80FD\u529B"),
         React.createElement(ChevronIcon, { className: "wsc-chevron" })));
 }
 // ── modal ───────────────────────────────────────────────────────────────────
 function ScopeModal(props) {
-    const [open, setModalFn] = useModalOpen();
+    const [modal, setModalFn] = useModalOpen();
+    const open = modal.open;
     const [data, setData] = React.useState(null);
     const [draft, setDraft] = React.useState(null);
     const [query, setQuery] = React.useState("");
@@ -200,9 +201,12 @@ function ScopeModal(props) {
     const [expanded, setExpanded] = React.useState(null);
     // Per-group collapse for the skill / global MCP sections (heading arrow).
     const [collapsed, setCollapsed] = React.useState({ skills: false, mcps: false });
-    const sessionId = props.useSessions !== undefined
-        ? props.useSessions((s) => s.current)
-        : undefined;
+    // Session id comes from the slot's session standard kit: the Session list
+    // state carries no `current` selection since dsh 0.1.7, and a blank Session
+    // (the only state where the entry renders) has an id of its own. The overlay
+    // modal is root-scoped and receives no Session prop, so it falls back to the
+    // id the chip recorded when it opened the modal.
+    const sessionId = props.sessionId ?? modal.sessionId;
     // Latest session id, readable inside async continuations. The modal can
     // stay open while the user switches sessions; a response that arrives for
     // a superseded session must be dropped (stale-response race), otherwise a
@@ -274,7 +278,7 @@ function ScopeModal(props) {
             return;
         const onKey = (event) => {
             if (event.key === "Escape") {
-                setModalFn(false);
+                setModalFn({ open: false });
                 return;
             }
             if (event.key !== "Tab")
@@ -465,11 +469,11 @@ function ScopeModal(props) {
         notice !== null ? (React.createElement("p", { className: notice.kind === "ok" ? "wsc-notice" : "wsc-error" }, notice.text)) : null,
         error !== null ? React.createElement("p", { className: "wsc-error" }, error) : null));
     return (React.createElement("div", { className: "wsc-overlay" },
-        React.createElement("div", { className: "wsc-mask", onClick: () => setModalFn(false) }),
+        React.createElement("div", { className: "wsc-mask", onClick: () => setModalFn({ open: false }) }),
         React.createElement("div", { className: "wsc-panel", ref: panelRef, tabIndex: -1, role: "dialog", "aria-modal": "true", "aria-label": "\u5DE5\u4F5C\u533A\u80FD\u529B" },
             React.createElement("div", { className: "wsc-panel-head" },
                 React.createElement("span", { className: "wsc-panel-title" }, "\u5DE5\u4F5C\u533A\u80FD\u529B"),
-                React.createElement("button", { type: "button", className: "wsc-close", onClick: () => setModalFn(false), title: "\u5173\u95ED" },
+                React.createElement("button", { type: "button", className: "wsc-close", onClick: () => setModalFn({ open: false }), title: "\u5173\u95ED" },
                     React.createElement("svg", { width: 14, height: 14, viewBox: "0 0 14 14", fill: "none" },
                         React.createElement("path", { fill: "currentColor", d: "M7 5.84863L4.57617 3.4248L3.4248 4.57617L5.84863 7L3.4248 9.42383L4.57617 10.5752L7 8.15137L9.42383 10.5752L10.5752 9.42383L8.15137 7L10.5752 4.57617L9.42383 3.4248L7 5.84863Z" })))),
             React.createElement("div", { className: "wsc-panel-body" }, body))));

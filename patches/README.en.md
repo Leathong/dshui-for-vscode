@@ -3,26 +3,32 @@
 > English · [中文](README.md)
 
 `dshui-bundles.patch` contains the dshui modifications to the source of
-[deepseek-harness](https://github.com/deepseek-ai/deepseek-harness) (48 files across the client
+[deepseek-harness](https://github.com/deepseek-ai/deepseek-harness) (51 files across the client
 bundles and the host runtime). The client and the host must be **aligned** to the same base commit
 and applied together, so they are merged into a single patch — applying only half is incomplete.
 
 ## Client bundles (browser SPA)
 
-- `ui-workspace`: `tree.ts` (`scopedWorkspacePath`, the scope params on the derives, and the
-  locally-deleted-session hide set), `WorkspaceBrowser.tsx` (the `SCOPE` constant,
-  workspaces/ungrouped filtering, hidden add/view options, session-delete row hiding),
-  `contract/slots.ts` (`archiveSession` → `deleteSession`), `index.ts` (session deletion requests the
-  extension host — through the webview shell — to delete the log files),
-  `rows/Rows.tsx` ("Delete Session" menu / trash icon / danger style, `onArchive` → `onDelete`),
-  `locales.ts` (`menu.archiveSession` → `menu.deleteSession`), and `tsdown.config.ts` (bundle id →
-  `dshui-client-ui-workspace`);
+- `ui-workspace`: `tree.ts` (`scopedWorkspacePath`, the `scope` / `deletedSessionIds` params on the
+  derives, cwd-based scope filtering, and the locally-deleted-session hide set),
+  `WorkspaceBrowser.tsx` (`scopedWorkspacePath` / `useDeletedSessions` wiring, deleted-row hiding),
+  `contract/slots.ts` (`DeleteSessionInjected` and the `deletedSessions` observable), `index.ts`
+  (the dshui deleted-sessions snapshot store plus `deleteSession`: requests the extension host —
+  through the webview shell — to delete the session log and records the id in the local hide set),
+  `session-actions/DeleteSession.tsx` (since 0.1.7 upstream moved the session row actions into slot
+  entries: this file registers "Delete Session" into `sidebar.workspaces.session.menu.item`
+  (order 450) and `sidebar.workspaces.session.row.action` (order 300), beside the stock
+  archive/pin entries), `locales.ts` (adds `menu.deleteSession` / `actions.delete`), and
+  `tsdown.config.ts` (bundle id → `dshui-client-ui-workspace`);
 - `ui-conversation`: `apply.ts` (when a second shared-backend window re-binds a session the
   `conversation` service may read `undefined` — the old implementation threw and abdicated the
   composer slot once with no retry, permanently vanishing the composer until a window reload; it
   now degrades to the absent posture, and the next binding re-resolution restores the live
-  composer), `ConversationRoot.tsx` (the `SCOPE` constant, the static chip, hero hiding,
-  `data-dshui-scope`), `EmptyHero.tsx` (the `staticChip` prop of `WorkspaceChip`),
+  composer), `skeleton/dshui-scope.ts` (since 0.1.7 upstream split the conversation skeleton into
+  ConversationRoot/MainPanel/Content, so the `SCOPE` constant became its own module: `DSHUI_SCOPE`),
+  `skeleton/ConversationMainPanel.tsx` (the `data-dshui-scope` root marker),
+  `skeleton/ConversationContent.tsx` (static chip, hero hiding, a scope-kept composer),
+  `skeleton/EmptyHero.tsx` (the `staticChip` prop of `WorkspaceChip`),
   `ConversationRoot.module.css` (scoped hero pinned to the bottom, composer kept during `settling`),
   `HeroShell.module.css` (`.workspaceStatic`), and `tsdown.config.ts` (bundle id →
   `dshui-client-ui-conversation`);
@@ -32,42 +38,49 @@ and applied together, so they are merged into a single patch — applying only h
   message does not; and it **preserves the markdown-link projection** on top of the upstream
   `projectUserText` reference-chip projection: `[label](destination)` with an allowlisted
   http/https/mailto URL renders as an external anchor, a destination `new URL` cannot parse renders as
-  a file-open button through `openFile` resolved against the session cwd, and any other absolute URL
-  stays literal), `chat/MessageItem.module.css` (the `.projectedText` inline flow and `.link` styles),
-  `chat/ChatView.tsx` (passes `openFile` to the pending steering / submission bubbles),
-  `chat/register-node-renderers.ts` (registers `UserMessageNodeView` — with the user-actions child
-  slot — for `user`, and `SteeringMessageNodeView` for `steering`), `contract/slots.ts`
-  (`UserActionOwnerProps` and the `conversation.chat.user-actions` slot declaration), and the specs
-  `tests/chat-branch-tails.client.spec.tsx` and `tests/chat-view.client.spec.tsx` (the user-actions
-  slot opens anchored to the Turn; steering has no such slot; markdown links open externally or via
-  `openFile` for relative paths, and non-allowlisted URLs stay literal);
-- `packages/extensions/cordis-client-runner/src/client/slot-catalog.ts`: catalogs the
-  `conversation.chat.user-actions` slot entry (shown in the chat "slot catalog" docs).
+  a file-open button through `references.openFile` resolved against the session cwd, and any other
+  absolute URL stays literal), `chat/MessageItem.module.css` (the `.projectedText` inline flow and
+  `.link` styles), `chat/register-node-renderers.ts` (registers `UserMessageNodeView` — with the
+  user-actions child slot — for `user`, and `SteeringMessageNodeView` for `steering`),
+  `contract/slots.ts` (`UserActionOwnerProps` and the `conversation.chat.user-actions` slot
+  declaration), plus the small spec adjustments the split needs;
+- `packages/extensions/cordis-client-runner/src/client/slot-catalog.ts`: regenerated by
+  `pnpm run gen-client-catalog`, cataloging the `conversation.chat.user-actions` slot entry (shown
+  in the chat "slot catalog" docs).
 - build preset: `packages/client/tsdown.client.ts` (`workspaceManifest` resolves `dshui-client-*`
   bundle ids by package directory — since rc.1 tsdown validates the bundle id against package names,
   while the dshui ids are the profile row names).
 
 Effect: the sidebar lists only the current workspace's sessions, the input box stays pinned to the
-bottom (no centered hero), the session menu reads "Delete Session" (the extension host deletes the
+bottom (no centered hero), the session menu offers "Delete Session" (the extension host deletes the
 session log files under `$DSH_HOME/sessions/...` via the VS Code file API, bypassing dsh's archive
-RPC), every user message carries an extensible action strip (`conversation.chat.user-actions`,
+RPC; the archive/pin row actions upstream added in 0.1.7 remain available beside it), every user
+message carries an extensible action strip (`conversation.chat.user-actions`,
 which the extension uses to mount "Rollback"), and markdown links in user messages are clickable
 (external URLs open in the system browser, relative paths open the file in the current window). Chat
 file links open in the host VS Code (darwin: local open bridge → `code` CLI → `vscode://file`, no
 system dialog — see the host side below). At runtime the **prebuilt artifacts** at
 `../dshui-plugins/*/client.js` are used; this patch exists to reproduce those artifacts from source.
-The patch also includes the tests for the changes above (four specs under `tests/`).
+
+> Since 0.1.7 upstream rewrote the session tree, the row actions, and the conversation skeleton, the
+> dshui test-side changes shrank accordingly: the client patch now lands mostly in the source files
+> above, and the specs keep only the small adjustments needed to compile and preserve the existing
+> assertions (a `useDeletedSessions` stub, the `SteeringMessageNodeView` branch, and so on).
 
 ## Host runtime (server side)
 
 The string patches the extension once applied to the npm package at runtime (see the deleted
 `src/openPatch.ts`) are now baked into the source and compiled in:
 
-- `packages/util/native-command/src/path-opener.ts`: the `darwin` branch of `openNativePathWithIntent`
-  now tries "local open bridge → `code` CLI → `vscode://file`", with new bridge/CLI/URL helpers
+- `packages/util/native-command/src/path-opener.ts`: when the extension host markers are present
+  (`DSHUI_OPEN_ENDPOINT` / `DSHUI_BRIDGES_FILE` / `DSHUI_CODE_CLI` — the extension always injects
+  them when it launches the server), the `darwin` branch of `openNativePathWithIntent` tries "local
+  open bridge → `code` CLI → `vscode://file`", with new bridge/CLI/URL helpers
   (`dshuiOpenViaBridge` / `dshuiOpenViaCli` / `dshuiVscodeFileUrl` / origin-aware bridge selection),
-  so chat file links open in the host VS Code (through the in-extension bridge, no system dialog);
-  `PathOpenerInternals` gains `dshuiOrigin` so the click origin takes part in routing.
+  so chat file links open in the host VS Code (through the in-extension bridge, no system dialog); a
+  plain `dsh` deployment without those markers keeps the stock behavior (`open [path]`, or
+  `open -t [path]` for the text-editor intent). `PathOpenerInternals` gains `dshuiOrigin` so the
+  click origin takes part in routing.
 - `packages/client/connection/src/browser-auth.ts`: the 303 redirect of the token exchange keeps the
   `dshui_workspace` / `dshui_theme` query params (besides `launch`), so a shared-backend window keeps
   its workspace scope after the token exchange.
@@ -80,6 +93,19 @@ The string patches the extension once applied to the npm package at runtime (see
   events; the source keeps its queue, and a child with nothing pending appends no event. The patch
   also updates `tests/session-fork.host.spec.ts` (a new "child inbox is empty" case) and
   `tests/commands-create-fork.host.spec.ts` (the fake Agent gains an `inbox`).
+- `packages/api/session-controller/src/index.ts` and `.../src/types.ts`: the `openWorkspacePath`
+  request carries `dshuiOrigin`, which is threaded into the opener internals (since 0.1.7 the opener
+  also has the `openNativeAssociatedPath` / file-application branches; the dshui call sites are
+  aligned with them).
+- `packages/api/settings-controller/src/index.ts`: `openSettingsDocument(dshuiOrigin, signal)`
+  threads the click origin the same way (since 0.1.7 SettingsController keeps only `openTextFile`).
+- `packages/client/ui-chat/src/client/apply.ts` and
+  `packages/client/ui-settings-general/src/client/settings-document-store.ts`: the client attaches the
+  window scope (`__DSHUI_WORKSPACE__` or the `dshui_workspace` query param) to those two remote calls.
+- `packages/mcp/mcp-client/src/index.ts`: adds the `startup: 'eager' | 'lazy'` option (default
+  `eager`). In `lazy` mode activation returns immediately and the supervisor connects and registers
+  tools in the background, so a slow remote (for example one behind OAuth) never delays dsh startup;
+  the READMEs and a few specs are updated alongside.
 
 These packages are filled into `node_modules/@deepseek-ai/*` from the **source-built artifacts**
 by the extension's `scripts/sync-dsh.mjs`, instead of being downloaded from npm. The root
@@ -93,22 +119,29 @@ in `node_modules/@deepseek-ai/*`; this patch reproduces them from source.
 The patch targets this base commit (**pinned; it must not drift**):
 
 ```
-183f08e9c6dde7e36cd2318eaee70b0da08fb35e
+46a7f68b0922371ce7144b668b90e377d8e799f4
 ```
 
 ```sh
 git clone https://github.com/deepseek-ai/deepseek-harness.git .dsh-src
 cd .dsh-src
-git fetch origin 183f08e9c6dde7e36cd2318eaee70b0da08fb35e && git checkout FETCH_HEAD
+git fetch origin 46a7f68b0922371ce7144b668b90e377d8e799f4 && git checkout FETCH_HEAD
 git apply ../patches/dshui-bundles.patch            # fails safely if the base commit mismatches
 pnpm install                                        # requires pnpm 11.7.0, Node ^22.19 || >=24
+pnpm run clean                                      # REQUIRED on a rebase: drop the previous
+                                                    # version's lib/ and tsbuildinfo
 pnpm run build:lib:host
 pnpm run build:lib:client
+pnpm run gen-client-catalog                         # regenerate the slot catalog
 cd ..
-node scripts/copy-clients.mjs                       # copies the client bundles into dshui-plugins/
 node scripts/sync-dsh.mjs                           # copies the @deepseek-ai/* source artifacts into node_modules
+node scripts/copy-clients.mjs                       # copies the two UI bundles into dshui-plugins/ (asserts the bundle id)
 npm run compile
 ```
+
+> `pnpm run clean` is mandatory when rebasing onto a new base: the previous version's stale typert
+> remote declarations left in each package's `lib/types` and `*.tsbuildinfo` otherwise make `tsc -b`
+> reuse them, producing dozens of bogus "remote method does not exist" errors.
 
 ## When Upstream Drifts
 

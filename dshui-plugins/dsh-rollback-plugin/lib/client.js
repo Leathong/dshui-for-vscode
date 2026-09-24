@@ -155,9 +155,9 @@ window.__ModuleLoader__.load({
 			return {
 				mode: "strict",
 				typeSymbol,
-				schema: { parse(value) {
+				create: () => ({ parse(value) {
 					return value;
-				} }
+				} })
 			};
 		}
 		//#endregion
@@ -618,7 +618,7 @@ window.__ModuleLoader__.load({
 							children: [
 								(0, react_jsx_runtime.jsx)("span", {
 									className: "dsh-mod-lead",
-									children: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconChecklistOutline14, {})
+									children: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconChecklistOutlineRegular, {})
 								}),
 								(0, react_jsx_runtime.jsxs)("span", {
 									className: "dsh-mod-count",
@@ -637,7 +637,7 @@ window.__ModuleLoader__.load({
 								}) : null,
 								(0, react_jsx_runtime.jsx)("span", {
 									className: "dsh-mod-chevron",
-									children: collapsed ? (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconChevronUpOutline14, {}) : (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconChevronDownOutline14, {})
+									children: collapsed ? (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconChevronUpOutlineRegular, {}) : (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconChevronDownOutlineRegular, {})
 								})
 							]
 						}), (0, react_jsx_runtime.jsxs)("span", {
@@ -656,7 +656,7 @@ window.__ModuleLoader__.load({
 									children: acceptingAll ? (0, react_jsx_runtime.jsx)("span", {
 										className: "dsh-mod-spin",
 										children: "◌"
-									}) : (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconCheckOutline14, {})
+									}) : (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconCheckOutlineRegular, {})
 								})
 							}), confirmingAll ? (0, react_jsx_runtime.jsxs)("span", {
 								className: "dsh-mod-confirm",
@@ -721,7 +721,7 @@ window.__ModuleLoader__.load({
 									data.warnings.length > 0 ? (0, react_jsx_runtime.jsx)("span", {
 										className: "dsh-mod-warn",
 										title: data.warnings.join(" · "),
-										children: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconWarningOutline16, {})
+										children: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconWarningOutlineRegular, {})
 									}) : null
 								]
 							}) : null,
@@ -813,7 +813,7 @@ window.__ModuleLoader__.load({
 											load();
 										},
 										"aria-label": t("dock.refresh"),
-										children: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconRefreshOutline14, {})
+										children: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconRefreshOutlineRegular, {})
 									})
 								})
 							})
@@ -872,7 +872,7 @@ window.__ModuleLoader__.load({
 								onClick: onToggleHunks,
 								"aria-expanded": expanded,
 								"aria-label": t("dock.hunks"),
-								children: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconChevronDownOutline14, {})
+								children: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconChevronDownOutlineRegular, {})
 							})
 						}) : null,
 						(0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Tooltip, {
@@ -883,7 +883,7 @@ window.__ModuleLoader__.load({
 								className: "dsh-mod-link",
 								onClick: onOpenFile,
 								"aria-label": t("openAt"),
-								children: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconRightUpOutline16, { size: 8 })
+								children: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconRightUpOutlineRegular, { size: 8 })
 							})
 						}),
 						(0, react_jsx_runtime.jsxs)("span", {
@@ -900,7 +900,7 @@ window.__ModuleLoader__.load({
 									children: busyAccept ? (0, react_jsx_runtime.jsx)("span", {
 										className: "dsh-mod-spin",
 										children: "◌"
-									}) : (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconCheckOutline14, {})
+									}) : (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconCheckOutlineRegular, {})
 								})
 							}), fileConfirming ? undoConfirm : (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Tooltip, {
 								label: t("dock.undo"),
@@ -1381,7 +1381,7 @@ window.__ModuleLoader__.load({
 								},
 								onClick: onOpenFile,
 								"aria-label": t("openAt"),
-								children: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconRightUpOutline16, { size: 8 })
+								children: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconRightUpOutlineRegular, { size: 8 })
 							})
 						}),
 						(0, react_jsx_runtime.jsx)("span", {

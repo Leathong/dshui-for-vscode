@@ -51,11 +51,19 @@ export class SessionChangeManager {
             return failure('rollback-failed', 'no accepted baseline could be established for this session', { sessionId });
         }
         // Stage the paths this session wrote so created (and ignored) files show up
-        // in the worktree diff at all, and so the diff stays session-scoped.
+        // in the worktree diff at all, and so the diff stays session-scoped. Nested
+        // paths go through their blob instead: `git add -f` records nothing inside
+        // an embedded repository without a HEAD (which is also excluded from every
+        // capture tree), so a file created there would stay invisible.
         const trackedPaths = [...new Set((await this.tracker.loadCalls(cwd, sessionId)).map(call => call.path))];
+        const nestedRoots = await this.nestedRoots(provider);
+        const isNestedPath = (rel) => nestedRoots.some(root => rel === root || rel.startsWith(`${root}/`));
+        const nestedPaths = trackedPaths.filter(isNestedPath);
+        const plainPaths = trackedPaths.filter(rel => !isNestedPath(rel));
         const patch = await provider.withScratch(async (scratch) => {
             await provider.readTree(scratch, accepted);
-            await provider.stagePaths(scratch, trackedPaths);
+            await provider.stagePaths(scratch, plainPaths);
+            await provider.stagePathsByContent(scratch, nestedPaths);
             return provider.diffPatch(accepted, undefined, [], {
                 context: this.options.diffContextLines,
                 indexFile: scratch,
@@ -66,11 +74,10 @@ export class SessionChangeManager {
         // list. This replaces the old cross-session activity-window attribution.
         const sessionPaths = new Set(trackedPaths);
         const views = allViews.filter(view => sessionPaths.has(view.path));
-        const nestedRoots = await this.nestedRoots(provider);
         const probe = new Map();
         const changes = views.map(view => {
             probe.set(view.path, view.newBlob);
-            const nested = nestedRoots.some(root => view.path === root || view.path.startsWith(`${root}/`));
+            const nested = isNestedPath(view.path);
             const created = view.status === 'added';
             return {
                 path: view.path,
@@ -80,7 +87,10 @@ export class SessionChangeManager {
                         : view.binary ? 'binary'
                             : 'modified',
                 source: 'git',
-                restorable: !view.binary && !nested,
+                // Nested files are ordinary blobs in the materialized snapshot tree, so
+                // they restore like any other path; the nested repository's own
+                // `.git`/index/HEAD are never touched.
+                restorable: !view.binary,
                 accepted: false,
                 ...(created ? { createdAfterSnapshot: true } : {}),
                 ...(view.binary ? { binary: true } : {}),

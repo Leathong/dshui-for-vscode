@@ -728,6 +728,46 @@ export class GitProvider {
                 throw new Error(`git add -f failed for ${chunk.join(', ')}: ${result.stderr.trim()}`);
         }
     }
+    /**
+     * Stage worktree paths from their **content** (`hash-object -w` +
+     * `update-index --index-info`) instead of `git add -f`.
+     *
+     * `git add -f` records no index entry for a path inside an embedded git
+     * repository that has no resolvable HEAD (it exits 0 and writes nothing), so a
+     * file this session *created* in such a directory would be missing from every
+     * tree-vs-worktree diff — untracked paths never appear in `git diff <tree>`.
+     * Feeding the blob hash to the index is content-addressed, never asks git to
+     * index the embedded worktree, and covers created, modified and ignored files
+     * alike.
+     */
+    async stagePathsByContent(indexFile, relPaths, signal) {
+        const unique = [...new Set(relPaths)];
+        if (unique.length === 0)
+            return;
+        const existing = [];
+        for (const rel of unique) {
+            this.assertSafeRelPath(rel);
+            try {
+                if (fs.statSync(path.resolve(this.cwd, rel)).isFile())
+                    existing.push(rel);
+            }
+            catch {
+                // Absent paths keep the accepted entry: the diff reports the deletion.
+            }
+        }
+        if (existing.length === 0)
+            return;
+        const blobs = await this.hashBlobs(existing, { write: true, ...(signal === undefined ? {} : { signal }) });
+        const entries = [];
+        for (const rel of existing) {
+            const blob = blobs.get(rel);
+            // A path that could not be hashed stays untouched rather than being
+            // removed from the index (which would fake a deletion).
+            if (blob !== undefined)
+                entries.push({ path: rel, blob });
+        }
+        await this.updateIndexInfo(indexFile, entries, signal);
+    }
     /** Write index entries from an index file into the worktree. */
     async checkoutIndex(indexFile, relPaths, signal) {
         const unique = [...new Set(relPaths.map(item => this.normalizeRelPath(item)))];

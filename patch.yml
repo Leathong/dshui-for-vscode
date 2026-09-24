@@ -6,25 +6,47 @@
 # publishes it to the browser as `window.__DSHUI_WORKSPACE__`.
 #
 # Patches cannot rename a row (a name mismatch is skipped), so the stock rows
-# are disabled and fresh rows under the dshui package names are inserted.
-# The bare package names resolve through `$DSH_HOME/profiles/node_modules`,
-# which the extension populates on activation.
+# are disabled and fresh rows under the dshui package names are inserted. The
+# bare package names resolve through `$DSH_HOME/profiles/node_modules`, which
+# the extension populates on activation.
+#
+# Two invariants keep the client graph intact (dsh >= 0.1.7):
+#   1. A row's id must equal the id its bundle declares with
+#      `window.__ModuleLoader__.load({ id })` — the client-modules loader keys
+#      factories by the declared id, so a stale build (bundles still declaring
+#      `@deepseek-ai/dsh-client-ui-*`) leaves the row unloadable.
+#   2. If that row fails, the `uiWorkspace` / `uiConversation` Cordis services
+#      never appear, and the ~20 client plugins injecting them stay PENDING
+#      forever — the browser then reports "Failed to load plugins" for almost
+#      the whole UI. The builds behind `dshui-client-ui-*` must therefore come
+#      from `pnpm run build:lib:client` after the tsdown `clientBundle(...)`
+#      rename; `scripts/copy-clients.mjs` refuses to copy a mismatched bundle.
 - id: ui-workspace
   disabled: true
 
 - id: ui-conversation
   disabled: true
 
-# Sandbox whitelist plugin: replaces the stock sandboxed bash executor and the
-# stock sandboxed filesystem with whitelist-aware subclasses that honor
-# `extraWritableRoots` on top of the workspace-write writable set (both bash
-# and write/edit stay symmetric). Default config (empty whitelist) behaves
-# exactly like stock; configure the roots in this row's config.
-- id: bash-sandbox
-  disabled: true
-
-- id: fs-sandbox
-  disabled: true
+# The sandbox seam is NOT overridden by this overlay. `bash-sandbox` /
+# `fs-sandbox` are the only providers of the `shell` / `fs` services, and
+# `dsh-whitelist-sandbox` replaces them with whitelist-aware subclasses. That
+# replacement must be a PROFILE BUNDLE, not an overlay row: the settings page
+# edits the row through `configEditor`, which writes the profile patch
+# (layer 2), while `--patch` overlays are applied last (layer 4). A row inserted
+# here is invisible at layer 2, so every settings save would be refused as
+# "overridden by a home patch or command-line overlay".
+#
+# `installPlugins()`'s `ensureProfileBundle()` therefore lists
+# `dsh-whitelist-sandbox` in the web profile's `dsh.profile.bundles`, and the
+# package's own `cordis.patch.yml` (bundle layer 1) atomically disables
+# `bash-sandbox` / `fs-sandbox` and inserts the whitelist row. Keeping the
+# pairing in that one file means a missing package degrades to the stock
+# sandbox — `loadProfileDirectory` skips an unresolvable bundle — instead of
+# stripping `shell`/`fs` from the whole tree and leaving tool-bash, tool-fs,
+# present, workflow-ptc, tool-workflow, permission, ptc-runtime,
+# session-controller, workspace-files, ui-deliverables and our own
+# rollback/scope rows PENDING forever. `scripts/verify-overlay.mjs` fails
+# packaging when either half of that pairing is broken.
 
 # The shared /api transport registers its channels on the connection row's
 # fiber (`ctx.connection.rpc.handle` mounts the route via the fiber's
@@ -59,14 +81,10 @@
     - id: xmanrui-dsh-im
       name: '@xmanrui/dsh-im'
 
-    - id: dsh-whitelist-sandbox
-      name: dsh-whitelist-sandbox
-      config:
-        # 在 workspace-write 之外额外允许写入的路径（绝对路径，不存在时
-        # 不生效并告警；Windows 暂不支持非空配置）。此配置是启动基线，
-        # 运行时可用 $DSH_HOME/settings.yaml 的 sandbox-whitelist 段热更新
-        # 覆盖（同 schema）。安全守卫：任何覆盖 $DSH_HOME 或其下
-        # settings.yaml 的根都会被拒绝（防模型自改策略提权），
-        # settings 段被拒时保留上一次生效的白名单并记录错误日志。
-        extraWritableRoots: []
+    # Sandbox whitelist plugin: NOT inserted here — see the sandbox-seam
+    # comment above. It is mounted as a profile bundle by
+    # `ensureProfileBundle()`, so its own `cordis.patch.yml` owns the
+    # disable-stock + insert-whitelist pairing. Operator roots live in the
+    # `dsh-whitelist-sandbox` row of `$DSH_HOME/profiles/web/cordis.patch.yml`
+    # (layer 2, after the bundles), editable from the settings page.
 

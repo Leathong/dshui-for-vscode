@@ -80,6 +80,10 @@ export class CallTracker {
     /**
      * Record one observed write/edit. Synchronous by contract (`fs/observed` is a
      * synchronous event); the blob write runs on the session's serial queue.
+     *
+     * Paths inside a nested git repository are tracked like any other: the call is
+     * captured from the file's bytes, so the embedded worktree never has to be
+     * indexed (the list path stages those paths from their blob).
      */
     observe(target, observation, actor) {
         const callId = actor?.callId;
@@ -99,8 +103,6 @@ export class CallTracker {
             return;
         const relPath = rel.split(path.sep).join('/');
         const track = this.track(session.id, cwd);
-        if (this.isInsideNestedRepo(track, abs))
-            return;
         const position = positionForCall(session, callId);
         const fallback = sessionTurnPosition(session);
         const observed = statIdentity(abs);
@@ -327,7 +329,6 @@ export class CallTracker {
             cwd,
             calls: [],
             queue: Promise.resolve(),
-            nestedCache: new Map(),
         };
         this.tracks.set(sessionId, created);
         return created;
@@ -361,42 +362,6 @@ export class CallTracker {
         track.base = commit;
         track.head = commit;
         return commit;
-    }
-    /**
-     * A path inside an embedded git repository is invisible to `git add -f`
-     * (git exits 0 but records nothing), so callers-level patches would silently
-     * vanish. Reject those paths; nested repositories stay covered by the
-     * materialized turn snapshots (docs/git-only-plan.md §4.3).
-     */
-    isInsideNestedRepo(track, absPath) {
-        let dir = path.dirname(absPath);
-        const root = path.resolve(track.cwd);
-        for (let depth = 0; depth < 64; depth += 1) {
-            const resolved = path.resolve(dir);
-            if (resolved === root || !resolved.startsWith(root))
-                return false;
-            const cached = track.nestedCache.get(resolved);
-            if (cached === true)
-                return true;
-            if (cached === undefined) {
-                let hasGit = false;
-                try {
-                    const stat = fs.lstatSync(path.join(resolved, '.git'));
-                    hasGit = stat.isDirectory() || stat.isFile();
-                }
-                catch {
-                    hasGit = false;
-                }
-                track.nestedCache.set(resolved, hasGit);
-                if (hasGit)
-                    return true;
-            }
-            const parent = path.dirname(resolved);
-            if (parent === resolved)
-                return false;
-            dir = parent;
-        }
-        return false;
     }
     trim(track) {
         const overflow = track.calls.length - this.maxCalls;

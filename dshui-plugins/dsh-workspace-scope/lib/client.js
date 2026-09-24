@@ -126,22 +126,22 @@ window.__ModuleLoader__.load({
 			".wsc-hint{font-size:12px;color:var(--dsw-alias-label-secondary);line-height:1.6;margin:0}",
 			"@media (max-width: 680px){.wsc-cards{grid-template-columns:minmax(0,1fr)}}"
 		].join("\n");
-		let modalOpen = false;
+		let modalState = { open: false };
 		const modalListeners = /* @__PURE__ */ new Set();
-		function setModal(open) {
-			modalOpen = open;
+		function setModal(next) {
+			modalState = next;
 			for (const fn of modalListeners) fn();
 		}
 		function useModalOpen() {
-			const [open, setOpenState] = react.useState(modalOpen);
+			const [state, setOpenState] = react.useState(modalState);
 			react.useEffect(() => {
-				const fn = () => setOpenState(modalOpen);
+				const fn = () => setOpenState(modalState);
 				modalListeners.add(fn);
 				return () => {
 					modalListeners.delete(fn);
 				};
 			}, []);
-			return [open, setModal];
+			return [state, setModal];
 		}
 		function PresetIcon(props) {
 			const maskId = "wscmask" + Math.floor(Math.random() * 1e9);
@@ -234,22 +234,26 @@ window.__ModuleLoader__.load({
 			}, react.createElement("span", { className: "wsc-switch-thumb" })));
 		}
 		function ScopeBar(props) {
-			const [open, setModalFn] = useModalOpen();
-			if ((props.useSessions !== void 0 ? props.useSessions((s) => {
-				if (!s.current) return void 0;
-				const row = s.byId[s.current];
+			const [modal, setModalFn] = useModalOpen();
+			const sessionId = props.sessionId;
+			if ((props.useSessions !== void 0 && sessionId !== void 0 ? props.useSessions((s) => {
+				const row = s.byId[sessionId];
 				return row ? !!row.blank : void 0;
 			}) : false) !== true) return null;
 			return react.createElement("button", {
 				type: "button",
 				className: "wsc-chip",
-				onClick: () => setModalFn(!open),
-				"aria-expanded": open,
+				onClick: () => setModalFn({
+					open: !modal.open,
+					sessionId
+				}),
+				"aria-expanded": modal.open,
 				title: "按工作区配置新对话启用的 Skill 与 Host 全局 MCP"
 			}, react.createElement(PresetIcon, { className: "wsc-seat-icon" }), react.createElement("span", null, "工作区能力"), react.createElement(ChevronIcon, { className: "wsc-chevron" }));
 		}
 		function ScopeModal(props) {
-			const [open, setModalFn] = useModalOpen();
+			const [modal, setModalFn] = useModalOpen();
+			const open = modal.open;
 			const [data, setData] = react.useState(null);
 			const [draft, setDraft] = react.useState(null);
 			const [query, setQuery] = react.useState("");
@@ -260,7 +264,7 @@ window.__ModuleLoader__.load({
 				skills: false,
 				mcps: false
 			});
-			const sessionId = props.useSessions !== void 0 ? props.useSessions((s) => s.current) : void 0;
+			const sessionId = props.sessionId ?? modal.sessionId;
 			const sessionIdRef = react.useRef(sessionId);
 			react.useEffect(() => {
 				sessionIdRef.current = sessionId;
@@ -309,7 +313,7 @@ window.__ModuleLoader__.load({
 				if (!open) return;
 				const onKey = (event) => {
 					if (event.key === "Escape") {
-						setModalFn(false);
+						setModalFn({ open: false });
 						return;
 					}
 					if (event.key !== "Tab") return;
@@ -473,7 +477,7 @@ window.__ModuleLoader__.load({
 			}, "全部禁用")), notice !== null ? react.createElement("p", { className: notice.kind === "ok" ? "wsc-notice" : "wsc-error" }, notice.text) : null, error !== null ? react.createElement("p", { className: "wsc-error" }, error) : null);
 			return react.createElement("div", { className: "wsc-overlay" }, react.createElement("div", {
 				className: "wsc-mask",
-				onClick: () => setModalFn(false)
+				onClick: () => setModalFn({ open: false })
 			}), react.createElement("div", {
 				className: "wsc-panel",
 				ref: panelRef,
@@ -484,7 +488,7 @@ window.__ModuleLoader__.load({
 			}, react.createElement("div", { className: "wsc-panel-head" }, react.createElement("span", { className: "wsc-panel-title" }, "工作区能力"), react.createElement("button", {
 				type: "button",
 				className: "wsc-close",
-				onClick: () => setModalFn(false),
+				onClick: () => setModalFn({ open: false }),
 				title: "关闭"
 			}, react.createElement("svg", {
 				width: 14,

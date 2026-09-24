@@ -10,11 +10,11 @@ export function jsonCodec(typeSymbol) {
     return {
         mode: 'strict',
         typeSymbol,
-        schema: {
+        create: () => ({
             parse(value) {
                 return value;
             },
-        },
+        }),
     };
 }
 export const JSON_TYPE_SYMBOL = 'dsh-rollback-plugin/types#JsonValue';

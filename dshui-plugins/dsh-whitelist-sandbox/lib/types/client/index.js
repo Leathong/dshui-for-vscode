@@ -3,21 +3,22 @@
  * whitelist.
  *
  * Security contract (mirrors the host plugin's):
- *  - The form reads/writes ONLY the `sandbox-whitelist:` settings-document
- *    section through the existing settings transport
- *    (`settingsScope.describe()` + `ctx.remote.settings.mutate`) — the same
- *    channel the Models page uses. There is no second, bypass write path.
+ *  - The form reads/writes ONLY this plugin's own profile entry through the
+ *    shared `configForms` service (`get(entryId)` + the form's `set`) — the
+ *    same settings transport the stock Shell page uses. There is no second,
+ *    bypass write path, and no direct `remote.settings` access (0.1.7 removed
+ *    `settingsScope` and moved writes behind the provider-owned form).
  *  - The authoritative guard (reject roots covering $DSH_HOME /
- *    settings.yaml, keep-last-good) runs host-side in dsh-whitelist-sandbox
- *    when the change is applied; the UI shows the document value and a
- *    notice that final application is subject to that guard.
+ *    the policy document, refuse before persist) runs host-side in
+ *    dsh-whitelist-sandbox when the change is applied; the UI shows the
+ *    document value and a notice that final application is subject to it.
  *  - Nothing model-controlled is ever rendered into this form; inputs are
  *    operator-typed paths only.
  */
 import { useSyncExternalStore, useState } from 'react';
 import { jsx, jsxs } from 'react/jsx-runtime';
-import { Button, Input, IconTrashOutline16, IconPlusOutline16 } from '@deepseek-ai/dsh-client-ui-primitives';
-import { WhitelistSettingsStore } from "./store.js";
+import { Button, Input, IconTrashOutlineRegular, IconPlusOutlineRegular } from '@deepseek-ai/dsh-client-ui-primitives';
+import { WhitelistSettingsStore, SETTINGS_NS } from "./store.js";
 import { COPY_NS, zh, en } from "./locales.js";
 /** The settings-page section: edit the whitelist path list, save via the document. */
 export function WhitelistSection({ controller, t }) {
@@ -69,7 +70,7 @@ export function WhitelistSection({ controller, t }) {
             jsx(Button, {
                 variant: 'ghost',
                 size: 'sm',
-                icon: jsx(IconTrashOutline16, {}),
+                icon: jsx(IconTrashOutlineRegular, {}),
                 'aria-label': t('remove'),
                 onClick: () => remove(index),
             }),
@@ -103,7 +104,7 @@ export function WhitelistSection({ controller, t }) {
                     jsx(Button, {
                         variant: 'outline',
                         size: 'sm',
-                        icon: jsx(IconPlusOutline16, {}),
+                        icon: jsx(IconPlusOutlineRegular, {}),
                         disabled: !editable || draft.trim() === '',
                         onClick: add,
                         children: t('add'),
@@ -133,40 +134,27 @@ export function WhitelistSection({ controller, t }) {
     });
 }
 /**
- * Required client services. Both the base `remote` service and the
- * `remote.settings` namespace must be injected: `ctx.remote` builds the
- * accessor receiver, and `remote.settings` (the settings-document Remote
- * namespace mounted by dsh-api-remotes) is the exposed sub-service the
- * section reads/writes through `ctx.remote.settings`.
+ * Required client services. `configForms` (provided by
+ * `@deepseek-ai/dsh-client-ui-settings`) owns the settings mirror and the write
+ * transport, so this bundle no longer injects `remote` / `remote.settings`.
  */
-export const inject = ['slots', 'locale', 'settingsScope', 'remote', 'remote.settings'];
+export const inject = ['slots', 'locale', 'configForms'];
 /**
- * Register the whitelist section once the `settings.section` declaration
- * is on the ledger, wire its store to the settings scope, and refresh on
- * every pushed settings invalidation.
+ * Publish the whitelist section into the settings nav while the Host serves
+ * this plugin's entry, and bind it to that entry's shared configuration form.
+ * The form already derives from the settings mirror, so there is no separate
+ * refresh-on-invalidation wiring: its own subscription drives re-renders.
  */
 export function apply(ctx) {
     ctx.effect(() => ctx.locale.register(COPY_NS, { zh, en }), 'dsh-whitelist-sandbox: dictionaries');
     const t = ctx.locale.bind(COPY_NS);
-    const controller = new WhitelistSettingsStore(ctx.settingsScope, ctx.remote.settings);
-    const injected = () => ({ controller, t });
-    ctx.effect(() => {
-        const refresh = () => {
-            controller.load();
-        };
-        controller.load();
-        const dispose = controller.describeFace.subscribe(refresh);
-        return () => {
-            dispose();
-            controller.dispose();
-        };
-    }, 'dsh-whitelist-sandbox: settings scope');
-    ctx.slots.inject('settings.section', () => ctx.slots.register({
+    const controller = new WhitelistSettingsStore(ctx.configForms.get(SETTINGS_NS));
+    ctx.effect(() => ctx.configForms.whileServed([SETTINGS_NS], () => ctx.slots.inject('settings.section', () => ctx.slots.register({
         name: 'settings.section',
         id: 'whitelist',
         order: 20,
         label: () => t('nav'),
-        inject: injected,
-    }, WhitelistSection));
+        inject: () => ({ controller, t }),
+    }, WhitelistSection))), 'dsh-whitelist-sandbox: settings page');
 }
 export { WhitelistSettingsStore } from "./store.js";
