@@ -22,4 +22,16 @@ export declare function tabCounts(rows: readonly CapabilityRow[]): Record<TabId,
     enabled: number;
     total: number;
 }>;
+/**
+ * The switch ids one row contributes to a bulk action at one level. A plain row
+ * addresses its own id. An MCP server row addresses its own id AND every member
+ * id, because the group is only the members' DEFAULT: writing the group alone
+ * would leave a member explicitly set at the SAME level untouched, so "disable
+ * all" could visibly leave a tool enabled — the exact trap the toolbar promises
+ * not to have. Writing both makes the outcome exactly "every tool shown in this
+ * tab now has this stance at this level".
+ * @param row - the row the toolbar is acting on.
+ * @returns the switch ids to write.
+ */
+export declare function bulkTargetIds(row: CapabilityRow): readonly string[];
 export declare function levelsVisible(scope: LevelScope): readonly ToggleLevel[];

@@ -203,10 +203,36 @@ window.__ModuleLoader__.load({
 			for (const row of rows) for (const id of TAB_ORDER) {
 				if (!TAB_KINDS[id].includes(row.kind)) continue;
 				const bucket = counts[id];
+				if (row.kind === "mcp") {
+					const members = row.memberTools ?? [];
+					if (members.length === 0) {
+						bucket.total += 1;
+						if (!row.disabled) bucket.enabled += 1;
+					} else {
+						bucket.total += members.length;
+						bucket.enabled += members.reduce((n, m) => n + (m.disabled ? 0 : 1), 0);
+					}
+					continue;
+				}
 				bucket.total += 1;
 				if (row.kind === "guard" ? row.disabled : !row.disabled) bucket.enabled += 1;
 			}
 			return counts;
+		}
+		/**
+		* The switch ids one row contributes to a bulk action at one level. A plain row
+		* addresses its own id. An MCP server row addresses its own id AND every member
+		* id, because the group is only the members' DEFAULT: writing the group alone
+		* would leave a member explicitly set at the SAME level untouched, so "disable
+		* all" could visibly leave a tool enabled — the exact trap the toolbar promises
+		* not to have. Writing both makes the outcome exactly "every tool shown in this
+		* tab now has this stance at this level".
+		* @param row - the row the toolbar is acting on.
+		* @returns the switch ids to write.
+		*/
+		function bulkTargetIds(row) {
+			if (row.kind !== "mcp") return [row.id];
+			return [row.id, ...(row.memberTools ?? []).map((m) => m.id)];
 		}
 		function levelsVisible(scope) {
 			return LEVEL_PRIORITY.slice(0, scope === "session" ? 1 : scope === "session-project" ? 2 : LEVEL_PRIORITY.length);
@@ -273,10 +299,11 @@ window.__ModuleLoader__.load({
 		* current stance; the clear badge has its own label.
 		*/
 		function LevelSwitch(props) {
-			const { level, value, disabled, t, onPick } = props;
+			const { level, value, disabled, t, onPick, label } = props;
 			const toggled = value === "on" ? "off" : "on";
 			const isSet = value !== "inherit";
 			const levelName = t(`level.${level}`);
+			const describe = (state) => `${label === void 0 ? "" : `${label} · `}${levelName} · ${state}`;
 			return (0, react_jsx_runtime.jsxs)("div", {
 				className: "dshct-lvsw",
 				children: [(0, react_jsx_runtime.jsx)("button", {
@@ -284,15 +311,15 @@ window.__ModuleLoader__.load({
 					className: "dshct-lvsw-main",
 					"data-kind": value,
 					disabled,
-					"aria-label": `${levelName} · ${t(`state.${value}`)}`,
-					title: `${levelName} · ${t(`state.${value}`)}`,
+					"aria-label": describe(t(`state.${value}`)),
+					title: describe(t(`state.${value}`)),
 					onClick: () => onPick(toggled),
 					children: (0, react_jsx_runtime.jsx)(StateGlyph, { kind: value })
 				}), isSet ? (0, react_jsx_runtime.jsx)("button", {
 					type: "button",
 					className: "dshct-lvsw-clear",
 					disabled,
-					"aria-label": `${levelName} · ${t("state.clear")}`,
+					"aria-label": describe(t("state.clear")),
 					title: t("state.clear"),
 					onClick: () => onPick("inherit"),
 					children: (0, react_jsx_runtime.jsx)("svg", {
@@ -404,9 +431,13 @@ window.__ModuleLoader__.load({
 		* description, truncated to one line and revealed in full on hover.
 		*
 		* An `mcp` row is expandable: its name becomes a disclosure button that reveals
-		* the server's member tools (name + summary) below the description. The listing
-		* is read-only — a group switch denies every member together, so there are no
-		* per-member controls to show.
+		* the server's member tools below the description. Each member is a switchable
+		* sub-row of its own (name, its own level switches, its own result badge), since
+		* every MCP tool is switched separately and DEFAULTS TO DISABLED. The server row
+		* keeps a switch too, and it is the members' DEFAULT: setting the server ON here
+		* enables every member that is not explicitly set OFF at the same or a nearer
+		* level, so one click turns a whole server on. The description line reports how
+		* many of the server's tools are actually callable.
 		*
 		* `projectDisabled` greys the project segment when the session has no project
 		* root to write under; the whole row's controls are also disabled while busy.
@@ -444,6 +475,7 @@ window.__ModuleLoader__.load({
 			const { name: displayName, desc: displayDesc } = rowDisplayText(row, t);
 			const members = row.memberTools ?? [];
 			const expandable = row.kind === "mcp" && members.length > 0;
+			const enabledMembers = members.reduce((n, m) => n + (m.disabled ? 0 : 1), 0);
 			const isGuard = row.kind === "guard";
 			const guardActive = isGuard && row.disabled;
 			const dotOff = isGuard ? !guardActive : row.disabled;
@@ -524,33 +556,73 @@ window.__ModuleLoader__.load({
 							})
 						]
 					}),
-					expandable ? (0, react_jsx_runtime.jsx)("button", {
+					expandable ? (0, react_jsx_runtime.jsxs)("button", {
 						type: "button",
 						className: "dshct-row-desc dshct-row-desc-btn",
 						"data-open": expanded,
 						"aria-expanded": expanded,
 						title: t("mcp.expand", { count: members.length }),
 						onClick: () => setExpanded((v) => !v),
-						children: displayDesc
+						children: [
+							displayDesc,
+							" · ",
+							t("mcp.count", {
+								enabled: enabledMembers,
+								total: members.length
+							})
+						]
 					}) : (0, react_jsx_runtime.jsx)("div", {
 						className: "dshct-row-desc",
 						title: displayDesc,
 						children: displayDesc
 					}),
-					expandable && expanded ? (0, react_jsx_runtime.jsx)("ul", {
-						className: "dshct-members",
-						children: members.map((m) => (0, react_jsx_runtime.jsxs)("li", {
-							className: "dshct-member",
-							children: [(0, react_jsx_runtime.jsx)("span", {
-								className: "dshct-member-name",
-								title: m.name,
-								children: m.name
-							}), m.description !== "" ? (0, react_jsx_runtime.jsx)("span", {
-								className: "dshct-member-desc",
-								title: m.description,
-								children: m.description
-							}) : null]
-						}, m.name))
+					expandable && expanded ? (0, react_jsx_runtime.jsxs)("div", {
+						className: "dshct-members-wrap",
+						children: [(0, react_jsx_runtime.jsx)("div", {
+							className: "dshct-members-hint",
+							children: t("mcp.members.hint")
+						}), (0, react_jsx_runtime.jsx)("ul", {
+							className: "dshct-members",
+							children: members.map((m) => (0, react_jsx_runtime.jsxs)("li", {
+								className: "dshct-member",
+								"data-disabled": m.disabled,
+								children: [(0, react_jsx_runtime.jsxs)("div", {
+									className: "dshct-member-top",
+									children: [
+										(0, react_jsx_runtime.jsxs)("div", {
+											className: "dshct-member-name",
+											children: [(0, react_jsx_runtime.jsx)("span", {
+												className: "dshct-row-text",
+												title: m.name,
+												children: m.name
+											}), showUsage && m.callCount !== void 0 && m.callCount > 0 ? (0, react_jsx_runtime.jsx)("span", {
+												className: "dshct-usage",
+												title: t("usage.calls.title", { count: m.callCount }),
+												children: t("usage.calls", { count: m.callCount })
+											}) : null]
+										}),
+										visibleLevels.map((level) => (0, react_jsx_runtime.jsx)(LevelSwitch, {
+											level,
+											value: m.levels[level],
+											label: m.name,
+											disabled: disabled || level === "project" && projectDisabled,
+											t,
+											onPick: (next) => props.onSet(level, m.id, next)
+										}, level)),
+										(0, react_jsx_runtime.jsx)("span", {
+											className: "dshct-badge",
+											"data-off": m.disabled,
+											title: m.disabled ? t("badge.off.title") : t("badge.on.title"),
+											children: m.disabled ? t("badge.off") : t("badge.on")
+										})
+									]
+								}), m.description !== "" ? (0, react_jsx_runtime.jsx)("div", {
+									className: "dshct-member-desc",
+									title: m.description,
+									children: m.description
+								}) : null]
+							}, m.id))
+						})]
 					}) : null
 				]
 			});
@@ -560,11 +632,14 @@ window.__ModuleLoader__.load({
 		* display name and description, lower-cased once per row per render. Search
 		* matches against what the user actually SEES (translated strings), not the
 		* wire `id`/`name`, so typing a guard's shown label finds it even though its
-		* `row.name` is the untranslated preset key.
+		* `row.name` is the untranslated preset key. An MCP server row also indexes its
+		* member tools, so searching a tool name (`mcp__dart__launch_app` or part of its
+		* summary) surfaces the server that owns it instead of hiding it behind a
+		* collapsed disclosure.
 		*/
 		function rowHaystack(row, t) {
 			const { name, desc } = rowDisplayText(row, t);
-			return `${name} ${desc}`.toLowerCase();
+			return `${name} ${desc} ${(row.memberTools ?? []).map((m) => `${m.name} ${m.description}`).join(" ")}`.toLowerCase();
 		}
 		/** The popup body: tab strip, preferences drawer, and the active tab's row list. */
 		function Panel(props) {
@@ -581,7 +656,7 @@ window.__ModuleLoader__.load({
 			const counts = tabCounts(projection.rows);
 			const offCount = projection.rows.filter((r) => r.kind !== "guard" && r.disabled).length;
 			const projectDisabled = projection.projectKey === "";
-			const visibleIds = rows.map((r) => r.id);
+			const visibleIds = rows.flatMap(bulkTargetIds);
 			const visibleLevels = levelsVisible(prefs.levels);
 			return (0, react_jsx_runtime.jsxs)("div", {
 				className: "dshct-panel",
@@ -998,10 +1073,10 @@ window.__ModuleLoader__.load({
 				"col.result": "结果",
 				"note.priority.lead": "就近生效原则：",
 				"note.priority.chain": "会话级 › 项目级 › 全局",
-				"note.priority.tail": "，某层「未设」就向下跟随；三层都未设时默认启用。右侧标签是综合三层后的真实结果。",
+				"note.priority.tail": "，某层「未设」就向下跟随；三层都未设时，MCP 工具默认停用、其余能力默认启用。右侧标签是综合三层后的真实结果。",
 				"state.on": "本层始终启用此能力",
 				"state.off": "本层停用此能力",
-				"state.inherit": "本层不设，由下一层决定",
+				"state.inherit": "本层不设，跟随下层设置或默认值",
 				"state.clear": "清除本层设置（恢复未设）",
 				"badge.on": "生效中",
 				"badge.off": "已停用",
@@ -1012,7 +1087,7 @@ window.__ModuleLoader__.load({
 				"tab.count.title": "已启用 {enabled} 项，共 {total} 项",
 				"prefs.toggle": "显示设置",
 				"prefs.fraction": "标签页显示「启用数 / 总数」",
-				"prefs.fraction.hint": "安全标签下守卫只有已生效才计入启用数，未生效的守卫仍计入总数",
+				"prefs.fraction.hint": "安全标签下守卫只有已生效才计入启用数，未生效的守卫仍计入总数；MCP 标签按工具计数",
 				"prefs.usage": "显示调用统计",
 				"prefs.usage.hint": "在能力名称旁显示本会话被模型调用的次数",
 				"prefs.levels": "显示的层级列",
@@ -1023,6 +1098,8 @@ window.__ModuleLoader__.load({
 				"note.running": "agent 运行中，修改已暂时锁定，待空闲后可调整",
 				"empty": "当前分类没有可切换的项目",
 				"mcp.expand": "展开查看该 server 的 {count} 个工具",
+				"mcp.count": "{enabled}/{total} 个工具已启用",
+				"mcp.members.hint": "每个 MCP 工具默认停用，需逐项启用；上面的 server 行是这些工具的默认值，设为「启用」即整台服务器一起开。",
 				"search.toggle": "搜索与批量操作",
 				"search.placeholder": "按名称或描述搜索…",
 				"search.empty": "没有匹配的项目",
@@ -1088,10 +1165,10 @@ window.__ModuleLoader__.load({
 				"col.result": "Result",
 				"note.priority.lead": "Nearest level wins: ",
 				"note.priority.chain": "Session › Project › Global",
-				"note.priority.tail": ". An “Unset” level defers to the next; enabled by default when all three are unset. The right-hand badge is the real result across all three.",
+				"note.priority.tail": ". An “Unset” level defers to the next; when all three are unset, MCP tools stay DISABLED (opt-in) while every other capability is enabled. The right-hand badge is the real result across all three.",
 				"state.on": "Always enable this capability at this level",
 				"state.off": "Disable this capability at this level",
-				"state.inherit": "Leave unset at this level; defer to the next",
+				"state.inherit": "Leave unset at this level; follow the next level or the default",
 				"state.clear": "Clear this level (revert to unset)",
 				"badge.on": "Active",
 				"badge.off": "Disabled",
@@ -1102,7 +1179,7 @@ window.__ModuleLoader__.load({
 				"tab.count.title": "{enabled} of {total} enabled",
 				"prefs.toggle": "Display settings",
 				"prefs.fraction": "Show “enabled / total” on tabs",
-				"prefs.fraction.hint": "On the Security tab a guard counts as enabled only while it is active; inactive guards still count toward the total",
+				"prefs.fraction.hint": "On the Security tab a guard counts as enabled only while it is active; inactive guards still count toward the total. The MCP tab counts tools, not servers",
 				"prefs.usage": "Show call stats",
 				"prefs.usage.hint": "Show how many times the model called each capability this session, beside its name",
 				"prefs.levels": "Level columns to show",
@@ -1114,6 +1191,8 @@ window.__ModuleLoader__.load({
 				"note.running": "Agent is running; changes are locked until it goes idle",
 				"empty": "No switchable entries in this tab",
 				"mcp.expand": "Show this server's {count} tool(s)",
+				"mcp.count": "{enabled}/{total} tools enabled",
+				"mcp.members.hint": "Every MCP tool is disabled by default and must be enabled one by one; the server row above is their default, so switching it on enables the whole server.",
 				"search.toggle": "Search and bulk actions",
 				"search.placeholder": "Search by name or description…",
 				"search.empty": "No entries match",
@@ -1371,16 +1450,25 @@ window.__ModuleLoader__.load({
 .dshct-row-desc-btn:hover:not(:disabled){color:var(--dsw-alias-label-primary)}
 .dshct-row-desc-btn:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary);outline-offset:2px;border-radius:4px}
 
-/* mcp row: name is a disclosure button; members list read-only below the desc */
+/* mcp members: EVERY tool is its own switchable sub-row, laid out on the same
+   column grid as the parent so its level switches land under the same column
+   headers. The list sits behind a vertical rule and is prefixed by one line
+   stating the opt-in default, because a hidden default is the whole risk of a
+   per-tool switch: the server row above is these tools' default, not a second
+   independent gate. */
+.dshct-members-wrap{margin-top:7px;padding-left:12px;border-left:2px solid var(--dsw-alias-border-l1)}
+.dshct-members-hint{padding:0 0 4px;color:var(--dsw-alias-label-caption);font-size:11px;line-height:1.5}
+.dshct-members{list-style:none;margin:0;padding:0}
+.dshct-member{padding:5px 0}
+.dshct-member+.dshct-member{border-top:1px solid var(--dsw-alias-border-l1)}
+.dshct-member[data-disabled=true]{opacity:.66}
+.dshct-member-top{display:grid;grid-template-columns:1fr var(--dshct-cols);align-items:center;gap:0 10px}
+.dshct-member-name{min-width:0;display:flex;align-items:center;gap:6px;overflow:hidden;color:var(--dsw-alias-label-secondary);font-size:11.5px;font-weight:600}
+.dshct-member-desc{margin-top:2px;color:var(--dsw-alias-label-secondary);font-size:11px;line-height:1.45;overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2}
 .dshct-row-name-btn{border:0;background:transparent;font:inherit;font-weight:600;text-align:left;cursor:pointer;padding:0}
 .dshct-caret{flex:none;font-size:13px;line-height:1;color:var(--dsw-alias-label-secondary);transition:transform .14s ease,color .14s ease}
 .dshct-caret[data-open=true]{transform:rotate(90deg);color:var(--dsw-alias-state-business-primary)}
 .dshct-row-name-btn:hover .dshct-caret{color:var(--dsw-alias-label-primary)}
-.dshct-members{list-style:none;margin:7px 0 1px;padding:0 0 0 14px;border-left:2px solid var(--dsw-alias-border-l1)}
-.dshct-member{display:flex;flex-direction:column;gap:1px;padding:4px 0}
-.dshct-member+.dshct-member{border-top:1px solid var(--dsw-alias-border-l1)}
-.dshct-member-name{color:var(--dsw-alias-label-secondary);font-size:11.5px;font-weight:600;word-break:break-word;overflow-wrap:anywhere}
-.dshct-member-desc{color:var(--dsw-alias-label-secondary);font-size:11px;line-height:1.45;overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2}
 
 /* One level's stance = a SINGLE icon button showing ONLY the current stance
    (not all three at once — the earlier three-segment control turned every row

@@ -4,7 +4,8 @@
  * and applies it to the agent's own scope across three seams:
  *
  *   - tools: `tools.restrict({ deny })` removes every disabled plain tool and
- *     every member tool of a disabled MCP server group from the agent's
+ *     every disabled MCP member tool (each MCP tool has its own switch, resolved
+ *     member-over-server-group-over-off; see shared/resolve.ts) from the agent's
  *     inherited surface. A denied tool leaves the model schema set, so the next
  *     `request/header` snapshot no longer advertises it, and any call the model
  *     still attempts is refused by the restriction.
@@ -25,7 +26,7 @@
  * @module dsh-capability-toggle-plugin/host/agent-binding
  */
 import { createScope, scopeOf } from '@deepseek-ai/dsh-scope';
-import { buildProjection, disabledIds, isGuardActive } from '../shared/resolve.js';
+import { buildProjection, disabledIdsForInventory, isGuardActive } from '../shared/resolve.js';
 import { collectInventory, deniedToolNames, disabledSkillNames, disabledToolGuidanceSections, } from './inventory.js';
 import { applyPromptGates } from './prompt.js';
 import { applyApprovalGate } from './approval.js';
@@ -154,13 +155,16 @@ export class AgentBinding {
     }
     /**
      * The set of switch ids resolved to disabled for this agent, over an
-     * already-collected inventory.
+     * already-collected inventory. The MCP family is resolved per MEMBER tool
+     * (member stance, then its server group's, then the opt-in `off` default), so
+     * the returned set carries the member ids the tools seam denies — see
+     * `disabledIdsForInventory`.
      * @param descriptors - this agent's inventory.
      * @returns the disabled switch ids.
      */
     disabledSet(descriptors) {
         const overrides = this.store.layered(this.projectKey, this.sessionKey);
-        return new Set(disabledIds(overrides, descriptors.map(d => d.id)));
+        return new Set(disabledIdsForInventory(descriptors, overrides));
     }
     /**
      * Dispose the current application and install a fresh one from the current

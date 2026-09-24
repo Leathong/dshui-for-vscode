@@ -59,8 +59,8 @@ export declare const FRAMEWORK_CONTRACT: {
     readonly lifecycleEvents: readonly ['agent/created', 'agent/disposed'];
     /** The `Execution` field the pre-execute waterfall routes scope by. */
     readonly scopeRoutingKey: 'exec.agent';
-    /** The MCP public-tool name grammar the inventory groups servers by. */
-    readonly mcpNameGrammar: 'mcp__<server>__<tool>';
+    /** The MCP public-tool name grammar, and the per-member switch id derived from it. */
+    readonly mcpNameGrammar: 'mcp__<server>__<tool> → mcptool:<server>/<tool>';
     /** The storage domain holding the three-level override document. */
     readonly domainName: "capability_toggle";
 };

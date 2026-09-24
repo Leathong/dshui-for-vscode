@@ -4346,15 +4346,81 @@ function isGuardActive(overrides, id) {
 	return resolveStance(overrides, id, "off") === "on";
 }
 /**
-* The complete set of capability ids that resolve to disabled, across a known
-* id universe. Ids the caller does not list are not considered — a stored
-* stance for an id no longer present is inert until the id reappears.
+* Resolve one MCP member tool's effective stance. MCP tools are the second
+* OPT-IN family (after `guard`): a member resolves from the FIRST level that
+* says something, where its OWN stance at that level beats its server group's,
+* and a level silent for both falls through. When every level is silent for
+* both, the answer is `off` — the plugin's "every MCP tool starts disabled,
+* enable what you need" default.
+*
+* The group's stance is therefore a DEFAULT for its members, not an override of
+* them: `mcp:<server>` ON enables every member that has not been set OFF at the
+* same or a nearer level (one gesture for a whole server), and a member's own
+* `on` at a level beats a group `off` at the SAME level — the more specific
+* statement wins. To keep a whole server silent, leave the members unset here or
+* clear them, rather than relying on the group alone.
 * @param overrides - the three level maps.
-* @param ids - the known switch keys to evaluate.
-* @returns the disabled ids, in the input order.
+* @param memberId - the member's `mcptool:<server>/<rest>` switch key.
+* @param groupId - the server's `mcp:<server>` switch key.
+* @returns the winning explicit stance, or `off` when nothing is set.
 */
-function disabledIds(overrides, ids) {
-	return ids.filter((id) => isDisabled(overrides, id));
+function mcpMemberStance(overrides, memberId, groupId) {
+	for (const level of LEVEL_PRIORITY) {
+		const map = overrides[level] ?? {};
+		const own = stanceAt(map, memberId);
+		if (own !== "inherit") return own;
+		const group = stanceAt(map, groupId);
+		if (group !== "inherit") return group;
+	}
+	return "off";
+}
+/**
+* Whether one MCP member tool resolves to disabled. `true` unless the member —
+* or its server group at a level the member leaves silent — says `on`, since an
+* MCP tool defaults to off.
+* @param overrides - the three level maps.
+* @param memberId - the member's switch key.
+* @param groupId - the server's switch key.
+* @returns `true` when the tool is denied.
+*/
+function isMcpMemberDisabled(overrides, memberId, groupId) {
+	return mcpMemberStance(overrides, memberId, groupId) === "off";
+}
+/**
+* The complete set of switch ids that resolve to disabled across one INVENTORY:
+* the id universe an agent's enforcement is applied against. Unlike
+* {@link disabledIds} (a flat default-on evaluation over a list of ids), this
+* walks the descriptor tree so the two families whose default is not "enabled"
+* are read against their own rule:
+*
+*   - `mcp`: a member tool resolves through {@link isMcpMemberDisabled}
+*     (member stances, then its server group's, then the opt-in `off` default),
+*     so its MEMBER id — not the group id — is what the tools seam denies. The
+*     group id is additionally reported when NOT ONE member is enabled, which is
+*     the group row's "this whole server is off" reading; the tools seam ignores
+*     it (see `deniedToolNames`).
+*   - every other family (skill/tool/prompt/approval/guard): the flat
+*     default-on {@link isDisabled} read, unchanged. A `guard` id listed here
+*     is inert for the tool/skill seams; guards are enforced by their own
+*     pre-execute listener (see `AgentBinding.installGuards`).
+* @param descriptors - the inventory to resolve against.
+* @param overrides - the three level maps.
+* @returns the disabled switch ids, in inventory order.
+*/
+function disabledIdsForInventory(descriptors, overrides) {
+	const out = [];
+	for (const d of descriptors) {
+		if (d.kind === "mcp") {
+			const members = d.memberTools ?? [];
+			let anyEnabled = false;
+			for (const m of members) if (isMcpMemberDisabled(overrides, m.id, d.id)) out.push(m.id);
+			else anyEnabled = true;
+			if (!anyEnabled) out.push(d.id);
+			continue;
+		}
+		if (isDisabled(overrides, d.id)) out.push(d.id);
+	}
+	return out;
 }
 /**
 * Build the UI projection from an inventory and the layered overrides — the
@@ -4366,9 +4432,16 @@ function disabledIds(overrides, ids) {
 * against a known inventory, independent of whether enforcement is applied
 * right now.
 *
-* A `guard` row is opt-in (default off): its resolved effect is ACTIVE
-* (`isGuardActive`, off fallback) and it carries a hit count. Every other
-* family is default-on: its effect is DISABLED (`isDisabled`, on fallback).
+* Three default directions ride this one transform, each read against its own
+* family default:
+*   - `guard` is opt-in: its resolved effect is ACTIVE (`isGuardActive`, off
+*     fallback) and it carries a hit count.
+*   - an `mcp` group row carries its member tools as RESOLVED member rows, each
+*     opt-in too (`isMcpMemberDisabled`: `off` unless the member or its server
+*     says `on`). The group's own effect is "not one member is callable", so the
+*     server row dims exactly when it offers the model nothing.
+*   - every other family is default-on: its effect is DISABLED (`isDisabled`,
+*     on fallback).
 * The two counters pair up by family: `hitCount` answers "did this safety rule
 * fire?" and rides only guard rows, while `callCount` answers "how much did the
 * model actually use this?" and rides only the callable families
@@ -4392,20 +4465,41 @@ function buildProjection(descriptors, overrides, projectKey, guardHits, callHits
 				project: stanceAt(overrides.project, d.id),
 				global: stanceAt(overrides.global, d.id)
 			};
+			const { memberTools, ...base } = d;
 			if (d.kind === "guard") return {
-				...d,
+				...base,
 				levels,
 				disabled: isGuardActive(overrides, d.id),
 				hitCount: guardHits?.get(d.id) ?? 0
 			};
+			if (d.kind === "mcp") {
+				const members = (memberTools ?? []).map((m) => ({
+					...m,
+					levels: {
+						session: stanceAt(overrides.session, m.id),
+						project: stanceAt(overrides.project, m.id),
+						global: stanceAt(overrides.global, m.id)
+					},
+					disabled: isMcpMemberDisabled(overrides, m.id, d.id),
+					callCount: callHits?.get(m.id) ?? 0
+				}));
+				const callCount = members.length > 0 ? members.reduce((sum, m) => sum + (m.callCount ?? 0), 0) : callHits?.get(d.id) ?? 0;
+				return {
+					...base,
+					levels,
+					memberTools: members,
+					callCount,
+					disabled: !members.some((m) => !m.disabled)
+				};
+			}
 			if (CALLABLE_KINDS.includes(d.kind)) return {
-				...d,
+				...base,
 				levels,
 				disabled: isDisabled(overrides, d.id),
 				callCount: callHits?.get(d.id) ?? 0
 			};
 			return {
-				...d,
+				...base,
 				levels,
 				disabled: isDisabled(overrides, d.id)
 			};
@@ -5105,20 +5199,24 @@ function applyGuards(scopedCtx, active, onHit, confirmer) {
 //#endregion
 //#region lib/types/host/inventory.js
 /**
-* Capability inventory: enumerate the switchable skills, MCP server groups, and
-* plain tools visible to one agent scope, as the descriptor rows the UI lists
-* and the id universe the resolver evaluates against.
+* Capability inventory: enumerate the switchable skills, MCP servers (with one
+* switch per member tool), and plain tools visible to one agent scope, as the
+* descriptor rows the UI lists and the id universe the resolver evaluates
+* against.
 *
 * Three kinds, three sources:
 *   - `skill`: `ctx.skills.snapshot({ scope })` — every model-invocable skill
 *     summary (name + routing description).
 *   - `mcp`:   tools named `mcp__<server>__<rawName>` (the mcp-client public
-*     name grammar), grouped by `<server>` into one switch per server; a group
-*     switch denies every member tool.
+*     name grammar), grouped by `<server>` into one group row that carries its
+*     member tools. Each member gets its OWN switch, and the group's `mcp:<server>`
+*     switch is the members' default (see shared/resolve.ts `mcpMemberStance`):
+*     MCP tools are opt-in, so a member with nothing set anywhere is disabled.
 *   - `tool`:  every other model-facing tool from `ctx.tools.schemas(scope)`.
 *
 * The switch id namespaces are disjoint: `skill:<name>`, `mcp:<server>`,
-* `tool:<name>`. This keeps one flat OverrideMap unambiguous across kinds.
+* `mcptool:<server>/<rest>`, `tool:<name>`. This keeps one flat OverrideMap
+* unambiguous across kinds.
 *
 * @module dsh-capability-toggle-plugin/host/inventory
 */
@@ -5133,17 +5231,36 @@ function skillId(name) {
 function mcpId(server) {
 	return `mcp:${server}`;
 }
+/**
+* Build the `mcptool:<server>/<rawName>` switch id for ONE member tool of a
+* server, where `rawName` is the public name after `mcp__<server>__`. Distinct
+* from {@link mcpId}: the group id is the member's default, the member id is the
+* tool's own switch.
+*/
+function mcpToolId(server, rawName) {
+	return `mcptool:${server}/${rawName}`;
+}
 /** Build the `tool:<name>` switch id. */
 function toolId(name) {
 	return `tool:${name}`;
 }
+/**
+* Attribute one model tool call to the switch id whose row should count it.
+* An MCP call counts on its MEMBER switch (`mcptool:<server>/<rest>`), so the
+* per-tool rows carry their own usage and the server row shows the sum; skills
+* count on the invoked skill (the loader tool's argument), not on `skill`; every
+* other tool counts on its own `tool:<name>` row.
+* @param name - the model-facing tool name that ran.
+* @param args - that call's arguments (used only for the skill loader).
+* @returns the switch id to credit, or undefined when nothing should be.
+*/
 function attributeCall(name, args) {
 	if (name === SKILL_TOOL_NAME) {
 		const skillName = args?.name;
 		return typeof skillName === "string" && skillName !== "" ? skillId(skillName) : void 0;
 	}
 	const mcp = MCP_NAME.exec(name);
-	return mcp !== null ? mcpId(mcp[1]) : toolId(name);
+	return mcp !== null ? mcpToolId(mcp[1], name.slice(mcp[0].length)) : toolId(name);
 }
 /**
 * Enumerate every switchable capability for one agent scope. Pure read: it
@@ -5190,9 +5307,11 @@ async function collectSkills(ctx, scope, cwd, onDrift) {
 	})).sort(byName);
 }
 /**
-* Tool rows split into MCP server groups and plain tools. The `skill` tool
-* itself is excluded — skills are switched on the skills tab, and denying the
-* loader tool would be a coarser, confusing duplicate.
+* Tool rows split into MCP server groups and plain tools. Every MCP member tool
+* keeps its OWN switch id so it can be enabled or disabled on its own; the group
+* row still carries them all, because its switch is their default. The `skill`
+* tool itself is excluded — skills are switched on the skills tab, and denying
+* the loader tool would be a coarser, confusing duplicate.
 */
 function collectTools(ctx, scope, onDrift) {
 	const schemas = ctx.tools.schemas(scope);
@@ -5216,6 +5335,7 @@ function collectTools(ctx, scope, onDrift) {
 			const server = mcp[1];
 			const list = mcpMembers.get(server) ?? [];
 			list.push({
+				id: mcpToolId(server, schema.name.slice(mcp[0].length)),
 				name: schema.name,
 				description: schema.description ?? ""
 			});
@@ -5248,9 +5368,15 @@ function byName(a, b) {
 }
 /**
 * Map every disabled switch id to the concrete tool names it denies, for one
-* inventory. A `tool:<name>` denies that tool; an `mcp:<server>` denies all its
-* member tool names; a `skill:<name>` denies nothing here (skills are enforced
-* by scoped shadow, not tool restriction).
+* inventory. A `tool:<name>` denies that tool; an `mcptool:<server>/<rest>`
+* denies exactly its one member tool; a `skill:<name>` denies nothing here
+* (skills are enforced by scoped shadow, not tool restriction).
+*
+* The GROUP id `mcp:<server>` denies nothing on its own, deliberately: it is the
+* members' default, and the resolver already folded it into each member's
+* effective stance (`disabledIdsForInventory`). Re-checking it here would let a
+* group OFF kill a member explicitly switched ON at the same level, which is the
+* opposite of the "more specific statement wins" rule the panel shows.
 * @param descriptors - the inventory.
 * @param disabledIds - the switch ids resolved to disabled.
 * @returns the concrete tool names to deny through `ctx.tools.restrict`.
@@ -5258,9 +5384,13 @@ function byName(a, b) {
 function deniedToolNames(descriptors, disabledIds) {
 	const denied = [];
 	for (const d of descriptors) {
-		if (!disabledIds.has(d.id)) continue;
-		if (d.kind === "tool") denied.push(d.name);
-		else if (d.kind === "mcp" && d.memberTools !== void 0) for (const m of d.memberTools) denied.push(m.name);
+		if (d.kind === "tool") {
+			if (disabledIds.has(d.id)) denied.push(d.name);
+			continue;
+		}
+		if (d.kind === "mcp" && d.memberTools !== void 0) {
+			for (const m of d.memberTools) if (disabledIds.has(m.id)) denied.push(m.name);
+		}
 	}
 	return denied;
 }
@@ -5583,8 +5713,8 @@ const FRAMEWORK_CONTRACT = {
 	lifecycleEvents: ["agent/created", "agent/disposed"],
 	/** The `Execution` field the pre-execute waterfall routes scope by. */
 	scopeRoutingKey: "exec.agent",
-	/** The MCP public-tool name grammar the inventory groups servers by. */
-	mcpNameGrammar: "mcp__<server>__<tool>",
+	/** The MCP public-tool name grammar, and the per-member switch id derived from it. */
+	mcpNameGrammar: "mcp__<server>__<tool> → mcptool:<server>/<tool>",
 	/** The storage domain holding the three-level override document. */
 	domainName: DOMAIN_NAME
 };
@@ -5598,7 +5728,7 @@ const FRAMEWORK_CONTRACT = {
 */
 function emitContractBanner(ctx) {
 	const c = FRAMEWORK_CONTRACT;
-	ctx.logger.info(`active — enforcement binds events [${c.enforcementEvents.join(", ")}] scoped by "${c.scopeRoutingKey}", groups MCP tools by "${c.mcpNameGrammar}", tracks agent lifecycle via [${c.lifecycleEvents.join(", ")}], and persists stances in the "${c.domainName}" storage domain. If a DSH upgrade renames an enforcement event, the affected guard/lock stops matching WITHOUT error (fail-open); if it renames "agent/disposed", per-agent bindings stop being reclaimed (slow memory leak). Grep this line when auditing an upgrade.`);
+	ctx.logger.info(`active — enforcement binds events [${c.enforcementEvents.join(", ")}] scoped by "${c.scopeRoutingKey}", switches MCP tools by "${c.mcpNameGrammar}" (opt-in: a member with nothing set anywhere is denied), tracks agent lifecycle via [${c.lifecycleEvents.join(", ")}], and persists stances in the "${c.domainName}" storage domain. If a DSH upgrade renames an enforcement event, the affected guard/lock stops matching WITHOUT error (fail-open); if it renames "agent/disposed", per-agent bindings stop being reclaimed (slow memory leak). Grep this line when auditing an upgrade.`);
 }
 /**
 * Verify each required service actually resolves AND still exposes the members
@@ -5657,7 +5787,8 @@ function makeWarnOnce(ctx) {
 * and applies it to the agent's own scope across three seams:
 *
 *   - tools: `tools.restrict({ deny })` removes every disabled plain tool and
-*     every member tool of a disabled MCP server group from the agent's
+*     every disabled MCP member tool (each MCP tool has its own switch, resolved
+*     member-over-server-group-over-off; see shared/resolve.ts) from the agent's
 *     inherited surface. A denied tool leaves the model schema set, so the next
 *     `request/header` snapshot no longer advertises it, and any call the model
 *     still attempts is refused by the restriction.
@@ -5796,13 +5927,16 @@ var AgentBinding = class {
 	}
 	/**
 	* The set of switch ids resolved to disabled for this agent, over an
-	* already-collected inventory.
+	* already-collected inventory. The MCP family is resolved per MEMBER tool
+	* (member stance, then its server group's, then the opt-in `off` default), so
+	* the returned set carries the member ids the tools seam denies — see
+	* `disabledIdsForInventory`.
 	* @param descriptors - this agent's inventory.
 	* @returns the disabled switch ids.
 	*/
 	disabledSet(descriptors) {
 		const overrides = this.store.layered(this.projectKey, this.sessionKey);
-		return new Set(disabledIds(overrides, descriptors.map((d) => d.id)));
+		return new Set(disabledIdsForInventory(descriptors, overrides));
 	}
 	/**
 	* Dispose the current application and install a fresh one from the current

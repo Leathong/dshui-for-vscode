@@ -56,6 +56,36 @@ export declare function isDisabled(overrides: LayeredOverrides, id: string): boo
  */
 export declare function isGuardActive(overrides: LayeredOverrides, id: string): boolean;
 /**
+ * Resolve one MCP member tool's effective stance. MCP tools are the second
+ * OPT-IN family (after `guard`): a member resolves from the FIRST level that
+ * says something, where its OWN stance at that level beats its server group's,
+ * and a level silent for both falls through. When every level is silent for
+ * both, the answer is `off` — the plugin's "every MCP tool starts disabled,
+ * enable what you need" default.
+ *
+ * The group's stance is therefore a DEFAULT for its members, not an override of
+ * them: `mcp:<server>` ON enables every member that has not been set OFF at the
+ * same or a nearer level (one gesture for a whole server), and a member's own
+ * `on` at a level beats a group `off` at the SAME level — the more specific
+ * statement wins. To keep a whole server silent, leave the members unset here or
+ * clear them, rather than relying on the group alone.
+ * @param overrides - the three level maps.
+ * @param memberId - the member's `mcptool:<server>/<rest>` switch key.
+ * @param groupId - the server's `mcp:<server>` switch key.
+ * @returns the winning explicit stance, or `off` when nothing is set.
+ */
+export declare function mcpMemberStance(overrides: LayeredOverrides, memberId: string, groupId: string): Exclude<ToggleState, 'inherit'>;
+/**
+ * Whether one MCP member tool resolves to disabled. `true` unless the member —
+ * or its server group at a level the member leaves silent — says `on`, since an
+ * MCP tool defaults to off.
+ * @param overrides - the three level maps.
+ * @param memberId - the member's switch key.
+ * @param groupId - the server's switch key.
+ * @returns `true` when the tool is denied.
+ */
+export declare function isMcpMemberDisabled(overrides: LayeredOverrides, memberId: string, groupId: string): boolean;
+/**
  * The complete set of capability ids that resolve to disabled, across a known
  * id universe. Ids the caller does not list are not considered — a stored
  * stance for an id no longer present is inert until the id reappears.
@@ -64,6 +94,28 @@ export declare function isGuardActive(overrides: LayeredOverrides, id: string): 
  * @returns the disabled ids, in the input order.
  */
 export declare function disabledIds(overrides: LayeredOverrides, ids: readonly string[]): string[];
+/**
+ * The complete set of switch ids that resolve to disabled across one INVENTORY:
+ * the id universe an agent's enforcement is applied against. Unlike
+ * {@link disabledIds} (a flat default-on evaluation over a list of ids), this
+ * walks the descriptor tree so the two families whose default is not "enabled"
+ * are read against their own rule:
+ *
+ *   - `mcp`: a member tool resolves through {@link isMcpMemberDisabled}
+ *     (member stances, then its server group's, then the opt-in `off` default),
+ *     so its MEMBER id — not the group id — is what the tools seam denies. The
+ *     group id is additionally reported when NOT ONE member is enabled, which is
+ *     the group row's "this whole server is off" reading; the tools seam ignores
+ *     it (see `deniedToolNames`).
+ *   - every other family (skill/tool/prompt/approval/guard): the flat
+ *     default-on {@link isDisabled} read, unchanged. A `guard` id listed here
+ *     is inert for the tool/skill seams; guards are enforced by their own
+ *     pre-execute listener (see `AgentBinding.installGuards`).
+ * @param descriptors - the inventory to resolve against.
+ * @param overrides - the three level maps.
+ * @returns the disabled switch ids, in inventory order.
+ */
+export declare function disabledIdsForInventory(descriptors: readonly CapabilityDescriptor[], overrides: LayeredOverrides): string[];
 /**
  * Build the UI projection from an inventory and the layered overrides — the
  * pure core of the per-row transform. Shared by the live-agent binding (which
@@ -74,9 +126,16 @@ export declare function disabledIds(overrides: LayeredOverrides, ids: readonly s
  * against a known inventory, independent of whether enforcement is applied
  * right now.
  *
- * A `guard` row is opt-in (default off): its resolved effect is ACTIVE
- * (`isGuardActive`, off fallback) and it carries a hit count. Every other
- * family is default-on: its effect is DISABLED (`isDisabled`, on fallback).
+ * Three default directions ride this one transform, each read against its own
+ * family default:
+ *   - `guard` is opt-in: its resolved effect is ACTIVE (`isGuardActive`, off
+ *     fallback) and it carries a hit count.
+ *   - an `mcp` group row carries its member tools as RESOLVED member rows, each
+ *     opt-in too (`isMcpMemberDisabled`: `off` unless the member or its server
+ *     says `on`). The group's own effect is "not one member is callable", so the
+ *     server row dims exactly when it offers the model nothing.
+ *   - every other family is default-on: its effect is DISABLED (`isDisabled`,
+ *     on fallback).
  * The two counters pair up by family: `hitCount` answers "did this safety rule
  * fire?" and rides only guard rows, while `callCount` answers "how much did the
  * model actually use this?" and rides only the callable families

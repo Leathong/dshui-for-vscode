@@ -1,18 +1,22 @@
 /**
- * Capability inventory: enumerate the switchable skills, MCP server groups, and
- * plain tools visible to one agent scope, as the descriptor rows the UI lists
- * and the id universe the resolver evaluates against.
+ * Capability inventory: enumerate the switchable skills, MCP servers (with one
+ * switch per member tool), and plain tools visible to one agent scope, as the
+ * descriptor rows the UI lists and the id universe the resolver evaluates
+ * against.
  *
  * Three kinds, three sources:
  *   - `skill`: `ctx.skills.snapshot({ scope })` — every model-invocable skill
  *     summary (name + routing description).
  *   - `mcp`:   tools named `mcp__<server>__<rawName>` (the mcp-client public
- *     name grammar), grouped by `<server>` into one switch per server; a group
- *     switch denies every member tool.
+ *     name grammar), grouped by `<server>` into one group row that carries its
+ *     member tools. Each member gets its OWN switch, and the group's `mcp:<server>`
+ *     switch is the members' default (see shared/resolve.ts `mcpMemberStance`):
+ *     MCP tools are opt-in, so a member with nothing set anywhere is disabled.
  *   - `tool`:  every other model-facing tool from `ctx.tools.schemas(scope)`.
  *
  * The switch id namespaces are disjoint: `skill:<name>`, `mcp:<server>`,
- * `tool:<name>`. This keeps one flat OverrideMap unambiguous across kinds.
+ * `mcptool:<server>/<rest>`, `tool:<name>`. This keeps one flat OverrideMap
+ * unambiguous across kinds.
  *
  * @module dsh-capability-toggle-plugin/host/inventory
  */
@@ -30,17 +34,38 @@ export function skillId(name) {
 export function mcpId(server) {
     return `mcp:${server}`;
 }
+/**
+ * Build the `mcptool:<server>/<rawName>` switch id for ONE member tool of a
+ * server, where `rawName` is the public name after `mcp__<server>__`. Distinct
+ * from {@link mcpId}: the group id is the member's default, the member id is the
+ * tool's own switch.
+ */
+export function mcpToolId(server, rawName) {
+    return `mcptool:${server}/${rawName}`;
+}
 /** Build the `tool:<name>` switch id. */
 export function toolId(name) {
     return `tool:${name}`;
 }
+/**
+ * Attribute one model tool call to the switch id whose row should count it.
+ * An MCP call counts on its MEMBER switch (`mcptool:<server>/<rest>`), so the
+ * per-tool rows carry their own usage and the server row shows the sum; skills
+ * count on the invoked skill (the loader tool's argument), not on `skill`; every
+ * other tool counts on its own `tool:<name>` row.
+ * @param name - the model-facing tool name that ran.
+ * @param args - that call's arguments (used only for the skill loader).
+ * @returns the switch id to credit, or undefined when nothing should be.
+ */
 export function attributeCall(name, args) {
     if (name === SKILL_TOOL_NAME) {
         const skillName = args?.name;
         return typeof skillName === 'string' && skillName !== '' ? skillId(skillName) : undefined;
     }
     const mcp = MCP_NAME.exec(name);
-    return mcp !== null ? mcpId(mcp[1]) : toolId(name);
+    return mcp !== null
+        ? mcpToolId(mcp[1], name.slice(mcp[0].length))
+        : toolId(name);
 }
 /**
  * Enumerate every switchable capability for one agent scope. Pure read: it
@@ -88,9 +113,11 @@ async function collectSkills(ctx, scope, cwd, onDrift) {
         .sort(byName);
 }
 /**
- * Tool rows split into MCP server groups and plain tools. The `skill` tool
- * itself is excluded — skills are switched on the skills tab, and denying the
- * loader tool would be a coarser, confusing duplicate.
+ * Tool rows split into MCP server groups and plain tools. Every MCP member tool
+ * keeps its OWN switch id so it can be enabled or disabled on its own; the group
+ * row still carries them all, because its switch is their default. The `skill`
+ * tool itself is excluded — skills are switched on the skills tab, and denying
+ * the loader tool would be a coarser, confusing duplicate.
  */
 function collectTools(ctx, scope, onDrift) {
     const schemas = ctx.tools.schemas(scope);
@@ -120,7 +147,14 @@ function collectTools(ctx, scope, onDrift) {
         if (mcp !== null) {
             const server = mcp[1];
             const list = mcpMembers.get(server) ?? [];
-            list.push({ name: schema.name, description: schema.description ?? '' });
+            list.push({
+                // The switch key is built from the PUBLIC name's suffix, so an id never
+                // has to be parsed back into a wire tool name (the raw name is only ever
+                // sent in `tools/call`, see the mcp-client naming contract).
+                id: mcpToolId(server, schema.name.slice(mcp[0].length)),
+                name: schema.name,
+                description: schema.description ?? '',
+            });
             mcpMembers.set(server, list);
             continue;
         }
@@ -149,9 +183,15 @@ function byName(a, b) {
 }
 /**
  * Map every disabled switch id to the concrete tool names it denies, for one
- * inventory. A `tool:<name>` denies that tool; an `mcp:<server>` denies all its
- * member tool names; a `skill:<name>` denies nothing here (skills are enforced
- * by scoped shadow, not tool restriction).
+ * inventory. A `tool:<name>` denies that tool; an `mcptool:<server>/<rest>`
+ * denies exactly its one member tool; a `skill:<name>` denies nothing here
+ * (skills are enforced by scoped shadow, not tool restriction).
+ *
+ * The GROUP id `mcp:<server>` denies nothing on its own, deliberately: it is the
+ * members' default, and the resolver already folded it into each member's
+ * effective stance (`disabledIdsForInventory`). Re-checking it here would let a
+ * group OFF kill a member explicitly switched ON at the same level, which is the
+ * opposite of the "more specific statement wins" rule the panel shows.
  * @param descriptors - the inventory.
  * @param disabledIds - the switch ids resolved to disabled.
  * @returns the concrete tool names to deny through `ctx.tools.restrict`.
@@ -159,13 +199,16 @@ function byName(a, b) {
 export function deniedToolNames(descriptors, disabledIds) {
     const denied = [];
     for (const d of descriptors) {
-        if (!disabledIds.has(d.id))
+        if (d.kind === 'tool') {
+            if (disabledIds.has(d.id))
+                denied.push(d.name);
             continue;
-        if (d.kind === 'tool')
-            denied.push(d.name);
-        else if (d.kind === 'mcp' && d.memberTools !== undefined) {
-            for (const m of d.memberTools)
-                denied.push(m.name);
+        }
+        if (d.kind === 'mcp' && d.memberTools !== undefined) {
+            for (const m of d.memberTools) {
+                if (disabledIds.has(m.id))
+                    denied.push(m.name);
+            }
         }
     }
     return denied;

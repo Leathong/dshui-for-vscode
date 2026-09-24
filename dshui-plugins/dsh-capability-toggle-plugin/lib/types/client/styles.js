@@ -178,16 +178,25 @@ const CSS = `
 .dshct-row-desc-btn:hover:not(:disabled){color:var(--dsw-alias-label-primary)}
 .dshct-row-desc-btn:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary);outline-offset:2px;border-radius:4px}
 
-/* mcp row: name is a disclosure button; members list read-only below the desc */
+/* mcp members: EVERY tool is its own switchable sub-row, laid out on the same
+   column grid as the parent so its level switches land under the same column
+   headers. The list sits behind a vertical rule and is prefixed by one line
+   stating the opt-in default, because a hidden default is the whole risk of a
+   per-tool switch: the server row above is these tools' default, not a second
+   independent gate. */
+.dshct-members-wrap{margin-top:7px;padding-left:12px;border-left:2px solid var(--dsw-alias-border-l1)}
+.dshct-members-hint{padding:0 0 4px;color:var(--dsw-alias-label-caption);font-size:11px;line-height:1.5}
+.dshct-members{list-style:none;margin:0;padding:0}
+.dshct-member{padding:5px 0}
+.dshct-member+.dshct-member{border-top:1px solid var(--dsw-alias-border-l1)}
+.dshct-member[data-disabled=true]{opacity:.66}
+.dshct-member-top{display:grid;grid-template-columns:1fr var(--dshct-cols);align-items:center;gap:0 10px}
+.dshct-member-name{min-width:0;display:flex;align-items:center;gap:6px;overflow:hidden;color:var(--dsw-alias-label-secondary);font-size:11.5px;font-weight:600}
+.dshct-member-desc{margin-top:2px;color:var(--dsw-alias-label-secondary);font-size:11px;line-height:1.45;overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2}
 .dshct-row-name-btn{border:0;background:transparent;font:inherit;font-weight:600;text-align:left;cursor:pointer;padding:0}
 .dshct-caret{flex:none;font-size:13px;line-height:1;color:var(--dsw-alias-label-secondary);transition:transform .14s ease,color .14s ease}
 .dshct-caret[data-open=true]{transform:rotate(90deg);color:var(--dsw-alias-state-business-primary)}
 .dshct-row-name-btn:hover .dshct-caret{color:var(--dsw-alias-label-primary)}
-.dshct-members{list-style:none;margin:7px 0 1px;padding:0 0 0 14px;border-left:2px solid var(--dsw-alias-border-l1)}
-.dshct-member{display:flex;flex-direction:column;gap:1px;padding:4px 0}
-.dshct-member+.dshct-member{border-top:1px solid var(--dsw-alias-border-l1)}
-.dshct-member-name{color:var(--dsw-alias-label-secondary);font-size:11.5px;font-weight:600;word-break:break-word;overflow-wrap:anywhere}
-.dshct-member-desc{color:var(--dsw-alias-label-secondary);font-size:11px;line-height:1.45;overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2}
 
 /* One level's stance = a SINGLE icon button showing ONLY the current stance
    (not all three at once — the earlier three-segment control turned every row

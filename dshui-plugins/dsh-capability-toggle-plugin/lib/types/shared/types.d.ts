@@ -48,14 +48,42 @@ export type ToggleState = 'on' | 'off' | 'inherit';
 /** The three override scopes, highest priority first. */
 export type ToggleLevel = 'session' | 'project' | 'global';
 /**
- * One member tool of an MCP server group: its public tool name and one-line
- * summary, shown when a user expands the group row to inspect its contents.
+ * One member tool of an MCP server group: its own switch key, its public tool
+ * name, and one-line summary. Listed when a user expands the group row, where
+ * each member carries the same three-level switches as a top-level row.
  */
 export interface McpMemberTool {
-    /** The public `mcp__<server>__<rawName>` tool name a group switch denies. */
+    /**
+     * Stable switch key for this ONE tool: `mcptool:<server>/<rest>`, where
+     * `<rest>` is the public name after `mcp__<server>__`. Distinct from the
+     * group's `mcp:<server>` key: the group is the member's DEFAULT, so a member
+     * can be switched without touching its server.
+     */
+    readonly id: string;
+    /** The public `mcp__<server>__<rawName>` tool name this switch denies. */
     readonly name: string;
     /** One-line summary from the tool schema; may be empty. */
     readonly description: string;
+}
+/**
+ * One MCP member tool as the panel renders it: the descriptor above plus its
+ * per-level stances and resolved effect. MCP tools are an OPT-IN family — a
+ * member that is silent at every level and whose server group is silent too
+ * resolves to DISABLED, so the default for every MCP tool is "off until
+ * explicitly enabled". See `mcpMemberStance` in ./resolve.ts for the
+ * member-over-group-over-off chain.
+ */
+export interface McpMemberRow extends McpMemberTool {
+    /** This tool's own stance at each level (`inherit` when the level is silent). */
+    readonly levels: Readonly<Record<ToggleLevel, ToggleState>>;
+    /**
+     * Resolved effect of the merged decision: `true` when this tool is denied,
+     * after the member's own stances, then its server group's stances, then the
+     * opt-in `off` default.
+     */
+    readonly disabled: boolean;
+    /** Call tally for this one tool, same contract as {@link CapabilityRow.callCount}. */
+    readonly callCount?: number;
 }
 /**
  * One switchable capability as presented to the UI. `id` is the stable switch
@@ -72,9 +100,11 @@ export interface CapabilityDescriptor {
     /** Which tab this row belongs to. */
     readonly kind: CapabilityKind;
     /**
-     * For `mcp` group rows, the tools this server contributes (name + summary);
-     * a switch on the group denies every listed tool, and the UI lists them when
-     * the row is expanded. Absent for `skill` and `tool` rows.
+     * For `mcp` group rows, the tools this server contributes, each with its own
+     * switch key. A switch on the group sets the DEFAULT for every listed tool
+     * (and is the only way to enable a whole server at once); the UI lists them
+     * with per-tool switches when the row is expanded. Absent for `skill` and
+     * `tool` rows.
      */
     readonly memberTools?: readonly McpMemberTool[];
     /**
@@ -123,6 +153,14 @@ export interface CapabilityRow extends CapabilityDescriptor {
      */
     readonly hitCount?: number;
     readonly callCount?: number;
+    /**
+     * For `mcp` group rows: the server's tools as RESOLVED member rows — each
+     * with its own per-level stances, effective on/off, and call tally. Narrower
+     * than the descriptor's `memberTools` (which carries the pristine identity
+     * only), so the panel can render a switch per tool without recomputing the
+     * merge itself.
+     */
+    readonly memberTools?: readonly McpMemberRow[];
 }
 /**
  * The complete projection the Host publishes for the composer panel: every

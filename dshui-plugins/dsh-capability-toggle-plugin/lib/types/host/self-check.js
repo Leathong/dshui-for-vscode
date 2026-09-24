@@ -67,8 +67,8 @@ export const FRAMEWORK_CONTRACT = {
     lifecycleEvents: ['agent/created', 'agent/disposed'],
     /** The `Execution` field the pre-execute waterfall routes scope by. */
     scopeRoutingKey: 'exec.agent',
-    /** The MCP public-tool name grammar the inventory groups servers by. */
-    mcpNameGrammar: 'mcp__<server>__<tool>',
+    /** The MCP public-tool name grammar, and the per-member switch id derived from it. */
+    mcpNameGrammar: 'mcp__<server>__<tool> → mcptool:<server>/<tool>',
     /** The storage domain holding the three-level override document. */
     domainName: DOMAIN_NAME,
 };
@@ -83,7 +83,7 @@ export const FRAMEWORK_CONTRACT = {
 export function emitContractBanner(ctx) {
     const c = FRAMEWORK_CONTRACT;
     ctx.logger.info(`active — enforcement binds events [${c.enforcementEvents.join(', ')}] `
-        + `scoped by "${c.scopeRoutingKey}", groups MCP tools by "${c.mcpNameGrammar}", `
+        + `scoped by "${c.scopeRoutingKey}", switches MCP tools by "${c.mcpNameGrammar}" (opt-in: a member with nothing set anywhere is denied), `
         + `tracks agent lifecycle via [${c.lifecycleEvents.join(', ')}], and persists stances in the `
         + `"${c.domainName}" storage domain. `
         + 'If a DSH upgrade renames an enforcement event, the affected guard/lock '

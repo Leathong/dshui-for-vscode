@@ -9,7 +9,7 @@ import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
  * @module dsh-capability-toggle-plugin/client/components
  */
 import { useEffect, useRef, useState } from 'react';
-import { LEVEL_SCOPES, TAB_KINDS, TAB_ORDER, levelsVisible, tabCounts } from './tabs.js';
+import { LEVEL_SCOPES, TAB_KINDS, TAB_ORDER, bulkTargetIds, levelsVisible, tabCounts } from './tabs.js';
 /**
  * The glyph for one segment state. Tiny inline SVGs (no icon-font dependency),
  * sized in `em` so they scale with the button's font-size and inherit its
@@ -49,14 +49,15 @@ function StateGlyph(props) {
  * current stance; the clear badge has its own label.
  */
 function LevelSwitch(props) {
-    const { level, value, disabled, t, onPick } = props;
+    const { level, value, disabled, t, onPick, label } = props;
     // Main-button click flips the enabled sense; an unset level goes to "off"
     // (acting on a default-on capability usually means disabling it here).
     const toggled = value === 'on' ? 'off' : 'on';
     const isSet = value !== 'inherit';
     const levelName = t(`level.${level}`);
-    return (_jsxs("div", { className: "dshct-lvsw", children: [_jsx("button", { type: "button", className: "dshct-lvsw-main", "data-kind": value, disabled: disabled, "aria-label": `${levelName} · ${t(`state.${value}`)}`, title: `${levelName} · ${t(`state.${value}`)}`, onClick: () => onPick(toggled), children: _jsx(StateGlyph, { kind: value }) }), isSet
-                ? (_jsx("button", { type: "button", className: "dshct-lvsw-clear", disabled: disabled, "aria-label": `${levelName} · ${t('state.clear')}`, title: t('state.clear'), onClick: () => onPick('inherit'), children: _jsx("svg", { width: "1em", height: "1em", viewBox: "0 0 16 16", fill: "none", "aria-hidden": "true", children: _jsx("path", { d: "M4.5 4.5l7 7M11.5 4.5l-7 7", stroke: "currentColor", strokeWidth: "2", strokeLinecap: "round" }) }) }))
+    const describe = (state) => `${label === undefined ? '' : `${label} · `}${levelName} · ${state}`;
+    return (_jsxs("div", { className: "dshct-lvsw", children: [_jsx("button", { type: "button", className: "dshct-lvsw-main", "data-kind": value, disabled: disabled, "aria-label": describe(t(`state.${value}`)), title: describe(t(`state.${value}`)), onClick: () => onPick(toggled), children: _jsx(StateGlyph, { kind: value }) }), isSet
+                ? (_jsx("button", { type: "button", className: "dshct-lvsw-clear", disabled: disabled, "aria-label": describe(t('state.clear')), title: t('state.clear'), onClick: () => onPick('inherit'), children: _jsx("svg", { width: "1em", height: "1em", viewBox: "0 0 16 16", fill: "none", "aria-hidden": "true", children: _jsx("path", { d: "M4.5 4.5l7 7M11.5 4.5l-7 7", stroke: "currentColor", strokeWidth: "2", strokeLinecap: "round" }) }) }))
                 : null] }));
 }
 /**
@@ -112,9 +113,13 @@ function BulkActions(props) {
  * description, truncated to one line and revealed in full on hover.
  *
  * An `mcp` row is expandable: its name becomes a disclosure button that reveals
- * the server's member tools (name + summary) below the description. The listing
- * is read-only — a group switch denies every member together, so there are no
- * per-member controls to show.
+ * the server's member tools below the description. Each member is a switchable
+ * sub-row of its own (name, its own level switches, its own result badge), since
+ * every MCP tool is switched separately and DEFAULTS TO DISABLED. The server row
+ * keeps a switch too, and it is the members' DEFAULT: setting the server ON here
+ * enables every member that is not explicitly set OFF at the same or a nearer
+ * level, so one click turns a whole server on. The description line reports how
+ * many of the server's tools are actually callable.
  *
  * `projectDisabled` greys the project segment when the session has no project
  * root to write under; the whole row's controls are also disabled while busy.
@@ -143,6 +148,9 @@ function Row(props) {
     const { name: displayName, desc: displayDesc } = rowDisplayText(row, t);
     const members = row.memberTools ?? [];
     const expandable = row.kind === 'mcp' && members.length > 0;
+    // How many of this server's tools are callable right now: the one number a
+    // user needs at a glance once every MCP tool starts disabled.
+    const enabledMembers = members.reduce((n, m) => n + (m.disabled ? 0 : 1), 0);
     // A guard row reuses `disabled` to mean ACTIVE (opt-in default off). Its
     // status dot lights when active (protection on) — the opposite of the
     // default-on families, where the dot lights when the capability is available
@@ -172,11 +180,13 @@ function Row(props) {
                                     : t('guard.badge.active'))
                                 : t('guard.badge.inactive') }))
                         : (_jsx("span", { className: "dshct-badge", "data-off": row.disabled, title: row.disabled ? t('badge.off.title') : t('badge.on.title'), children: row.disabled ? t('badge.off') : t('badge.on') }))] }), expandable
-                ? (_jsx("button", { type: "button", className: "dshct-row-desc dshct-row-desc-btn", "data-open": expanded, "aria-expanded": expanded, title: t('mcp.expand', { count: members.length }), onClick: () => setExpanded(v => !v), children: displayDesc }))
+                ? (_jsxs("button", { type: "button", className: "dshct-row-desc dshct-row-desc-btn", "data-open": expanded, "aria-expanded": expanded, title: t('mcp.expand', { count: members.length }), onClick: () => setExpanded(v => !v), children: [displayDesc, ' · ', t('mcp.count', { enabled: enabledMembers, total: members.length })] }))
                 : _jsx("div", { className: "dshct-row-desc", title: displayDesc, children: displayDesc }), expandable && expanded
-                ? (_jsx("ul", { className: "dshct-members", children: members.map(m => (_jsxs("li", { className: "dshct-member", children: [_jsx("span", { className: "dshct-member-name", title: m.name, children: m.name }), m.description !== ''
-                                ? _jsx("span", { className: "dshct-member-desc", title: m.description, children: m.description })
-                                : null] }, m.name))) }))
+                ? (_jsxs("div", { className: "dshct-members-wrap", children: [_jsx("div", { className: "dshct-members-hint", children: t('mcp.members.hint') }), _jsx("ul", { className: "dshct-members", children: members.map(m => (_jsxs("li", { className: "dshct-member", "data-disabled": m.disabled, children: [_jsxs("div", { className: "dshct-member-top", children: [_jsxs("div", { className: "dshct-member-name", children: [_jsx("span", { className: "dshct-row-text", title: m.name, children: m.name }), showUsage && m.callCount !== undefined && m.callCount > 0
+                                                        ? (_jsx("span", { className: "dshct-usage", title: t('usage.calls.title', { count: m.callCount }), children: t('usage.calls', { count: m.callCount }) }))
+                                                        : null] }), visibleLevels.map(level => (_jsx(LevelSwitch, { level: level, value: m.levels[level], label: m.name, disabled: disabled || (level === 'project' && projectDisabled), t: t, onPick: next => props.onSet(level, m.id, next) }, level))), _jsx("span", { className: "dshct-badge", "data-off": m.disabled, title: m.disabled ? t('badge.off.title') : t('badge.on.title'), children: m.disabled ? t('badge.off') : t('badge.on') })] }), m.description !== ''
+                                        ? _jsx("div", { className: "dshct-member-desc", title: m.description, children: m.description })
+                                        : null] }, m.id))) })] }))
                 : null] }));
 }
 /**
@@ -184,11 +194,15 @@ function Row(props) {
  * display name and description, lower-cased once per row per render. Search
  * matches against what the user actually SEES (translated strings), not the
  * wire `id`/`name`, so typing a guard's shown label finds it even though its
- * `row.name` is the untranslated preset key.
+ * `row.name` is the untranslated preset key. An MCP server row also indexes its
+ * member tools, so searching a tool name (`mcp__dart__launch_app` or part of its
+ * summary) surfaces the server that owns it instead of hiding it behind a
+ * collapsed disclosure.
  */
 function rowHaystack(row, t) {
     const { name, desc } = rowDisplayText(row, t);
-    return `${name} ${desc}`.toLowerCase();
+    const members = (row.memberTools ?? []).map(m => `${m.name} ${m.description}`).join(' ');
+    return `${name} ${desc} ${members}`.toLowerCase();
 }
 /** The popup body: tab strip, preferences drawer, and the active tab's row list. */
 export function Panel(props) {
@@ -220,7 +234,9 @@ export function Panel(props) {
     // Bulk-action target ids: every row CURRENTLY VISIBLE (active tab + search
     // filter), not the whole inventory and not a manual selection — matching the
     // "search narrows, bulk acts on what's shown" contract the toolbar promises.
-    const visibleIds = rows.map(r => r.id);
+    // An MCP row contributes its member ids too, so a bulk action reaches exactly
+    // the tools the tab now counts (see bulkTargetIds).
+    const visibleIds = rows.flatMap(bulkTargetIds);
     const visibleLevels = levelsVisible(prefs.levels);
     return (_jsxs("div", { className: "dshct-panel", role: "dialog", "aria-label": t('panel.title'), style: { '--dshct-lv-n': visibleLevels.length }, children: [_jsxs("div", { className: "dshct-header", children: [_jsx("span", { className: "dshct-title", children: t('panel.title') }), _jsxs("span", { className: "dshct-header-actions", children: [offCount > 0
                                 ? _jsx("span", { className: "dshct-header-sub", "data-has": true, children: t('header.off', { count: offCount }) })
