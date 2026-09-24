@@ -317,7 +317,7 @@ VS Code 侧边栏视图（webview）
   空白新会话。存储与初始定位都按工作区隔离（`dshui_workspace` scope）：新打开一个从无历史会话的
   文件夹，默认落在**该文件夹自己的工作区**的新会话，而不会串到上一个窗口的工作区。固定端口被占用
   时直接报错并提示修改 `dshui.server.port`，不再退回随机端口。
-- **插件装载**：激活时把随扩展分发的五个插件装入 `$DSH_HOME/profiles/node_modules`（同时装入
+- **插件装载**：激活时把随扩展分发的插件装入 `$DSH_HOME/profiles/node_modules`（同时装入
   扩展自身 `node_modules` 作为 loader 回退），并经 `--patch` 覆盖层接入（见 `patch.yml`）：
   - `dshui-host-ensure-workspace`——host 插件：启动时把工作目录注册为 Workspace，并向页面注入
     `window.__DSHUI_WORKSPACE__`（scope 路径）、`CSS_OVERRIDES` 免重建样式覆盖层（含字号收敛）、
@@ -337,6 +337,13 @@ VS Code 侧边栏视图（webview）
     `uiWorkspace` / `uiConversation` 服务就缺席，20 多个注入这两个服务的客户端插件会永远停在 PENDING
     ——浏览器表现为 **Failed to load plugins**。因此拷贝前必须先 `pnpm run build:lib:client`
     （陈旧产物仍声明上游 `@deepseek-ai/...` id），`copy-clients.mjs` 会校验并在不匹配时报错。
+  - `dshui-host-workspace-changes-stub`——host 插件：官方每轮改动采集器
+    （`@deepseek-ai/dsh-workspace-changes`，渲染 GUI 的「编辑了 N 个文件」卡片与右侧变更审查）由
+    `patch.yml` 停用，本插件只补上它留下的空 `workspaceChanges` 服务。这个配对是强制的：该服务
+    缺席会让 stock `ui-deliverables` 的 Host 半边永远 PENDING，连带 present
+    交付卡片、原生打开、正文文件提及与 present 系统提示词段一起失效；
+    `scripts/verify-overlay.mjs` 在打包时校验这一配对（停用必须有替换、替换行必须真实存在）。
+    修改列表因此只剩 `dsh-rollback-plugin` 的 dock 一种来源。
   - `dsh-rollback-plugin`——修改回滚插件：记录 agent 的 `write` / `edit` 修改与会话基线快照，
     提供「修改列表」dock 与原生 Diff 审查（详见 [修改回滚](#修改回滚)）。
   - `@xmanrui/dsh-im`——第三方 IM 机器人插件（**来源：

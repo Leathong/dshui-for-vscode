@@ -17,6 +17,9 @@ export interface InstalledPlugin {
 
 const PLUGIN_NAMES = [
   'dshui-host-ensure-workspace',
+  // 顶替被 patch.yml 停用的官方 workspace-changes（只提供空的 workspaceChanges
+  // 服务，保住 ui-deliverables 的 Host 半边，见 patch.yml 的配对注释）。
+  'dshui-host-workspace-changes-stub',
   'dshui-client-ui-workspace',
   'dshui-client-ui-conversation',
   'dsh-rollback-plugin',

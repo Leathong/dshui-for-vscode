@@ -27,6 +27,21 @@
 - id: ui-conversation
   disabled: true
 
+# The official per-turn change recorder is off: it snapshots the whole work tree
+# twice per top-level turn and copies every file a file tool touches, to render a
+# changed-files card this extension does not use — the sidebar "modification
+# list" and the native VS Code diff come from `dsh-rollback-plugin` instead.
+#
+# The pairing is mandatory, not cosmetic: `workspace-changes` is the only provider
+# of the `workspaceChanges` service, and the Host half of the stock
+# `ui-deliverables` injects it. Disabling it alone leaves that entry PENDING
+# forever, silently taking the present delivery cards, the authenticated native
+# opens, the closing-message file mentions and the deliverable file-reference
+# system-prompt section with it. The stub inserted below provides the same empty
+# service; `scripts/verify-overlay.mjs` fails the build if either half is missing.
+- id: workspace-changes
+  disabled: true
+
 # The sandbox seam is NOT overridden by this overlay. `bash-sandbox` /
 # `fs-sandbox` are the only providers of the `shell` / `fs` services, and
 # `dsh-whitelist-sandbox` replaces them with whitelist-aware subclasses. That
@@ -66,6 +81,11 @@
 
     - id: dshui-host-ensure-workspace
       name: dshui-host-ensure-workspace
+
+    # Empty stand-in for the disabled `workspace-changes` row's
+    # `workspaceChanges` service (see the pairing comment above).
+    - id: dshui-workspace-changes-stub
+      name: dshui-host-workspace-changes-stub
 
     - id: dsh-rollback-plugin
       name: dsh-rollback-plugin

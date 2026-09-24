@@ -356,7 +356,7 @@ VS Code sidebar view (webview)
   each folder restores its own last session on the next launch; with no history, it falls back to a
   blank new session. When the fixed port is taken, startup reports an error and asks you to change the
   port (no random-port fallback).
-- **Plugin loading:** on activation, five bundled plugins are installed into
+- **Plugin loading:** on activation, the bundled plugins are installed into
   `$DSH_HOME/profiles/node_modules` (with the extension's own `node_modules` as a loader fallback) and
   wired in through the `--patch` overlay (see `patch.yml`):
   - `dshui-host-ensure-workspace` — the host plugin: registers the working directory as a Workspace at
@@ -382,6 +382,15 @@ VS Code sidebar view (webview)
     injecting them PENDING forever (**Failed to load plugins** in the browser). Rebuild with
     `pnpm run build:lib:client` before copying (a stale build still declares the upstream
     `@deepseek-ai/...` id); `copy-clients.mjs` verifies the id and fails loudly on a mismatch.
+  - `dshui-host-workspace-changes-stub` — the host plugin that stands in for the disabled official
+    per-turn change recorder (`@deepseek-ai/dsh-workspace-changes`, which renders the "Edited N files"
+    card and the change-review tab): `patch.yml` disables that row, and this plugin supplies the empty
+    `workspaceChanges` service it left behind. The pairing is mandatory — without the service the Host
+    half of the stock `ui-deliverables` stays PENDING forever, silently taking the present delivery
+    cards, the native opens, the closing-message file mentions and the deliverable file-reference
+    system-prompt section with it. `scripts/verify-overlay.mjs` enforces the pairing at package time
+    (a disable must have its replacement, and the replacement must exist). The "Modifications" list
+    therefore has exactly one source: the `dsh-rollback-plugin` dock.
   - `dsh-rollback-plugin` — the modification-rollback plugin: records the agent's `write` / `edit`
     modifications and the session baseline snapshot, and provides the "Modifications" dock and native
     diff review (see [Rollback (Reviewing Modifications)](#rollback-reviewing-modifications)).
