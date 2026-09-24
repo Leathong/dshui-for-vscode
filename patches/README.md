@@ -85,7 +85,12 @@ RPC；上游 0.1.7 新增的归档/置顶行操作保留并存）、每条用户
   携带 `dshuiOrigin`，并把它透传给 opener internals（0.1.7 起 opener 多了
   `openNativeAssociatedPath` / file-application 分支，dshui 的三处调用点已对齐）。`verifyDesktopPath`
   校验前先经 `dshuiHomePath` 展开 `~`：浏览器不知道账号家目录，家目录链接只能以 `~` 拼写送到 Host，
-  若直接 `resolve` 会被钉在服务器工作目录下（`<cwd>/~/.dsh/...`）。
+  若直接 `resolve` 会被钉在服务器工作目录下（`<cwd>/~/.dsh/...`）。`verifyDesktopPath` 的校验同时接受
+  软链别名：上游要求文件系统解析出的规范路径与浏览器给的拼写逐字相等，而文件系统按 realpath 标识目标，
+  macOS 上 `/tmp` 是 `/private/tmp`、`$TMPDIR` 是 `/private/var/...`，于是任何指向临时目录的链接
+  （agent 产出的截图、spill 文件等）都被判为「Path has no verified Host path」（422）。现在把请求拼写
+  也过一次 Host realpath，与解析结果一致即通过；Host 无法规范化的路径照旧拒绝。回归用例见
+  `tests/session-open-workspace-path.host.spec.ts` 的「opens a path spelled through a symlinked directory」。
 - `packages/api/settings-controller/src/index.ts`：`openSettingsDocument(dshuiOrigin, signal)` 同样
   透传点击来源（0.1.7 起 SettingsController 只保留 `openTextFile`）。
 - `packages/client/ui-chat/src/client/apply.ts` 与

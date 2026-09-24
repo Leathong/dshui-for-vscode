@@ -229,6 +229,10 @@ popup**:
   `./`/`../` prefixes, which cannot rise above that anchor and are dropped) is expanded against the
   account home by the server. The browser cannot read the home directory, so such a destination keeps
   its `~` spelling for the host instead of becoming `<cwd>/~/.dsh/...`.
+- **Absolute paths** also open — including a file an agent wrote into a temporary area (`/tmp/…`,
+  `$TMPDIR/…`). The host verifies them through `realpath`, so a symlinked spelling (macOS `/tmp` →
+  `/private/tmp`, `$TMPDIR` → `/private/var/...`) is no longer rejected as
+  "Path has no verified Host path".
 - Under the shared backend, each window registers its workspace and bridge in
   `$DSH_HOME/dshui-bridges.json`. The patch prefers the **window where the click happened**: the client
   attaches the session's workspace directory to the open request (`dshuiOrigin`), and when that

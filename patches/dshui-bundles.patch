@@ -25,14 +25,15 @@ index 03c697734b..f421bb4278 100644
        throw new RemoteError(
          'gateway/internal',
 diff --git a/packages/api/session-controller/src/index.ts b/packages/api/session-controller/src/index.ts
-index 5796434086..f1c515d36a 100644
+index 5796434086..fa9c024bb7 100644
 --- a/packages/api/session-controller/src/index.ts
 +++ b/packages/api/session-controller/src/index.ts
-@@ -1,14 +1,14 @@
+@@ -1,14 +1,15 @@
  /** Session Remote owner: cold reads, explicit Agent commands, and live control state. */
  
 -import { hostname } from 'node:os'
 -import { resolve } from 'node:path'
++import { realpath } from 'node:fs/promises'
 +import { homedir, hostname } from 'node:os'
 +import { join, resolve } from 'node:path'
  import type { Agent } from '@deepseek-ai/dsh-agent'
@@ -46,7 +47,7 @@ index 5796434086..f1c515d36a 100644
  import type { SessionId } from '@deepseek-ai/dsh-session'
  import type { SessionInspection } from '@deepseek-ai/dsh-session-persistence'
  import { SessionQueryError, type SessionObservation } from '@deepseek-ai/dsh-session-query'
-@@ -95,6 +95,21 @@ export interface SessionControllerInternals {
+@@ -95,6 +96,41 @@ export interface SessionControllerInternals {
    readonly canOpenPath?: () => boolean
  }
  
@@ -65,10 +66,30 @@ index 5796434086..f1c515d36a 100644
 +  return path
 +}
 +
++/**
++ * dshui patch: the Host's own canonical spelling of one requested path, or the
++ * input when nothing there can be canonicalized. The filesystem backend
++ * identifies targets by realpath, so a spelling that walks through a symlinked
++ * directory resolves to a different string while naming the same file — on
++ * macOS `/tmp` is `/private/tmp` and `$TMPDIR` is `/private/var/...`, which made
++ * every link into a temporary area unverifiable.
++ * @param path - absolute Host path.
++ * @returns the realpath when it resolves, otherwise the input.
++ */
++async function dshuiCanonicalPath(path: string): Promise<string> {
++  try {
++    return await realpath(path)
++  } catch {
++    // Missing or unreadable: the identity comparison decides, exactly as it
++    // did before symlink aliases were accepted.
++    return path
++  }
++}
++
  /** Host service backing the generated `ctx.remote.session` namespace. */
  export class SessionController extends TypertRemoteService {
    static inject = [
-@@ -120,7 +135,7 @@ export class SessionController extends TypertRemoteService {
+@@ -120,7 +156,7 @@ export class SessionController extends TypertRemoteService {
    private readonly controlState: SessionControlController
    private readonly history: SessionHistoryController
    private readonly listState: ApiSessionList
@@ -77,7 +98,7 @@ index 5796434086..f1c515d36a 100644
    private readonly fileApplications: typeof nativeFileApplications
    private readonly openFileApplication: typeof openNativeFileApplication
    private readonly revealPath: (path: string, signal: AbortSignal) => Promise<void>
-@@ -325,9 +340,13 @@ export class SessionController extends TypertRemoteService {
+@@ -325,9 +361,13 @@ export class SessionController extends TypertRemoteService {
    ): Promise<SessionOpenWorkspacePathValue> {
      try {
        const path = await this.verifyDesktopPath(request.path, signal)
@@ -92,7 +113,7 @@ index 5796434086..f1c515d36a 100644
        return { opened: true }
      } catch (error: unknown) {
        if (signal.aborted) throw new RemoteError('gateway/cancelled', 'path open was aborted', {})
-@@ -366,7 +385,7 @@ export class SessionController extends TypertRemoteService {
+@@ -366,10 +406,17 @@ export class SessionController extends TypertRemoteService {
    private async verifyDesktopPath(path: string, signal: AbortSignal): Promise<string> {
      if (path.length === 0) throw new RemoteError('gateway/bad-request', 'A non-empty file path is required', {})
      signal.throwIfAborted()
@@ -100,7 +121,18 @@ index 5796434086..f1c515d36a 100644
 +    const hostPath = resolve(dshuiHomePath(path))
      const { fs } = this.ctx
      const mapped = fs.processPathFromHostPath(hostPath)
-     if (mapped === undefined || fs.processPath(await fs.resolve(mapped, { signal })) !== hostPath) {
+-    if (mapped === undefined || fs.processPath(await fs.resolve(mapped, { signal })) !== hostPath) {
++    if (mapped === undefined) {
++      throw new RemoteError('gateway/bad-request', 'Path has no verified Host path', {})
++    }
++    const canonical = fs.processPath(await fs.resolve(mapped, { signal }))
++    // dshui patch: accept a symlink alias — the requested spelling must name
++    // the same canonical target the filesystem resolved. A path the Host
++    // cannot canonicalize back to that target still refuses.
++    if (canonical !== hostPath && canonical !== await dshuiCanonicalPath(hostPath)) {
+       throw new RemoteError('gateway/bad-request', 'Path has no verified Host path', {})
+     }
+     signal.throwIfAborted()
 diff --git a/packages/api/session-controller/src/types.ts b/packages/api/session-controller/src/types.ts
 index 84378cc34d..a95be18c8a 100644
 --- a/packages/api/session-controller/src/types.ts
@@ -222,17 +254,18 @@ index 137eeeb190..cf87f92fe8 100644
 +  })
  })
 diff --git a/packages/api/session-controller/tests/session-open-workspace-path.host.spec.ts b/packages/api/session-controller/tests/session-open-workspace-path.host.spec.ts
-index e8216b5214..1fd3ffb139 100644
+index e8216b5214..7b9e9d55ee 100644
 --- a/packages/api/session-controller/tests/session-open-workspace-path.host.spec.ts
 +++ b/packages/api/session-controller/tests/session-open-workspace-path.host.spec.ts
-@@ -1,4 +1,5 @@
+@@ -1,4 +1,6 @@
 -import { resolve } from 'node:path'
-+import { homedir } from 'node:os'
++import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
++import { homedir, tmpdir } from 'node:os'
 +import { join, resolve } from 'node:path'
  import * as nativeCommand from '@deepseek-ai/dsh-native-command'
  import { Context } from '@deepseek-ai/cordis'
  import AgentRegistry from '@deepseek-ai/dsh-agent'
-@@ -66,10 +67,27 @@ describe('session/openWorkspacePath', () => {
+@@ -66,10 +68,27 @@ describe('session/openWorkspacePath', () => {
  
      await expect(remote.openWorkspacePath({ path: '/workspace/project/src/a.ts' }, signal))
        .resolves.toEqual({ ok: true, value: { opened: true } })
@@ -261,7 +294,7 @@ index e8216b5214..1fd3ffb139 100644
    it('normalizes relative and absolute Host-resolvable paths', async () => {
      const ctx = await context()
      const openPath = vi.fn((_path: string, _signal: AbortSignal) => Promise.resolve())
-@@ -84,6 +102,25 @@ describe('session/openWorkspacePath', () => {
+@@ -84,6 +103,48 @@ describe('session/openWorkspacePath', () => {
      expect(openPath.mock.calls.map(call => call[0])).toEqual([resolve('/workspace/result.html'), resolve('result.html')])
    })
  
@@ -284,10 +317,33 @@ index e8216b5214..1fd3ffb139 100644
 +    ])
 +  })
 +
++  it('opens a path spelled through a symlinked directory', async () => {
++    const ctx = await context()
++    const openPath = vi.fn((_path: string, _signal: AbortSignal) => Promise.resolve())
++    const remote = createSessionTestRemote(ctx, {
++      defaultModelSelection: () => ({ provider: 'p', model: 'm' }),
++      cwd: '/default',
++      openPath,
++    })
++    const root = await mkdtemp(join(tmpdir(), 'dsh-open-alias-'))
++    onTestFinished(() => rm(root, { recursive: true, force: true }))
++    await mkdir(join(root, 'real'))
++    await symlink(join(root, 'real'), join(root, 'alias'), 'dir')
++    await writeFile(join(root, 'real', 'report.txt'), 'report')
++
++    // The filesystem canonicalizes through realpath, so this spelling resolves
++    // to `<root>/real/report.txt` while naming the same file (macOS `/tmp` and
++    // `$TMPDIR` are symlinks into `/private/...` for the same reason).
++    const spelled = join(root, 'alias', 'report.txt')
++    await expect(remote.openWorkspacePath({ path: spelled }))
++      .resolves.toEqual({ ok: true, value: { opened: true } })
++    expect(openPath).toHaveBeenCalledWith(spelled, expect.anything(), {})
++  })
++
    it('rejects empty paths before opening anything', async () => {
      const ctx = await context()
      const openPath = vi.fn((_path: string, _signal: AbortSignal) => Promise.resolve())
-@@ -214,7 +251,7 @@ it('dispatches default-app opening to the association adapter', async () => {
+@@ -214,7 +275,7 @@ it('dispatches default-app opening to the association adapter', async () => {
    })
    const signal = new AbortController().signal
    await controller.openWorkspacePath({ path: '/report.html' }, signal)
