@@ -90,10 +90,17 @@
     - id: dsh-rollback-plugin
       name: dsh-rollback-plugin
 
-    # Per-workspace Skill / Host-global MCP enablement (dsh-workspace-scope).
-    # Configured per workspace via .dsh/scope.json, so this row carries no config.
-    - id: dsh-workspace-scope
-      name: dsh-workspace-scope
+    # Capability switches for skills, MCP servers, tools, prompt injections,
+    # approvals and safety guards, at session / project / global level.
+    # Third-party plugin shipped with the extension — source:
+    # https://github.com/lifeopsgo/dsh-capability-toggle-plugin (MIT). It
+    # succeeded `dsh-workspace-scope`, whose per-workspace skill / global-MCP
+    # toggles it covers and widens. The row id below must stay equal to the id
+    # the client bundle declares in `window.__ModuleLoader__.load` (invariant 1
+    # above). Toggle state lives in the plugin's own storage domain, so this row
+    # carries no config.
+    - id: dsh-capability-toggle-plugin
+      name: dsh-capability-toggle-plugin
 
     # IM bot bridge (Feishu/WeChat/DingTalk/WeCom/QQ/Slack/Telegram/Discord/
     # WhatsApp), third-party plugin shipped with the extension.

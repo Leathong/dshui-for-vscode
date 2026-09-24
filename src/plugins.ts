@@ -24,10 +24,42 @@ const PLUGIN_NAMES = [
   'dshui-client-ui-conversation',
   'dsh-rollback-plugin',
   'dsh-whitelist-sandbox',
-  'dsh-workspace-scope',
+  // 能力开关插件（技能 / MCP / 工具 / 提示词 / 审批 / 安全守卫，三级生效）。
+  // 它的运行时裸依赖只有 zod，由扩展自身的依赖闭包提供（dsh-app-boot 按
+  // installation scope 路由），无需随包分发 node_modules。
+  'dsh-capability-toggle-plugin',
   // IM 机器人插件（随扩展分发，含自带运行时依赖 node_modules）。
   '@xmanrui/dsh-im',
 ] as const
+
+/**
+ * 本扩展曾随包分发、现已不再挂载的插件。激活时清掉上一版留下的副本：加载器虽然
+ * 不会挂载没有 patch 行的包，但卸载路径承诺「不留残余」，升级路径同样不该留。
+ */
+const RETIRED_PLUGIN_NAMES = [
+  // 已由 dsh-capability-toggle-plugin 取代：同样按工作区开关 Skill / Host 全局
+  // MCP，并扩展到工具、提示词、审批与安全守卫的会话 / 项目 / 全局三级开关。
+  'dsh-workspace-scope',
+] as const
+
+/**
+ * 尽力删除某个安装目标下的一个插件目录（清理作用域包留下的空 scope 目录）。
+ * @param root - 安装目标根目录（`$DSH_HOME/profiles/node_modules` 或扩展 node_modules）。
+ * @param name - 包名。
+ */
+function removePluginDir(root: string, name: string): void {
+  const target = path.join(root, name)
+  try {
+    fs.rmSync(target, { recursive: true, force: true })
+    // Scoped packages leave their scope directory behind; drop it if empty.
+    if (name.startsWith('@')) {
+      const scopeDir = path.dirname(target)
+      if (fs.readdirSync(scopeDir).length === 0) fs.rmdirSync(scopeDir)
+    }
+  } catch {
+    // best-effort cleanup; nothing else to do
+  }
+}
 
 /** Default dsh home mirroring `@deepseek-ai/dsh-home-paths`. */
 export function resolveDshHome(env = process.env): string {
@@ -56,7 +88,11 @@ export function installPlugins(
 ): InstalledPlugin[] {
   const targets = [path.join(dshHome, 'profiles', 'node_modules')]
   if (extensionNodeModules !== undefined) targets.push(extensionNodeModules)
-  for (const target of targets) fs.mkdirSync(target, { recursive: true })
+  for (const target of targets) {
+    fs.mkdirSync(target, { recursive: true })
+    // 清掉上一版分发过、本版不再挂载的插件副本（见 RETIRED_PLUGIN_NAMES）。
+    for (const name of RETIRED_PLUGIN_NAMES) removePluginDir(target, name)
+  }
   const installed: InstalledPlugin[] = []
   for (const name of PLUGIN_NAMES) {
     const source = path.join(extensionsRoot, name)
@@ -162,17 +198,5 @@ export function ensureProfileBundle(dshHome = resolveDshHome(), profileName = PR
  */
 export function uninstallPlugins(dshHome = resolveDshHome()): void {
   const modulesDir = path.join(dshHome, 'profiles', 'node_modules')
-  for (const name of PLUGIN_NAMES) {
-    const target = path.join(modulesDir, name)
-    try {
-      fs.rmSync(target, { recursive: true, force: true })
-      // Scoped packages leave their scope directory behind; drop it if empty.
-      if (name.startsWith('@')) {
-        const scopeDir = path.dirname(target)
-        if (fs.readdirSync(scopeDir).length === 0) fs.rmdirSync(scopeDir)
-      }
-    } catch {
-      // best-effort cleanup; nothing else to do
-    }
-  }
+  for (const name of [...PLUGIN_NAMES, ...RETIRED_PLUGIN_NAMES]) removePluginDir(modulesDir, name)
 }

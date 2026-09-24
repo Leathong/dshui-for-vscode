@@ -1,0 +1,107 @@
+{
+  "name": "dsh-capability-toggle-plugin",
+  "version": "1.5.0",
+  "private": true,
+  "description": "DSH WebUI capability controls for skills, MCP servers, tools, prompt injections, approvals, and safety guards at session, project, and global levels.",
+  "keywords": [
+    "deepseek-harness",
+    "dsh",
+    "dsh-plugin",
+    "capability",
+    "security"
+  ],
+  "homepage": "https://github.com/lifeopsgo/dsh-capability-toggle-plugin#readme",
+  "bugs": {
+    "url": "https://github.com/lifeopsgo/dsh-capability-toggle-plugin/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lifeopsgo/dsh-capability-toggle-plugin.git"
+  },
+  "type": "module",
+  "main": "lib/index.js",
+  "types": "lib/types/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/types/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./client": {
+      "types": "./lib/types/client/index.d.ts",
+      "default": "./lib/client.js"
+    },
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib/index.js",
+    "lib/client.js",
+    "lib/types/**/*.d.ts",
+    "lib/types/**/*.js",
+    "cordis.patch.yml",
+    "LICENSE",
+    "README.md",
+    "README.zh-CN.md",
+    "docs/screenshot.jpeg"
+  ],
+  "scripts": {
+    "build": "npm run build:types && tsdown",
+    "build:types": "tsc -p tsconfig.build.json && tsc -p tsconfig.build.client.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.client.json --noEmit",
+    "test": "node --test --experimental-strip-types \"test/**/*.test.ts\""
+  },
+  "engines": {
+    "node": "^22.19.0 || >=24.0.0"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-input-trigger",
+        "@deepseek-ai/dsh-client-ui-conversation",
+        "@deepseek-ai/dsh-client-locale"
+      ],
+      "platform": "web"
+    }
+  },
+  "license": "MIT",
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/dsh-agent": ">=0.1.7-0 <0.2.0-0",
+    "@deepseek-ai/dsh-client-locale": ">=0.1.7-0 <0.2.0-0",
+    "@deepseek-ai/dsh-client-ui-conversation": ">=0.1.7-0 <0.2.0-0",
+    "@deepseek-ai/dsh-client-ui-input-trigger": ">=0.1.7-0 <0.2.0-0",
+    "@deepseek-ai/dsh-host-webserver": ">=0.1.7-0 <0.2.0-0",
+    "@deepseek-ai/dsh-scope": ">=0.1.7-0 <0.2.0-0",
+    "@deepseek-ai/dsh-skill": ">=0.1.7-0 <0.2.0-0",
+    "@deepseek-ai/dsh-storage-domain": ">=0.1.7-0 <0.2.0-0",
+    "@deepseek-ai/dsh-system-prompt": ">=0.1.7-0 <0.2.0-0",
+    "@deepseek-ai/dsh-tools": ">=0.1.7-0 <0.2.0-0",
+    "@deepseek-ai/dsh-user-approval": ">=0.1.7-0 <0.2.0-0",
+    "react": "^18.3.1"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "4.0.4",
+    "@deepseek-ai/dsh-agent": "0.1.7-rc.1",
+    "@deepseek-ai/dsh-client-locale": "0.1.7-rc.1",
+    "@deepseek-ai/dsh-client-ui-conversation": "0.1.7-rc.1",
+    "@deepseek-ai/dsh-client-ui-input-trigger": "0.1.7-rc.1",
+    "@deepseek-ai/dsh-host-webserver": "0.1.7-rc.1",
+    "@deepseek-ai/dsh-scope": "0.1.7-rc.1",
+    "@deepseek-ai/dsh-skill": "0.1.7-rc.1",
+    "@deepseek-ai/dsh-storage": "0.1.7-rc.1",
+    "@deepseek-ai/dsh-storage-domain": "0.1.7-rc.1",
+    "@deepseek-ai/dsh-storage-json": "0.1.7-rc.1",
+    "@deepseek-ai/dsh-system-prompt": "0.1.7-rc.1",
+    "@deepseek-ai/dsh-tools": "0.1.7-rc.1",
+    "@deepseek-ai/dsh-user-approval": "0.1.7-rc.1",
+    "@types/node": "^26.4.0",
+    "@types/react": "^18.3.31",
+    "react": "18.3.1",
+    "tsdown": "^0.22.14",
+    "typescript": "^7.0.2",
+    "zod": "^4.4.3"
+  }
+}
