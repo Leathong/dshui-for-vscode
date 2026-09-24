@@ -217,6 +217,12 @@ VS Code 的**输出面板**（View → Output → 下拉选择 **dsh UI**，或�
   同目录多窗口等边界场景退回 owner 的桥；
 - 桥不可用时依次回退：`code` CLI（应用内路径经 `DSHUI_CODE_CLI` 传给服务器，走 CLI socket 协议
   打开正在运行的 VS Code，同样无确认弹窗）→ `open vscode://file/...`（带确认弹窗）；
+- **文本/非文本自动识别**：桥先看扩展名（图片、PDF、压缩包、音视频、可执行文件、字体等），其余读文件头
+  512 字节套用 VS Code 自己的判别规则（出现 NUL 字节即视为二进制；UTF-16 BOM 与「每隔一字节为零」的无
+  BOM UTF-16 例外，故 GBK 等遗留编码仍按文本打开）。非文本改走 `vscode.open`：**图片用内置图片预览**
+  打开，其余二进制交给 VS Code 的二进制查看器——此前这些文件被 `showTextDocument` 直接拒绝，只在日志里
+  留下 “File seems to be binary and cannot be opened as text”；连 `vscode.open` 也失败时退回系统默认
+  程序。行号定位（`#L10`、`:10` 等）只对文本文件生效；
 - `.html` / `.pdf` 仍走系统浏览器打开；可用 `dshui.openFilesInVscode` 关闭（恢复系统默认程序）。
 
 ### 消息里的网络链接

@@ -8,6 +8,10 @@
  * 相比 `open vscode://file/...`（会触发 macOS 外部协议确认弹窗），此路径
  * 完全走 VS Code API，无弹窗、无 OS 中转。
  *
+ * 非文本文件（图片、PDF、压缩包、二进制等）会先被识别出来，改走 `vscode.open`
+ * ——VS Code 据此选择自己内置的编辑器（图片预览、二进制查看器），而不是让
+ * `showTextDocument` 抛 “File seems to be binary and cannot be opened as text”。
+ *
  * 为支持 dsh-rollback-plugin 的“打开并跳到修改行”，请求可额外携带 1-based
  * 的 `line`/`column`/`endLine`/`endColumn`；非法值会被忽略而不是让打开失败。
  * 路径还可能带行号后缀（dsh 网页把 markdown 链接目标原样转发过来），两种写法
@@ -20,6 +24,7 @@
 import * as crypto from 'node:crypto'
 import * as fs from 'node:fs'
 import * as http from 'node:http'
+import * as path from 'node:path'
 import * as vscode from 'vscode'
 import { logger } from './logger'
 
@@ -83,6 +88,86 @@ function isExistingFile(target: string): boolean {
     // reports its own stat error, so this probe stays silent.
     return false
   }
+}
+
+/**
+ * Extensions whose files VS Code never renders as text: its built-in image
+ * preview covers the images, every other family reaches the binary viewer (or
+ * a custom editor the user installed for it). Answering from the name keeps the
+ * common case free of a disk read; the content sniff below decides the rest.
+ * `.svg` is deliberately absent — VS Code opens it as the XML text it is.
+ */
+const NON_TEXT_EXTENSIONS = new Set([
+  // images
+  '.png', '.jpg', '.jpeg', '.jfif', '.gif', '.webp', '.bmp', '.ico', '.icns', '.avif', '.heic', '.tif', '.tiff', '.psd',
+  // documents, archives and packaged apps
+  '.pdf', '.zip', '.gz', '.tgz', '.bz2', '.xz', '.7z', '.rar', '.jar', '.whl', '.war',
+  '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx', '.odt', '.ods', '.odp', '.pages', '.numbers', '.key',
+  // audio and video
+  '.mp3', '.wav', '.flac', '.aac', '.m4a', '.ogg', '.opus', '.mp4', '.m4v', '.mov', '.avi', '.mkv', '.webm',
+  // executables and machine code
+  '.exe', '.dll', '.so', '.dylib', '.node', '.bin', '.wasm', '.class', '.pyc', '.o', '.a', '.lib',
+  // databases and fonts
+  '.db', '.sqlite', '.sqlite3', '.realm', '.ttf', '.otf', '.woff', '.woff2', '.eot',
+])
+
+/** Leading bytes inspected when the extension alone cannot decide. */
+const SNIFF_BYTES = 512
+
+/** UTF-16 byte-order marks, which the text model never inspects for binary content. */
+function hasUtf16Bom(sample: Buffer): boolean {
+  if (sample.length < 2) return false
+  return (sample[0] === 0xff && sample[1] === 0xfe) || (sample[0] === 0xfe && sample[1] === 0xff)
+}
+
+/**
+ * Whether the leading bytes look like binary content — VS Code's own rule,
+ * mirrored so a file this probe calls text is also one the text editor accepts:
+ * a NUL byte makes the file binary, unless every other byte is zero, which is
+ * BOM-less UTF-16 that the text model detects by itself. The scan stops as soon
+ * as neither UTF-16 shape can hold, exactly like the original.
+ */
+function looksBinary(sample: Buffer): boolean {
+  const limit = Math.min(sample.length, SNIFF_BYTES)
+  let sawNul = false
+  let couldBeUtf16Le = true
+  let couldBeUtf16Be = true
+  for (let index = 0; index < limit; index++) {
+    const isNul = sample[index] === 0
+    const isOdd = index % 2 === 1
+    if (isNul) sawNul = true
+    if (couldBeUtf16Le && ((isOdd && !isNul) || (!isOdd && isNul))) couldBeUtf16Le = false
+    if (couldBeUtf16Be && ((isOdd && isNul) || (!isOdd && !isNul))) couldBeUtf16Be = false
+    if (isNul && !couldBeUtf16Le && !couldBeUtf16Be) break
+  }
+  return sawNul && !couldBeUtf16Le && !couldBeUtf16Be
+}
+
+/**
+ * Whether the text editor would refuse one file.
+ *
+ * Known non-text families answer from their extension without a disk read;
+ * everything else is decided by the same leading-byte rule VS Code applies, so
+ * text here means text there too. A legacy encoding such as GBK therefore stays
+ * text (it carries no NUL), and an unreadable file is left to the open itself,
+ * which reports the real error instead of a guess.
+ */
+function isNonTextFile(absPath: string): boolean {
+  if (NON_TEXT_EXTENSIONS.has(path.extname(absPath).toLowerCase())) return true
+  let sample: Buffer
+  try {
+    const handle = fs.openSync(absPath, 'r')
+    try {
+      const buffer = Buffer.alloc(SNIFF_BYTES)
+      sample = buffer.subarray(0, fs.readSync(handle, buffer, 0, SNIFF_BYTES, 0))
+    } finally {
+      fs.closeSync(handle)
+    }
+  } catch {
+    return false
+  }
+  if (sample.length === 0 || hasUtf16Bom(sample)) return false
+  return looksBinary(sample)
 }
 
 export class OpenBridge {
@@ -176,6 +261,13 @@ export class OpenBridge {
         await vscode.commands.executeCommand('vscode.openFolder', uri, { forceNewWindow: true })
         return
       }
+      if (isNonTextFile(targetPath)) {
+        // 非文本：文本编辑器会直接报 “File seems to be binary and cannot be
+        // opened as text”，改交给 vscode.open，由 VS Code 选内置编辑器
+        // （图片走图片预览，其他二进制走二进制查看器）。
+        await this.openNonTextFile(uri)
+        return
+      }
       const options: vscode.TextDocumentShowOptions = { preview: true }
       const line = selection.line ?? target?.line
       if (line !== undefined) {
@@ -186,9 +278,33 @@ export class OpenBridge {
         const endColumnValue = Math.max(startColumn, (selection.endColumn ?? 1) - 1)
         options.selection = new vscode.Selection(startLine, startColumn, endLineValue, endColumnValue)
       }
-      await vscode.window.showTextDocument(uri, options)
+      try {
+        await vscode.window.showTextDocument(uri, options)
+      } catch (error) {
+        // 探针判为文本、文本模型仍然拒绝（探针看不到的编码或体积问题）：
+        // 再走一次 workbench 打开，让用户看到 VS Code 自己的提示而不是只剩日志。
+        logger.info('[dshui] open bridge: retrying outside the text editor:', targetPath, error)
+        await vscode.commands.executeCommand('vscode.open', uri)
+      }
     } catch (error) {
       logger.error('[dshui] open bridge failed to open:', rawPath, error)
+    }
+  }
+
+  /**
+   * Open one non-text path the way a click in the Explorer does: `vscode.open`
+   * resolves the editor per resource (built-in image preview, binary viewer, or
+   * a custom editor the user associated), while `showTextDocument` goes through
+   * the extension-host text path and rejects the very same bytes. Should even
+   * that fail — a binary with no editor at all — the OS default application is
+   * the last resort, so a screenshot still opens somewhere.
+   */
+  private async openNonTextFile(uri: vscode.Uri): Promise<void> {
+    try {
+      await vscode.commands.executeCommand('vscode.open', uri)
+    } catch (error) {
+      logger.warn('[dshui] open bridge: vscode.open failed, falling back to the OS default app:', uri.fsPath, error)
+      if (!(await vscode.env.openExternal(uri))) throw error
     }
   }
 

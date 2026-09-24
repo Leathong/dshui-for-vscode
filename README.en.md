@@ -241,6 +241,14 @@ popup**:
 - When the bridge is unavailable, the fallback chain is: the `code` CLI (in-app paths are passed to the
   server via `DSHUI_CODE_CLI`, which opens the running VS Code through the CLI socket protocol, also
   without a confirmation popup) → `open vscode://file/...` (with a confirmation popup).
+- **Text vs non-text is detected automatically**: the bridge first reads the extension (images, PDFs,
+  archives, audio/video, executables, fonts, …) and otherwise applies VS Code's own rule to the first 512
+  bytes (a NUL byte means binary; a UTF-16 BOM and the "every other byte is zero" BOM-less UTF-16 are the
+  exceptions, so a legacy encoding such as GBK still opens as text). Non-text files go through
+  `vscode.open` instead: **images open in the built-in image preview**, every other binary in VS Code's
+  binary viewer — those files used to be rejected outright by `showTextDocument`, leaving only a
+  "File seems to be binary and cannot be opened as text" line in the log. If `vscode.open` fails too, the
+  OS default application is used. Line targeting (`#L10`, `:10`, …) applies to text files only.
 - `.html` / `.pdf` still open in the system browser; disable with `dshui.openFilesInVscode` (restores
   the OS default handler).
 
