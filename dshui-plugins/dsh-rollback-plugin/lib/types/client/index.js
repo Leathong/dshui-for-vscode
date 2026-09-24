@@ -7,7 +7,7 @@ import { UserRollbackAction } from "./RollbackAction.js";
 // this very apply(). Injecting it would make apply() wait for a service that
 // only apply() itself creates — the fiber stays pending forever and web boot
 // fails with "dsh-rollback-plugin: pending (waiting for service: remote.rollback)".
-export const inject = ['slots', 'remote', 'locale', 'sessions', 'workspaces'];
+export const inject = ['slots', 'remote', 'locale', 'sessions', 'workspaces', 'uiWorkspace'];
 /**
  * Mirrors the native chat message action button (28×28 hit area, borderless,
  * 16px icon, hover background) so the rollback entry blends into the action row.
@@ -85,6 +85,11 @@ export async function apply(ctx) {
         document.head.appendChild(tag);
     }
     const sessions = ctx.sessions;
+    // Session navigation belongs to the workspace shell, not the session
+    // controller: `ctx.sessions` has no `open`, so reveal the child through
+    // `uiWorkspace.openSession` exactly like the shipped chat/conversation
+    // plugins do. The shell retains the session and selects it in the UI.
+    const workspaceNavigation = ctx.get('uiWorkspace');
     // Host workspace membership is keyed by workspaceId, never cwd alone: a
     // session created with `cwd` only lands in the "Ungrouped" bucket. Resolve
     // the source session's workspace so the fresh blank session groups under it.
@@ -107,7 +112,7 @@ export async function apply(ctx) {
         openAt: (path, line) => rollback.openAt(sessionId, path, line),
         forkAt: async (seq) => {
             const childId = await sessions.fork({ sessionId, atSeq: seq, increaseTitle: true });
-            sessions.open(childId);
+            workspaceNavigation.openSession(childId);
             return childId;
         },
         restart: async (cwd) => {
@@ -116,7 +121,7 @@ export async function apply(ctx) {
             // cwd only when the session has no workspace trail (would be Ungrouped).
             const workspace = workspaces.list.getSnapshot().items.find(item => item.sessionIds.includes(sessionId));
             const childId = await sessions.create(workspace === undefined ? { cwd } : { workspaceId: workspace.workspaceId });
-            sessions.open(childId);
+            workspaceNavigation.openSession(childId);
             return childId;
         },
     });

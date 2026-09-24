@@ -1460,7 +1460,8 @@ window.__ModuleLoader__.load({
 			"remote",
 			"locale",
 			"sessions",
-			"workspaces"
+			"workspaces",
+			"uiWorkspace"
 		];
 		async function apply(ctx) {
 			const tagId = "dsh-rollback-plugin/action";
@@ -1472,6 +1473,7 @@ window.__ModuleLoader__.load({
 				document.head.appendChild(tag);
 			}
 			const sessions = ctx.sessions;
+			const workspaceNavigation = ctx.get("uiWorkspace");
 			const workspaces = ctx.workspaces;
 			const unmountRemote = await ctx.remote.$mount(ROLLBACK_REMOTE);
 			ctx.effect(() => () => {
@@ -1497,13 +1499,13 @@ window.__ModuleLoader__.load({
 						atSeq: seq,
 						increaseTitle: true
 					});
-					sessions.open(childId);
+					workspaceNavigation.openSession(childId);
 					return childId;
 				},
 				restart: async (cwd) => {
 					const workspace = workspaces.list.getSnapshot().items.find((item) => item.sessionIds.includes(sessionId));
 					const childId = await sessions.create(workspace === void 0 ? { cwd } : { workspaceId: workspace.workspaceId });
-					sessions.open(childId);
+					workspaceNavigation.openSession(childId);
 					return childId;
 				}
 			});
