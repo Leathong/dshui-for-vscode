@@ -10,9 +10,10 @@
  *
  * 为支持 dsh-rollback-plugin 的“打开并跳到修改行”，请求可额外携带 1-based
  * 的 `line`/`column`/`endLine`/`endColumn`；非法值会被忽略而不是让打开失败。
- * 路径还可能带 GitHub 风格的行锚点（`src/a.ts#L10`、`src/a.ts#L10-L20`，dsh
- * 网页把 markdown 链接目标原样转发过来）；锚点会被剥离后再访问文件系统，
- * 其行号作为选区，显式 `line` 参数优先。
+ * 路径还可能带行号后缀（dsh 网页把 markdown 链接目标原样转发过来），两种写法
+ * 都支持：GitHub 风格 `src/a.ts#L10`、`src/a.ts#L10-L20`，以及 VS Code / 智能体
+ * 风格 `src/a.ts:10`、`src/a.ts:10-20`（含 en dash `–`）。后缀会被剥离后再访问
+ * 文件系统，其行号作为选区，显式 `line` 参数优先。
  * 每个桥实例生成一次性 token（`DSHUI_OPEN_TOKEN`），校验不通过返回 403，
  * 防止本机任意进程触发打开。
  */
@@ -30,6 +31,13 @@ function positiveInteger(value: string | null): number | undefined {
   return parsed
 }
 
+/** 一条链接目标里的行号引用：剥离后缀后的路径加上 1-based 行区间。 */
+interface LineTarget {
+  path: string
+  line: number
+  endLine?: number
+}
+
 /**
  * Parse a GitHub-style line fragment off a path string: `#L10`, `#L10-L20`
  * or `#L10-20`. The dsh web UI forwards markdown link destinations verbatim,
@@ -38,7 +46,7 @@ function positiveInteger(value: string | null): number | undefined {
  * Any other trailing fragment (a `#` inside a real file name, `#L0`, a
  * non-numeric anchor) leaves the path untouched.
  */
-function parseLineFragment(raw: string): { path: string; line: number; endLine?: number } | null {
+function parseLineFragment(raw: string): LineTarget | null {
   const hash = raw.lastIndexOf('#')
   if (hash === -1) return null
   const match = /^L([1-9][0-9]*)(?:-L?([1-9][0-9]*))?$/.exec(raw.slice(hash + 1))
@@ -47,6 +55,34 @@ function parseLineFragment(raw: string): { path: string; line: number; endLine?:
   const endLine = match[2] === undefined ? undefined : Number(match[2])
   if (!Number.isSafeInteger(line) || (endLine !== undefined && !Number.isSafeInteger(endLine))) return null
   return { path: raw.slice(0, hash), line, endLine }
+}
+
+/**
+ * Parse a trailing `:line` / `:line-end` reference off a path string — the
+ * form the dsh agent is told to write for file links (`src/a.ts:94`,
+ * `src/a.ts:94-120`, `src/a.ts:94–120`). The destination reaches the bridge
+ * verbatim, so `statSync` would otherwise fail with ENOENT on the suffixed
+ * string. The suffix must be digits up to the end, so a Windows drive letter
+ * (`C:\...`) and any other colon never match.
+ */
+function parseLineSuffix(raw: string): LineTarget | null {
+  const match = /:([1-9][0-9]*)(?:[-–]([1-9][0-9]*))?$/.exec(raw)
+  if (match === null || match.index === 0) return null
+  const line = Number(match[1])
+  const endLine = match[2] === undefined ? undefined : Number(match[2])
+  if (!Number.isSafeInteger(line) || (endLine !== undefined && !Number.isSafeInteger(endLine))) return null
+  return { path: raw.slice(0, match.index), line, endLine }
+}
+
+/** Whether one path exists on disk as a file; anything else means "not this candidate". */
+function isExistingFile(target: string): boolean {
+  try {
+    return fs.statSync(target).isFile()
+  } catch {
+    // Missing or unreadable: the caller falls back to the literal path and
+    // reports its own stat error, so this probe stays silent.
+    return false
+  }
 }
 
 export class OpenBridge {
@@ -122,11 +158,17 @@ export class OpenBridge {
     selection: { line?: number; column?: number; endLine?: number; endColumn?: number },
   ): Promise<void> {
     try {
-      // A markdown destination may carry a GitHub-style line anchor (`#L10`).
-      // Strip it for the filesystem; its line range becomes the selection
-      // only when the caller sent no explicit line params (those win).
+      // A markdown destination may carry a line reference: a GitHub-style
+      // anchor (`#L10`) or a trailing `:10`. Strip it for the filesystem; its
+      // line range becomes the selection only when the caller sent no
+      // explicit line params (those win).
       const fragment = parseLineFragment(rawPath)
-      const targetPath = fragment?.path ?? rawPath
+      // A colon suffix is a line reference only when the path without it is
+      // an existing file — so a file whose name really ends in `:12` still
+      // opens under its own name, and a directory link is never truncated.
+      const suffix = fragment === null ? parseLineSuffix(rawPath) : null
+      const target = fragment ?? (suffix !== null && isExistingFile(suffix.path) ? suffix : null)
+      const targetPath = target?.path ?? rawPath
       const uri = vscode.Uri.file(targetPath)
       const stat = fs.statSync(targetPath)
       if (stat.isDirectory()) {
@@ -135,11 +177,11 @@ export class OpenBridge {
         return
       }
       const options: vscode.TextDocumentShowOptions = { preview: true }
-      const line = selection.line ?? fragment?.line
+      const line = selection.line ?? target?.line
       if (line !== undefined) {
         const startLine = line - 1
         const startColumn = Math.max(0, (selection.column ?? 1) - 1)
-        const endLine = selection.endLine ?? (selection.line === undefined ? fragment?.endLine : undefined) ?? line
+        const endLine = selection.endLine ?? (selection.line === undefined ? target?.endLine : undefined) ?? line
         const endLineValue = Math.max(startLine, endLine - 1)
         const endColumnValue = Math.max(startColumn, (selection.endColumn ?? 1) - 1)
         options.selection = new vscode.Selection(startLine, startColumn, endLineValue, endColumnValue)
