@@ -32,8 +32,10 @@ dshui 改动（51 个文件，含客户端 bundle + host 运行时两大部分�
   `SteeringMessageNodeView`；用户消息内嵌一个锚定到其 Turn 的
   `conversation.chat.user-actions` 操作条，steering 消息不含；并在上游对 `projectUserText` 的
   引用 chip 投影之上**保留 markdown 链接投影**：`[label](destination)` 中白名单
-  http/https/mailto 渲染为外链锚点，`new URL` 无法解析的目标渲染为经 `references.openFile`
-  按会话 cwd 解析打开的文件按钮，其余绝对 URL 保持字面）、`chat/MessageItem.module.css`
+  http/https/mailto 渲染为外链锚点，`new URL` 无法解析的目标渲染为经 `references.openFile` →
+  `apply.ts` 的 `dshuiOpenPath` 解析打开的文件按钮——工作区相对目标按会话 cwd 拼接，`~` 家目录目标
+  （含被 `./`/`../` 前缀包裹的写法）保留 `~` 拼写交给 Host 展开，其余绝对 URL 保持字面）、
+  `chat/MessageItem.module.css`
   （`.projectedText` 内联流动与 `.link` 链接样式）、`chat/register-node-renderers.ts`
   （为 `user` 注册 `UserMessageNodeView`（带 user-actions 子槽）、为 `steering` 注册
   `SteeringMessageNodeView`）、`contract/slots.ts`（`UserActionOwnerProps` 与
@@ -81,12 +83,16 @@ RPC；上游 0.1.7 新增的归档/置顶行操作保留并存）、每条用户
   `tests/commands-create-fork.host.spec.ts`（假 Agent 补上 `inbox`）。
 - `packages/api/session-controller/src/index.ts` 与 `.../src/types.ts`：`openWorkspacePath` 请求
   携带 `dshuiOrigin`，并把它透传给 opener internals（0.1.7 起 opener 多了
-  `openNativeAssociatedPath` / file-application 分支，dshui 的三处调用点已对齐）。
+  `openNativeAssociatedPath` / file-application 分支，dshui 的三处调用点已对齐）。`verifyDesktopPath`
+  校验前先经 `dshuiHomePath` 展开 `~`：浏览器不知道账号家目录，家目录链接只能以 `~` 拼写送到 Host，
+  若直接 `resolve` 会被钉在服务器工作目录下（`<cwd>/~/.dsh/...`）。
 - `packages/api/settings-controller/src/index.ts`：`openSettingsDocument(dshuiOrigin, signal)` 同样
   透传点击来源（0.1.7 起 SettingsController 只保留 `openTextFile`）。
 - `packages/client/ui-chat/src/client/apply.ts` 与
   `packages/client/ui-settings-general/src/client/settings-document-store.ts`：客户端在调用上述两个
-  remote 时附上窗口作用域（`__DSHUI_WORKSPACE__` 或 `dshui_workspace` 查询参数）。
+  remote 时附上窗口作用域（`__DSHUI_WORKSPACE__` 或 `dshui_workspace` 查询参数）；前者的
+  `dshuiOpenPath` 决定文件链接目标的 Host 拼写（工作区相对 → 会话 cwd；家目录相对 → 去掉
+  `./`/`../` 前缀后保留 `~`）。
 - `packages/mcp/mcp-client/src/index.ts`：新增 `startup: 'eager' | 'lazy'` 配置（默认 `eager`）。
   `lazy` 时激活立即返回、由 supervisor 在后台连接并注册工具，慢速远端（如 OAuth 之后的服务器）
   不再拖住 dsh 启动；配套更新 README 与少量测试。

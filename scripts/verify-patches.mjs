@@ -114,7 +114,7 @@ const CHECKS = [
   },
   {
     file: 'packages/client/ui-chat/src/client/apply.ts',
-    markers: ['dshuiClickOrigin'],
+    markers: ['dshuiClickOrigin', 'dshuiOpenPath'],
   },
   {
     file: 'packages/client/ui-settings-general/src/client/settings-document-store.ts',
@@ -130,7 +130,7 @@ const CHECKS = [
   },
   {
     file: 'packages/api/session-controller/src/index.ts',
-    markers: ['dshuiOrigin'],
+    markers: ['dshuiOrigin', 'dshuiHomePath'],
   },
   {
     file: 'packages/api/settings-controller/src/index.ts',

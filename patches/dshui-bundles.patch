@@ -25,10 +25,19 @@ index 03c697734b..f421bb4278 100644
        throw new RemoteError(
          'gateway/internal',
 diff --git a/packages/api/session-controller/src/index.ts b/packages/api/session-controller/src/index.ts
-index 5796434086..61ff134b51 100644
+index 5796434086..f1c515d36a 100644
 --- a/packages/api/session-controller/src/index.ts
 +++ b/packages/api/session-controller/src/index.ts
-@@ -8,7 +8,7 @@ import { Context } from '@deepseek-ai/cordis'
+@@ -1,14 +1,14 @@
+ /** Session Remote owner: cold reads, explicit Agent commands, and live control state. */
+ 
+-import { hostname } from 'node:os'
+-import { resolve } from 'node:path'
++import { homedir, hostname } from 'node:os'
++import { join, resolve } from 'node:path'
+ import type { Agent } from '@deepseek-ai/dsh-agent'
+ import type {} from '@deepseek-ai/dsh-fs'
+ import { Context } from '@deepseek-ai/cordis'
  import z from '@deepseek-ai/schemastery'
  import { errorChain } from '@deepseek-ai/dsh-llm'
  import type {} from '@deepseek-ai/dsh-client-file-upload'
@@ -37,7 +46,29 @@ index 5796434086..61ff134b51 100644
  import type { SessionId } from '@deepseek-ai/dsh-session'
  import type { SessionInspection } from '@deepseek-ai/dsh-session-persistence'
  import { SessionQueryError, type SessionObservation } from '@deepseek-ai/dsh-session-query'
-@@ -120,7 +120,7 @@ export class SessionController extends TypertRemoteService {
+@@ -95,6 +95,21 @@ export interface SessionControllerInternals {
+   readonly canOpenPath?: () => boolean
+ }
+ 
++/**
++ * dshui patch: expand a leading home prefix in a path that arrived from the
++ * Client. The browser cannot read the Host account home, so a link destination
++ * that names it (`~/.dsh/...`) keeps its `~` spelling until it reaches the Host;
++ * expanding here precedes `resolve`, which would otherwise staple the `~`
++ * segment to the server's working directory.
++ * @param path - requested path, possibly `~`, `~/…`, or `~\…`.
++ * @returns the path with the home prefix expanded, or the input when absent.
++ */
++function dshuiHomePath(path: string): string {
++  if (path === '~') return homedir()
++  if (path.startsWith('~/') || path.startsWith('~\\')) return join(homedir(), path.slice(2))
++  return path
++}
++
+ /** Host service backing the generated `ctx.remote.session` namespace. */
+ export class SessionController extends TypertRemoteService {
+   static inject = [
+@@ -120,7 +135,7 @@ export class SessionController extends TypertRemoteService {
    private readonly controlState: SessionControlController
    private readonly history: SessionHistoryController
    private readonly listState: ApiSessionList
@@ -46,7 +77,7 @@ index 5796434086..61ff134b51 100644
    private readonly fileApplications: typeof nativeFileApplications
    private readonly openFileApplication: typeof openNativeFileApplication
    private readonly revealPath: (path: string, signal: AbortSignal) => Promise<void>
-@@ -325,9 +325,13 @@ export class SessionController extends TypertRemoteService {
+@@ -325,9 +340,13 @@ export class SessionController extends TypertRemoteService {
    ): Promise<SessionOpenWorkspacePathValue> {
      try {
        const path = await this.verifyDesktopPath(request.path, signal)
@@ -61,6 +92,15 @@ index 5796434086..61ff134b51 100644
        return { opened: true }
      } catch (error: unknown) {
        if (signal.aborted) throw new RemoteError('gateway/cancelled', 'path open was aborted', {})
+@@ -366,7 +385,7 @@ export class SessionController extends TypertRemoteService {
+   private async verifyDesktopPath(path: string, signal: AbortSignal): Promise<string> {
+     if (path.length === 0) throw new RemoteError('gateway/bad-request', 'A non-empty file path is required', {})
+     signal.throwIfAborted()
+-    const hostPath = resolve(path)
++    const hostPath = resolve(dshuiHomePath(path))
+     const { fs } = this.ctx
+     const mapped = fs.processPathFromHostPath(hostPath)
+     if (mapped === undefined || fs.processPath(await fs.resolve(mapped, { signal })) !== hostPath) {
 diff --git a/packages/api/session-controller/src/types.ts b/packages/api/session-controller/src/types.ts
 index 84378cc34d..a95be18c8a 100644
 --- a/packages/api/session-controller/src/types.ts
@@ -182,10 +222,17 @@ index 137eeeb190..cf87f92fe8 100644
 +  })
  })
 diff --git a/packages/api/session-controller/tests/session-open-workspace-path.host.spec.ts b/packages/api/session-controller/tests/session-open-workspace-path.host.spec.ts
-index e8216b5214..c99c0760ce 100644
+index e8216b5214..1fd3ffb139 100644
 --- a/packages/api/session-controller/tests/session-open-workspace-path.host.spec.ts
 +++ b/packages/api/session-controller/tests/session-open-workspace-path.host.spec.ts
-@@ -66,10 +66,27 @@ describe('session/openWorkspacePath', () => {
+@@ -1,4 +1,5 @@
+-import { resolve } from 'node:path'
++import { homedir } from 'node:os'
++import { join, resolve } from 'node:path'
+ import * as nativeCommand from '@deepseek-ai/dsh-native-command'
+ import { Context } from '@deepseek-ai/cordis'
+ import AgentRegistry from '@deepseek-ai/dsh-agent'
+@@ -66,10 +67,27 @@ describe('session/openWorkspacePath', () => {
  
      await expect(remote.openWorkspacePath({ path: '/workspace/project/src/a.ts' }, signal))
        .resolves.toEqual({ ok: true, value: { opened: true } })
@@ -214,7 +261,33 @@ index e8216b5214..c99c0760ce 100644
    it('normalizes relative and absolute Host-resolvable paths', async () => {
      const ctx = await context()
      const openPath = vi.fn((_path: string, _signal: AbortSignal) => Promise.resolve())
-@@ -214,7 +231,7 @@ it('dispatches default-app opening to the association adapter', async () => {
+@@ -84,6 +102,25 @@ describe('session/openWorkspacePath', () => {
+     expect(openPath.mock.calls.map(call => call[0])).toEqual([resolve('/workspace/result.html'), resolve('result.html')])
+   })
+ 
++  it('expands a home-relative Client path before handing it to the opener', async () => {
++    const ctx = await context()
++    const openPath = vi.fn((_path: string, _signal: AbortSignal) => Promise.resolve())
++    const remote = createSessionTestRemote(ctx, {
++      defaultModelSelection: () => ({ provider: 'p', model: 'm' }),
++      cwd: '/default',
++      openPath,
++    })
++
++    await remote.openWorkspacePath({ path: '~' })
++    await remote.openWorkspacePath({ path: '~/.dsh/profiles/web/cordis.patch.yml' })
++    await remote.openWorkspacePath({ path: '~\\.dsh\\profiles\\web\\cordis.patch.yml' })
++    expect(openPath.mock.calls.map(call => call[0])).toEqual([
++      resolve(homedir()),
++      resolve(join(homedir(), '.dsh/profiles/web/cordis.patch.yml')),
++      resolve(join(homedir(), '.dsh\\profiles\\web\\cordis.patch.yml')),
++    ])
++  })
++
+   it('rejects empty paths before opening anything', async () => {
+     const ctx = await context()
+     const openPath = vi.fn((_path: string, _signal: AbortSignal) => Promise.resolve())
+@@ -214,7 +251,7 @@ it('dispatches default-app opening to the association adapter', async () => {
    })
    const signal = new AbortController().signal
    await controller.openWorkspacePath({ path: '/report.html' }, signal)
@@ -369,7 +442,7 @@ index 99e647d2a1..cd7376bb2a 100644
  }
  
 diff --git a/packages/client/ui-chat/src/client/apply.ts b/packages/client/ui-chat/src/client/apply.ts
-index 69885d3ed4..6c7ddc2729 100644
+index 69885d3ed4..7a03f8e333 100644
 --- a/packages/client/ui-chat/src/client/apply.ts
 +++ b/packages/client/ui-chat/src/client/apply.ts
 @@ -11,7 +11,7 @@ import type {} from '@deepseek-ai/dsh-client-ui-sidebar-browser/client'
@@ -381,7 +454,7 @@ index 69885d3ed4..6c7ddc2729 100644
  // Type-only service and declaration merges used by the apply world.
  import type {} from '@deepseek-ai/dsh-client-locale/client'
  import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
-@@ -43,6 +43,28 @@ import { PerformanceUsagePolicy } from './performance-usage.ts'
+@@ -43,6 +43,45 @@ import { PerformanceUsagePolicy } from './performance-usage.ts'
  import { useTurnDataValue } from './chat/use-turn-data.ts'
  import { bindDisclosure } from './chat/use-disclosure.ts'
  
@@ -407,10 +480,27 @@ index 69885d3ed4..6c7ddc2729 100644
 +  }
 +}
 +
++/**
++ * dshui patch: the Host-facing spelling of one file-link destination. A
++ * destination that names the account home (`~`, `~/…`, `~\…`) is not
++ * workspace-relative: leading `./` and `../` segments cannot rise above that
++ * anchor, so they are dropped, and the `~` spelling travels to the Host, the
++ * only side that knows the home directory. Joining such a destination onto the
++ * Session cwd instead produces a literal `~` directory under the workspace.
++ * @param cwd - Session workspace root, when the Session is known.
++ * @param path - the link destination, before Host resolution.
++ * @returns the path to send with `openWorkspacePath`.
++ */
++function dshuiOpenPath(cwd: string | undefined, path: string): string {
++  const anchored = path.replace(/^(?:\.{1,2}[/\\])+/, '')
++  if (anchored === '~' || anchored.startsWith('~/') || anchored.startsWith('~\\')) return anchored
++  return resolveWorkspacePath(cwd, path)
++}
++
  const CHAT_NODE_INJECT: ChatNodeInjected = {
    hooks: {
      turnData: (_standard, { turnData }) => function useTurnData(key) {
-@@ -181,12 +203,18 @@ export function apply(ctx: Context): void {
+@@ -181,12 +220,20 @@ export function apply(ctx: Context): void {
            // address: the file is one piece of content whether it is opened at
            // its top or at line 400, so the same tab is revealed and told where
            // to land.
@@ -425,9 +515,11 @@ index 69885d3ed4..6c7ddc2729 100644
 +            // in this window even when another window owns the path prefix.
 +            // The Host (extension) opens the path in the VS Code editor via the
 +            // local open bridge, ahead of workspace-ownership routing.
++            // `dshuiOpenPath` decides the Host-facing spelling: workspace
++            // relative against the Session cwd, home relative as `~`.
 +            const dshuiOrigin = dshuiClickOrigin()
 +            const result = await ctx.remote.session.openWorkspacePath({
-+              path: resolveWorkspacePath(cwd, path),
++              path: dshuiOpenPath(cwd, path),
 +              ...(dshuiOrigin === undefined ? {} : { dshuiOrigin }),
 +            })
 +            if (!result.ok) throw new Error(`path open failed: ${result.error.message}`)
@@ -693,10 +785,10 @@ index 3ce381af1a..0a7dea6bbf 100644
    }
  }
 diff --git a/packages/client/ui-chat/tests/apply-inject.client.spec.tsx b/packages/client/ui-chat/tests/apply-inject.client.spec.tsx
-index 04dc15407d..4934484a18 100644
+index 04dc15407d..7b6b5108a7 100644
 --- a/packages/client/ui-chat/tests/apply-inject.client.spec.tsx
 +++ b/packages/client/ui-chat/tests/apply-inject.client.spec.tsx
-@@ -186,26 +186,22 @@ describe('Chat inject API', () => {
+@@ -186,26 +186,44 @@ describe('Chat inject API', () => {
      await b.runtime.dispose()
    })
  
@@ -723,15 +815,36 @@ index 04dc15407d..4934484a18 100644
      // A name a URL would otherwise mangle survives the round trip.
      await injected.openFile('src/a b#c.ts')
 -    expect(b.sidebarRight.openResource).toHaveBeenLastCalledWith('dsh-resource://file/session/root-1/src/a%20b%23c.ts')
--
++    expect(b.openWorkspacePath).toHaveBeenLastCalledWith({ path: '/proj/src/a b#c.ts' })
++    await b.runtime.dispose()
++  })
+ 
 -    // A line travels as the `file` type's navigation parameter, not in the address.
 -    await injected.openFile('src/a.ts', { line: 7 })
 -    expect(b.sidebarRight.openResource).toHaveBeenLastCalledWith('dsh-resource://file/session/root-1/src/a.ts', { params: { line: 7 } })
-+    expect(b.openWorkspacePath).toHaveBeenLastCalledWith({ path: '/proj/src/a b#c.ts' })
++  it('forwards a home-relative link destination in its `~` spelling', async () => {
++    const b = await bench()
++    const { injected } = b.chatViewApi(b.rootReference)
++    // The account home is not workspace-relative: the browser cannot expand it,
++    // so the `~` spelling travels to the Host instead of being joined onto the
++    // Session cwd (which produced `<cwd>/~/.dsh/...` and an ENOENT).
++    await injected.openFile('~/.dsh/profiles/web/cordis.patch.yml')
++    expect(b.openWorkspacePath).toHaveBeenLastCalledWith({ path: '~/.dsh/profiles/web/cordis.patch.yml' })
++    await injected.openFile('~')
++    expect(b.openWorkspacePath).toHaveBeenLastCalledWith({ path: '~' })
++    await injected.openFile('~\\.dsh\\profiles\\web\\cordis.patch.yml')
++    expect(b.openWorkspacePath).toHaveBeenLastCalledWith({ path: '~\\.dsh\\profiles\\web\\cordis.patch.yml' })
++
++    // Leading `.`/`..` segments cannot rise above that anchor, so a link the
++    // agent spelled `../~/.dsh/...` still names the home directory.
++    await injected.openFile('../~/.dsh/profiles/web/cordis.patch.yml')
++    expect(b.openWorkspacePath).toHaveBeenLastCalledWith({ path: '~/.dsh/profiles/web/cordis.patch.yml' })
++    await injected.openFile('./~/.dsh/profiles/web/cordis.patch.yml')
++    expect(b.openWorkspacePath).toHaveBeenLastCalledWith({ path: '~/.dsh/profiles/web/cordis.patch.yml' })
      await b.runtime.dispose()
    })
  
-@@ -365,13 +361,49 @@ describe('Chat inject API', () => {
+@@ -365,13 +383,49 @@ describe('Chat inject API', () => {
      // The Host resolves the relative path against the root it holds for the
      // Session; the Client need not know it.
      await injected.openFile('src/a.ts')

@@ -64,7 +64,9 @@ Compared with the stock browser UI, this extension differs in five main ways:
    files under `~/.dsh/sessions/...` directly (bypassing dsh's archive RPC; dsh itself is unchanged).
 5. **Markdown links in user messages are clickable.** `[label](url)` links over http/https/mailto open
    in the system browser; relative paths (e.g. `[Makefile](Makefile)`) resolve against the session cwd
-   and open the file in the current window.
+   and open the file in the current window, while home paths (e.g.
+   `~/.dsh/profiles/web/cordis.patch.yml`, also spelled `../~/.dsh/...`) resolve against the account
+   home.
 
 Everything else from the dsh web UI is preserved: session chat, tool cards, goals, subagents, settings,
 model selection, background tasks, feedback, and more. On top of that, the extension provides several
@@ -222,6 +224,11 @@ popup**:
 - The extension runs a local HTTP bridge (127.0.0.1, random port, lifecycle tied to the extension) and
   applies an idempotent patch to the api-proxy so "open file" requests are handed to the bridge, which
   opens the file via the **VS Code API**.
+- A link destination resolves in one of two spellings: a workspace-relative path (including `./`/`../`)
+  is joined onto the **session cwd**, while a home-relative path (`~`, `~/…` — also when wrapped in
+  `./`/`../` prefixes, which cannot rise above that anchor and are dropped) is expanded against the
+  account home by the server. The browser cannot read the home directory, so such a destination keeps
+  its `~` spelling for the host instead of becoming `<cwd>/~/.dsh/...`.
 - Under the shared backend, each window registers its workspace and bridge in
   `$DSH_HOME/dshui-bridges.json`. The patch prefers the **window where the click happened**: the client
   attaches the session's workspace directory to the open request (`dshuiOrigin`), and when that
@@ -548,9 +555,9 @@ node scripts/verify-patches.mjs      # each file flagged as missing needs its pa
 #    - packages/client/tsdown.client.ts                workspaceManifest resolves dshui-client-* ids by package directory (rc.1 validates by package name)
 #    - packages/util/native-command/src/path-opener.ts  darwin bridge/CLI/vscode://file branch + dshuiOrigin
 #    - packages/client/connection/src/browser-auth.ts   keep dshui query params through the token redirect (0.1.7 base is ./)
-#    - packages/api/session-controller/src/{index,types}.ts  openWorkspacePath threads dshuiOrigin
+#    - packages/api/session-controller/src/{index,types}.ts  openWorkspacePath threads dshuiOrigin; verifyDesktopPath expands ~ via dshuiHomePath
 #    - packages/api/settings-controller/src/index.ts         openSettingsDocument(dshuiOrigin, signal)
-#    - packages/client/ui-chat/src/client/apply.ts           client attaches the window scope (dshuiClickOrigin)
+#    - packages/client/ui-chat/src/client/apply.ts           client attaches the window scope (dshuiClickOrigin); dshuiOpenPath owns the link destination spelling (relative → session cwd, home → ~ kept)
 #    - packages/mcp/mcp-client/src/index.ts                  startup: eager|lazy
 
 # 4. Rebuild and copy in

@@ -56,7 +56,8 @@ agentic coding 框架，主张「一切皆插件」）的 Web UI 嵌入 VS Code 
 4. **会话可直接删除**（菜单里同时保留 dsh 自带的「归档」）。删除操作由扩展宿主经 VS Code 文件 API
    直接移除 `~/.dsh/sessions/...` 下的会话日志（不经 dsh 的归档 RPC，dsh 自身行为不变）。
 5. **用户消息中的 markdown 链接可点击**。`[label](url)` 形式的 http/https/mailto 链接在系统浏览器
-   打开；相对路径（如 `[Makefile](Makefile)`）按会话 cwd 解析并在当前窗口打开对应文件。
+   打开；相对路径（如 `[Makefile](Makefile)`）按会话 cwd 解析并在当前窗口打开对应文件，家目录路径
+   （如 `~/.dsh/profiles/web/cordis.patch.yml`，含 `../~/.dsh/...` 这类写法）解析到账号家目录。
 
 此外，dsh Web UI 的其余能力完整保留：会话聊天、工具卡片、goal、subagent、设置、模型选择、后台
 任务、反馈等。扩展还提供若干 VS Code 深度集成：
@@ -205,6 +206,10 @@ VS Code 的**输出面板**（View → Output → 下拉选择 **dsh UI**，或�
 
 - 扩展内置一个本机 HTTP 桥（127.0.0.1 随机端口，随扩展生命周期启停），对 api-proxy 应用幂等小
   补丁，把「打开文件」请求转交该桥，由扩展经 **VS Code API** 打开文件；
+- 链接目标按两种拼写解析：工作区相对路径（含 `./`/`../`）按**会话 cwd** 拼接；家目录路径
+  （`~`、`~/…`，含 `../~/.dsh/...` 这类被 `./`/`../` 前缀包裹的写法——前缀越不过家目录锚点，
+  会被丢弃）由服务器展开到账号家目录。浏览器读不到家目录，所以这类目标保留 `~` 拼写送到宿主，
+  不会被拼成 `<cwd>/~/.dsh/...`；
 - 共享后端下每个窗口将自己的工作区与桥登记到 `$DSH_HOME/dshui-bridges.json`。补丁优先在**点击所在
   窗口**打开：客户端把会话的工作区目录随打开请求一起带上（`dshuiOrigin`），目标路径在其中时即路由
   到点击窗口的桥；否则按「打开路径所属工作区（最长前缀）」路由到**点击文件的窗口**的桥。嵌套工作区
@@ -485,9 +490,9 @@ cd .. && node scripts/verify-patches.mjs   # 逐个标记缺失即说明该文�
 #    - packages/client/tsdown.client.ts                workspaceManifest 对 dshui-client-* id 按包目录回退（rc.1 起按包名校验）
 #    - packages/util/native-command/src/path-opener.ts  darwin 分支改桥接/CLI/vscode://file + dshuiOrigin
 #    - packages/client/connection/src/browser-auth.ts     token 交换重定向保留 dshui 查询参数（0.1.7 起基址是 ./）
-#    - packages/api/session-controller/src/{index,types}.ts  openWorkspacePath 透传 dshuiOrigin
+#    - packages/api/session-controller/src/{index,types}.ts  openWorkspacePath 透传 dshuiOrigin；verifyDesktopPath 用 dshuiHomePath 展开 ~
 #    - packages/api/settings-controller/src/index.ts         openSettingsDocument(dshuiOrigin, signal)
-#    - packages/client/ui-chat/src/client/apply.ts           客户端附上窗口作用域 dshuiClickOrigin
+#    - packages/client/ui-chat/src/client/apply.ts           客户端附上窗口作用域 dshuiClickOrigin；dshuiOpenPath 决定链接目标拼写（相对 → 会话 cwd，家目录 → 保留 ~）
 #    - packages/mcp/mcp-client/src/index.ts                  startup: eager|lazy
 
 # 4. 重建并拷入

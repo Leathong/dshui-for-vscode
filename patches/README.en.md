@@ -38,7 +38,9 @@ and applied together, so they are merged into a single patch — applying only h
   message does not; and it **preserves the markdown-link projection** on top of the upstream
   `projectUserText` reference-chip projection: `[label](destination)` with an allowlisted
   http/https/mailto URL renders as an external anchor, a destination `new URL` cannot parse renders as
-  a file-open button through `references.openFile` resolved against the session cwd, and any other
+  a file-open button through `references.openFile` → `apply.ts`'s `dshuiOpenPath` — a workspace-relative
+  destination is joined onto the session cwd, a `~` home destination (including one wrapped in
+  `./`/`../` prefixes) keeps its `~` spelling for the Host to expand, and any other
   absolute URL stays literal), `chat/MessageItem.module.css` (the `.projectedText` inline flow and
   `.link` styles), `chat/register-node-renderers.ts` (registers `UserMessageNodeView` — with the
   user-actions child slot — for `user`, and `SteeringMessageNodeView` for `steering`),
@@ -96,12 +98,16 @@ The string patches the extension once applied to the npm package at runtime (see
 - `packages/api/session-controller/src/index.ts` and `.../src/types.ts`: the `openWorkspacePath`
   request carries `dshuiOrigin`, which is threaded into the opener internals (since 0.1.7 the opener
   also has the `openNativeAssociatedPath` / file-application branches; the dshui call sites are
-  aligned with them).
+  aligned with them). `verifyDesktopPath` expands `~` through `dshuiHomePath` before validating: the
+  browser cannot read the account home, so a home link arrives in its `~` spelling, and a bare
+  `resolve` would staple it to the server's working directory (`<cwd>/~/.dsh/...`).
 - `packages/api/settings-controller/src/index.ts`: `openSettingsDocument(dshuiOrigin, signal)`
   threads the click origin the same way (since 0.1.7 SettingsController keeps only `openTextFile`).
 - `packages/client/ui-chat/src/client/apply.ts` and
   `packages/client/ui-settings-general/src/client/settings-document-store.ts`: the client attaches the
   window scope (`__DSHUI_WORKSPACE__` or the `dshui_workspace` query param) to those two remote calls.
+  The former's `dshuiOpenPath` also owns the file-link destination spelling (workspace-relative →
+  session cwd; home-relative → `~` kept after dropping `./`/`../` prefixes).
 - `packages/mcp/mcp-client/src/index.ts`: adds the `startup: 'eager' | 'lazy'` option (default
   `eager`). In `lazy` mode activation returns immediately and the supervisor connects and registers
   tools in the background, so a slow remote (for example one behind OAuth) never delays dsh startup;
