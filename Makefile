@@ -75,7 +75,10 @@ DSH_SRC ?= .dsh-src
 # DSH_REPO  — 上游仓库
 DSH_REPO ?= https://github.com/deepseek-ai/deepseek-harness.git
 # DSH_BASE  — 锁定基提交（来自 patches/README.md，不能漂移，漂移会导致补丁无法套用）
-DSH_BASE ?= 46a7f68b0922371ce7144b668b90e377d8e799f4
+# 当前为 dsh 0.1.7-rc.2 的发布合并提交（tag dsh-v0.1.7-rc.2）。换基升级后必须同步改这里，
+# 否则 dsh-gen-patch 会把「上一版基提交 → 新版」的全部上游差异一并导出（曾导出过 3447 文件
+# / 15 MB 的整版快照），补丁随即不可用。
+DSH_BASE ?= 477b4f420553e8a52c2fbccc464d7561b239c443
 # DSH_PATCH — dshui 未归档改动（client bundle + host 运行时）
 DSH_PATCH := patches/dshui-bundles.patch
 # DSH_PNPM — 包管理器，需要 pnpm 11.7.0、Node ^22.19 || >=24
@@ -109,10 +112,10 @@ dsh-apply-patch:
 	if [ -n "$$NEED_SETUP" ] || [ -n "$(RESET)" ]; then \
 		echo "切换到基提交 $(DSH_BASE) ..."; \
 		cd $(DSH_SRC) && git fetch origin $(DSH_BASE) && git checkout FETCH_HEAD && \
-		if git apply --reverse --check ../$(DSH_PATCH) 2>/dev/null; then \
+		if git apply --binary --reverse --check ../$(DSH_PATCH) 2>/dev/null; then \
 			echo "补丁已套用，跳过"; \
-		elif git apply --check ../$(DSH_PATCH) 2>/dev/null; then \
-			git apply ../$(DSH_PATCH) && echo "补丁已套用"; \
+		elif git apply --binary --check ../$(DSH_PATCH) 2>/dev/null; then \
+			git apply --binary ../$(DSH_PATCH) && echo "补丁已套用"; \
 		else \
 			echo "错误：补丁无法套用（基提交已漂移？请参照 patches/README.md 重基）"; \
 			exit 1; \
@@ -125,9 +128,17 @@ dsh-apply-patch:
 # 由于「从基提交导出」，已提交或未提交的改动都能导出，无需先重置回基提交，也不用改动必须未提交。
 # 适用：上游基提交漂移后，按 README「跟随 dsh 版本升级」手动逐个重套补丁，需要把改动固化回补丁文件。
 # 前置：.dsh-src 检出在锁定基提交之上（相对 $(DSH_BASE) 存在改动；HEAD 可领先基提交）。
+# --binary 不可省略：0.1.7-rc.2 的上游快照新增了 PNG/ICO 等二进制资产，普通 git diff 只会写下
+# 「Binary files ... differ」占位（不含内容），git apply 遇到就整体报
+# 「cannot apply binary patch ... without full index line」并拒绝套用。dshui 自身的改动目前全是文本，
+# 但只要基提交里含二进制新增就会踩中，所以导出时一律带 --binary。
+#
+# 实现注意：全程用 `git -C $(DSH_SRC)` + 绝对输出路径，不写 `cd $(DSH_SRC) && … > "../$(DSH_PATCH)"`。
+# 后者曾在花括号组内改变工作目录，导致后续 `$$(cd $(DSH_SRC) && …)` 在 .dsh-src 里再找 .dsh-src 而失败；
+# 更糟的是那句末尾的重定向在 cd 失败时会把 $(DSH_PATCH) 截断成空文件。
 dsh-gen-patch:
 	@test -d "$(DSH_SRC)/.git" || (echo "错误：未找到 $(DSH_SRC)，请先 make dsh-apply-patch" && exit 1)
-	@if [ -z "$$(cd $(DSH_SRC) && git diff --stat $(DSH_BASE))" ]; then \
+	@if [ -z "$$(git -C $(DSH_SRC) diff --stat $(DSH_BASE))" ]; then \
 		echo "错误：$(DSH_SRC) 相对基提交 $(DSH_BASE) 没有改动，无法重新导出。"; \
 		echo "（请确认 .dsh-src 检出在基提交之上，且已套上 dshui 改动）"; \
 		exit 1; \
@@ -135,10 +146,10 @@ dsh-gen-patch:
 	@{ \
 		echo "备份现有 $(DSH_PATCH) -> $(DSH_PATCH).bak ..."; \
 		cp $(DSH_PATCH) $(DSH_PATCH).bak; \
-		echo "导出 $(DSH_PATCH)（相对基提交 $(DSH_BASE)）..."; \
-		cd $(DSH_SRC) && git diff $(DSH_BASE) > "../$(DSH_PATCH)"; \
+		echo "导出 $(DSH_PATCH)（相对基提交 $(DSH_BASE)，含 --binary）..."; \
+		git -C $(DSH_SRC) diff --binary $(DSH_BASE) > "$(CURDIR)/$(DSH_PATCH)"; \
 	}; \
-	echo "已重新导出 $(DSH_PATCH)：$$(cd $(DSH_SRC) && git diff --stat $(DSH_BASE) | tail -1)"; \
+	echo "已重新导出 $(DSH_PATCH)：$$(git -C $(DSH_SRC) diff --stat $(DSH_BASE) | tail -1)"; \
 	echo "提示：旧补丁备份在 $(DSH_PATCH).bak；可运行 make dsh-apply-patch RESET=1 验证新补丁能干净套用，确认后删除备份。"
 
 # 从 .dsh-src 构建产物同步 @deepseek-ai/* 到 node_modules（源码编译，非 npm）。

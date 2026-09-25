@@ -514,8 +514,8 @@ workflow below.
 
 The extension binds two dsh versions together, and both must be aligned on upgrade:
 
-1. **CLI runtime:** `dependencies["@deepseek-ai/dsh"]` in `package.json` (currently `0.1.7-rc.1`).
-2. **Client bundle source:** the `.dsh-src` checkout (currently `dsh-v0.1.7-rc.1` with the dshui
+1. **CLI runtime:** `dependencies["@deepseek-ai/dsh"]` in `package.json` (currently `0.1.7-rc.2`).
+2. **Client bundle source:** the `.dsh-src` checkout (currently `dsh-v0.1.7-rc.2` with the dshui
    client patch re-applied — since 0.1.2 the session/chat clients were restructured, so re-apply the
    patch to the new structure per `scripts/verify-patches.mjs`; since the repo's master may lag behind
    the npm release, align by checking each package's version in its `package.json` and confirm with
@@ -542,8 +542,12 @@ cd .dsh-src && pnpm install && pnpm run clean \
 # 2. Check that the patch is still complete — the core step
 node scripts/verify-patches.mjs      # each file flagged as missing needs its patch re-applied
 #    The changes are frozen in patches/dshui-bundles.patch: if it applies cleanly to the base
-#    commit, use it as-is; if it drifted, re-apply per the checklist in step 3 and re-export with:
-#    git -C .dsh-src diff <base commit> > patches/dshui-bundles.patch
+#    commit, use it as-is; if it drifted, re-apply per the checklist in step 3 and re-export with
+#    (--binary is not optional — see below):
+#    git -C .dsh-src diff --binary <base commit> > patches/dshui-bundles.patch
+#    The base commit must equal Makefile's DSH_BASE and the SHA in patches/README.md: exporting
+#    against a stale base swallows the whole upstream delta (the rc.1-based export was 3447
+#    files / 15.2 MB) and makes the patch unusable.
 
 # 3. Re-apply any missing patches per the checklist below (the changes are small; follow the comments
 #    in each file)
@@ -616,6 +620,14 @@ Other drift-prone spots to check after every upgrade:
   unavailable), and `DSHUI_BRIDGES_FILE`. If dsh changes that code the patch fails safely
   (`git apply` errors) — just rewrite it for the new source; when the bridge is unavailable the opener
   automatically falls back to `vscode://file`.
+- **Re-exporting the patch requires `--binary`, and the base commit must move with it:** the patch is
+  pinned to dsh `0.1.7-rc.2` (`477b4f42…`, see `patches/README.md` and Makefile's `DSH_BASE`) and is
+  exported with `git -C .dsh-src diff --binary <base commit> > patches/dshui-bundles.patch` (`make
+  dsh-gen-patch` already does this). Both halves have bitten us: without `--binary`, `git diff` writes
+  only a `Binary files ... differ` placeholder (no content) for the PNG/ICO assets the base snapshot
+  adds, and `git apply` then reports `cannot apply binary patch ... without full index line` and
+  rejects the whole patch; exporting against a stale base swallows the entire upstream delta (the
+  rc.1-based export came out as 3447 files / 15.2 MB, where the correct size is 51 files / ~160 KB).
 - **A dsh version bump needs `make deploy`, not just `make sync`:** `make sync` only copies `out/`,
   `dshui-plugins/`, `patch.yml`, and `package.json` — it **does not touch
   `node_modules/@deepseek-ai`**. With the old host closure in place the new client bundles fail to
@@ -628,7 +640,7 @@ Other drift-prone spots to check after every upgrade:
 - **`patch.yml`:** the overridden row ids (`ui-workspace` / `ui-conversation`) and the inserted
   `dshui-host-ensure-workspace` depend on the row names in the `web-app` bundle and on the
   `workspaceRegistry` / `webServer` service names; update them in sync if these change.
-- **The sandbox seam in `patch.yml` is a pair (currently not overridden at all):**
+- **The sandbox seam is a pair:**
   `bash-sandbox` / `fs-sandbox` are the only providers of the `shell` / `fs` services, and the
   `dsh-whitelist-sandbox` row is the replacement that provides both through whitelist-aware
   subclasses. Disabling the former while commenting out the latter (or inserting the replacement
@@ -637,11 +649,12 @@ Other drift-prone spots to check after every upgrade:
   fs`, `present`, `workflow-ptc`, `tool-workflow`, `permission`, `session-controller`,
   `workspace-files`, ... all PENDING forever. `scripts/verify-overlay.mjs` rejects that composition
   during `make package` / `make deploy` / `make sync`, and also checks that every inserted row names a
-  package that ships in `dshui-plugins/`. **On 0.1.7 the replacement row stays commented out** — the
-  whitelist plugin is not ported yet (its host `confine()` override is synchronous while 0.1.7 made
-  the base async, `SettingsForms.installSection` was removed, and the client half injects the removed
-  `settingsScope` plus two renamed icons), so the stock providers are mounted. When the port lands,
-  re-enable both `disabled: true` rows and uncomment that insert in the same change.
+  package that ships in `dshui-plugins/`. **The pairing does not live in this overlay's `patch.yml`:**
+  `installPlugins()`'s `ensureProfileBundle()` mounts the whitelist plugin as a **profile bundle**, and
+  the plugin's own `cordis.patch.yml` performs the disable-stock + insert-whitelist step in that same
+  layer — the settings page edits the row's `extraWritableRoots` through `configEditor`, and since the
+  overlay layer is applied *after* the profile layer, a row inserted here would be refused on every
+  save as "overridden by a home patch or command-line overlay".
 - **Operator-specific whitelist roots do not belong in this repository:** `extraWritableRoots` is
   deployment data and goes into `$DSH_HOME/profiles/web/cordis.patch.yml`. Patch layers replace a
   whole key rather than deep-merging, and the profile layer is applied *before* this overlay, so it

@@ -451,8 +451,8 @@ code --extensionDevelopmentPath="$PWD" <文件夹>
 1. **运行时与 host 源码**：`@deepseek-ai/*` 不再从 npm 下载，而是由 `.dsh-src` 构建产物填充
    （根 `package.json` 只声明一个锚点 `@deepseek-ai/dsh`，闭包是其清单的传递依赖；`preinstall`
    的 `sync-dsh` 先落好源码产物，`npm list`/`npm install` 不再走 registry）。dshui 对 host 的
-   改动经 `patches/dshui-bundles.patch` 固化并烘焙进构建产物（当前 `0.1.7-rc.1`）。
-2. **客户端 bundle 的源码**：`.dsh-src` 检出（当前对应 `dsh-v0.1.7-rc.1` 并重套 dshui
+   改动经 `patches/dshui-bundles.patch` 固化并烘焙进构建产物（当前 `0.1.7-rc.2`）。
+2. **客户端 bundle 的源码**：`.dsh-src` 检出（当前对应 `dsh-v0.1.7-rc.2` 并重套 dshui
    客户端补丁——自 0.1.2 起上游重构了会话/聊天客户端，补丁需按 `scripts/verify-patches.mjs`
    重新套用到新结构；由于仓库 master 可能落后于 npm 发布，对齐方式是查看各包 `package.json`
    的版本号，并以实际运行测试为准）。
@@ -475,8 +475,10 @@ pnpm install && pnpm run clean \
 # 2. 检查补丁是否仍完整——核心一步（在扩展根目录）
 cd .. && node scripts/verify-patches.mjs   # 逐个标记缺失即说明该文件需要重新套用补丁
 #    改动已固化为 patches/dshui-bundles.patch：对基提交能干净应用则直接使用；
-#    出现漂移则按步骤 3 的清单重套，并重新导出：
-#    git -C .dsh-src diff <基提交> > patches/dshui-bundles.patch
+#    出现漂移则按步骤 3 的清单重套，并重新导出（--binary 不可省，见下）：
+#    git -C .dsh-src diff --binary <基提交> > patches/dshui-bundles.patch
+#    注意基提交必须与 Makefile 的 DSH_BASE 及 patches/README.md 的 SHA 一致：用旧基提交导出
+#    会把整版上游差异一起装进补丁（rc.1 基提交那次是 3447 文件 / 15.2 MB），补丁随即不可用。
 
 # 3. 缺失的补丁按以下清单重新套用（改动都很小，按文件内注释即可）
 #    - ui-workspace/src/client/tree.ts                 加 scopedWorkspacePath 与各 derive 的 scope / deletedSessionIds 参数
@@ -540,6 +542,13 @@ npm run compile && npx @vscode/vsce package
   并依赖服务器环境变量 `DSHUI_OPEN_ENDPOINT`（扩展启动桥时注入）、`DSHUI_CODE_CLI`（应用内 `code`
   CLI 路径，桥不可用时的回退）与 `DSHUI_BRIDGES_FILE`。dsh 若修改该段代码，补丁会安全失败（`git
   apply` 报错），按新源码重写即可；桥接不可用时会自动回退 `vscode://file`。
+- **重导补丁必须带 `--binary`，基提交必须同步换**：补丁的基提交固定为 dsh `0.1.7-rc.2`
+  （`477b4f42…`，见 `patches/README.md` 与 Makefile 的 `DSH_BASE`），导出命令是
+  `git -C .dsh-src diff --binary <基提交> > patches/dshui-bundles.patch`（`make dsh-gen-patch` 已内置）。
+  两点都踩过坑：不加 `--binary` 时 `git diff` 对基提交里新增的 PNG/ICO 只写
+  `Binary files ... differ` 占位（不含内容），`git apply` 会报 `cannot apply binary patch ... without
+  full index line` 并**整体拒绝**补丁；不改 `DSH_BASE` 而用旧基提交导出，会把整版上游差异一起装进
+  补丁（rc.1 基提交那次导出成 3447 文件 / 15.2 MB，而正常是 51 文件 / 约 160 KB）。
 - **`scripts/sync-dsh.mjs`**：拷贝 `@deepseek-ai/dsh` 运行时闭包含的包；若某包在 `.dsh-src`
   未构建出 `lib/`，脚本会告警列名，此时不要打包发布。
 - **升级 dsh 版本后不能只用 `make sync`**：`make sync` 只覆盖 `out/`、`dshui-plugins/`、`patch.yml`、
@@ -551,17 +560,18 @@ npm run compile && npx @vscode/vsce package
 - **`patch.yml`**：覆盖的行 id（`ui-workspace` / `ui-conversation`）与插入的
   `dshui-host-ensure-workspace` 依赖 `web-app` bundle 中的行名与 `workspaceRegistry` / `webServer`
   服务名；这些若有变化，需同步更新。
-- **`patch.yml` 的沙箱缝隙必须成对出现（当前整段未启用）**：`bash-sandbox` / `fs-sandbox` 是
+- **`patch.yml` 的沙箱缝隙必须成对出现**：`bash-sandbox` / `fs-sandbox` 是
   `shell` / `fs` 两个服务的唯一提供者，`dsh-whitelist-sandbox` 行是用白名单子类接手的替换实现。
   只把前者 `disabled: true` 而把后者的 insert 注释掉（或反过来只 insert 不停用），会得到一个
   「能启动但半死」的服务端：会话列表加载不出来、设置页报错、插件面板显示 `tool-bash: waiting for
   shell`、`tool-fs: waiting for fs`，且 `present`、`workflow-ptc`、`tool-workflow`、`permission`、
   `session-controller`、`workspace-files` 等全部停在 PENDING。`scripts/verify-overlay.mjs` 会在
   `make package` / `make deploy` / `make sync` 这一步拦下这种组合，并顺带校验每个 insert 行都指向
-  真实存在的 `dshui-plugins/<name>`。**0.1.7 上该替换行暂时保持注释**：白名单插件还没移植
-  （host 侧 `confine()` 在 0.1.7 变成 async、`SettingsForms.installSection` 被删除、client 侧
-  `settingsScope` 与两个图标被改名），所以现在挂的是原生 provider；移植完成后要在同一次改动里
-  重新启用上面两行 `disabled: true` 并取消注释该 insert 行。
+  真实存在的 `dshui-plugins/<name>`。**该配对不在本 overlay 的 `patch.yml` 里**：白名单插件由
+  `installPlugins()` 的 `ensureProfileBundle()` 挂成 **profile bundle**，其自身的
+  `cordis.patch.yml` 在同一层完成「停用原生 + 插入白名单」；因为设置页要通过 `configEditor` 编辑该行
+  的 `extraWritableRoots`，而 overlay 层在 profile 层之后应用，行插在 overlay 里会让每次保存都被判为
+  「overridden by a home patch or command-line overlay」。
 - **白名单的 operator 私有路径不写进本仓库**：`extraWritableRoots` 属于运维数据，放
   `$DSH_HOME/profiles/web/cordis.patch.yml`。注意补丁层是「后层整体覆盖前层」的语义：profile 层
   在本 overlay **之前**应用，既不能给 overlay 插入的行配 config，也无法覆盖 overlay 已给的

@@ -3,9 +3,10 @@
 > English · [中文](README.md)
 
 `dshui-bundles.patch` contains the dshui modifications to the source of
-[deepseek-harness](https://github.com/deepseek-ai/deepseek-harness) (51 files across the client
-bundles and the host runtime). The client and the host must be **aligned** to the same base commit
-and applied together, so they are merged into a single patch — applying only half is incomplete.
+[deepseek-harness](https://github.com/deepseek-ai/deepseek-harness) (51 files, ~160 KB: the client
+bundles and the host runtime, based on dsh `0.1.7-rc.2`). The client and the host must be **aligned**
+to the same base commit and applied together, so they are merged into a single patch — applying only
+half is incomplete.
 
 ## Client bundles (browser SPA)
 
@@ -122,16 +123,17 @@ in `node_modules/@deepseek-ai/*`; this patch reproduces them from source.
 
 ## Applying (the base commit is pinned)
 
-The patch targets this base commit (**pinned; it must not drift**):
+The patch targets this base commit (**pinned; it must not drift**) — the dsh `0.1.7-rc.2` release
+merge (tag `dsh-v0.1.7-rc.2`):
 
 ```
-46a7f68b0922371ce7144b668b90e377d8e799f4
+477b4f420553e8a52c2fbccc464d7561b239c443
 ```
 
 ```sh
 git clone https://github.com/deepseek-ai/deepseek-harness.git .dsh-src
 cd .dsh-src
-git fetch origin 46a7f68b0922371ce7144b668b90e377d8e799f4 && git checkout FETCH_HEAD
+git fetch origin 477b4f420553e8a52c2fbccc464d7561b239c443 && git checkout FETCH_HEAD
 git apply ../patches/dshui-bundles.patch            # fails safely if the base commit mismatches
 pnpm install                                        # requires pnpm 11.7.0, Node ^22.19 || >=24
 pnpm run clean                                      # REQUIRED on a rebase: drop the previous
@@ -144,6 +146,28 @@ node scripts/sync-dsh.mjs                           # copies the @deepseek-ai/* 
 node scripts/copy-clients.mjs                       # copies the two UI bundles into dshui-plugins/ (asserts the bundle id)
 npm run compile
 ```
+
+### Re-exporting the patch
+
+Re-exporting must use **`--binary`** (`make dsh-gen-patch` already does):
+
+```sh
+git -C .dsh-src diff --binary <base commit> > patches/dshui-bundles.patch
+```
+
+- **`--binary` is not optional.** The base snapshot adds PNG/ICO binary assets; without the flag
+  `git diff` writes only a `Binary files /dev/null and b/... differ` placeholder (with **no content**),
+  and `git apply` then reports `cannot apply binary patch ... without full index line` and rejects the
+  whole patch. Every current dshui change is text, but any binary asset in the base snapshot trips
+  this, so always export with `--binary`.
+- **The base commit must move with the rebase.** `DSH_BASE` (Makefile) and the SHA in this file must
+  equal the commit the export used. A patch exported against a stale base swallows the entire
+  upstream delta (the rc.1-based export was 3447 files / 15.2 MB) and becomes unusable; a correct
+  export stays at 51 files / ~160 KB.
+- **Do not export with a `cd` recipe.** `make dsh-gen-patch` uses `git -C $(DSH_SRC)` plus an
+  absolute output path. The earlier form — `cd $(DSH_SRC) && git diff … > "../patches/…"` inside a
+  brace group — truncated the patch to an empty file first and only then reported the failed `cd`,
+  silently destroying the patch.
 
 > `pnpm run clean` is mandatory when rebasing onto a new base: the previous version's stale typert
 > remote declarations left in each package's `lib/types` and `*.tsbuildinfo` otherwise make `tsc -b`

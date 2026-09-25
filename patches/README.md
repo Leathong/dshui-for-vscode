@@ -3,8 +3,8 @@
 > 中文 · [English](README.en.md)
 
 `dshui-bundles.patch` 是对 [deepseek-harness](https://github.com/deepseek-ai/deepseek-harness) 源码的
-dshui 改动（51 个文件，含客户端 bundle + host 运行时两大部分）。客户端与 host 必须**对齐**到同一
-基提交并一起套用，因此合并为单个补丁——套一半都是不完整的。
+dshui 改动（51 个文件、约 160 KB，含客户端 bundle + host 运行时两大部分，基提交为 dsh `0.1.7-rc.2`）。
+客户端与 host 必须**对齐**到同一基提交并一起套用，因此合并为单个补丁——套一半都是不完整的。
 
 ## 客户端 bundle（浏览器 SPA）
 
@@ -109,16 +109,16 @@ RPC；上游 0.1.7 新增的归档/置顶行操作保留并存）、每条用户
 
 ## 应用（必须锁定基提交）
 
-补丁针对的基提交（**固定，不能漂移**）：
+补丁针对的基提交（**固定，不能漂移**）——dsh `0.1.7-rc.2` 的发布合并提交（tag `dsh-v0.1.7-rc.2`）：
 
 ```
-46a7f68b0922371ce7144b668b90e377d8e799f4
+477b4f420553e8a52c2fbccc464d7561b239c443
 ```
 
 ```sh
 git clone https://github.com/deepseek-ai/deepseek-harness.git .dsh-src
 cd .dsh-src
-git fetch origin 46a7f68b0922371ce7144b668b90e377d8e799f4 && git checkout FETCH_HEAD
+git fetch origin 477b4f420553e8a52c2fbccc464d7561b239c443 && git checkout FETCH_HEAD
 git apply ../patches/dshui-bundles.patch            # 基提交不匹配会安全失败
 pnpm install                                        # 需要 pnpm 11.7.0、Node ^22.19 || >=24
 pnpm run clean                                      # 升级换基时必须清掉上一版的 lib/ 与 tsbuildinfo
@@ -130,6 +130,25 @@ node scripts/sync-dsh.mjs                           # @deepseek-ai/* 源码产�
 node scripts/copy-clients.mjs                       # 两个 UI 包的 client.js 拷入 dshui-plugins/（校验 bundle id）
 npm run compile
 ```
+
+### 重新导出补丁
+
+改动固化回补丁文件时**必须显式带 `--binary`**（`make dsh-gen-patch` 已内置）：
+
+```sh
+git -C .dsh-src diff --binary <基提交> > patches/dshui-bundles.patch
+```
+
+- **`--binary` 不可省**：基提交快照里含 PNG/ICO 等二进制资产，不加这个开关时 `git diff` 只写
+  `Binary files /dev/null and b/... differ` 占位（**不含内容**），`git apply` 会报
+  `cannot apply binary patch ... without full index line` 并**整体拒绝**该补丁。dshui 自身的改动
+  目前全是文本，但只要基提交里含二进制新增就会踩中，所以一律带 `--binary`。
+- **基提交必须跟着换**：`DSH_BASE`（Makefile）与本文档的 SHA 必须等于导出时用的那个提交。用旧基提交
+  导出的补丁会把「旧基提交 → 新版」的全部上游差异一起装进去（rc.1 基提交导出时是 3447 文件 / 15.2 MB），
+  补丁随即变得不可用；正常应稳定在 51 个文件 / 约 160 KB。
+- **导出别用 `cd` 写法**：`make dsh-gen-patch` 用 `git -C $(DSH_SRC)` 加绝对输出路径。此前写成
+  花括号组内 `cd $(DSH_SRC) && git diff … > "../patches/…"`，一旦 `cd` 失败，重定向会先把 patch
+  截断成空文件再报错——补丁静默损毁。
 
 > `pnpm run clean` 是换基升级的必要步骤：上一版留在各包 `lib/types` 与 `*.tsbuildinfo` 里的
 > typert remote 声明是陈旧的，不清掉会让 `tsc -b` 直接复用旧产物，出现大量“remote 方法不存在”的
