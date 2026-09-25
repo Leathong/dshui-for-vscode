@@ -66,7 +66,7 @@
 # The shared /api transport registers its channels on the connection row's
 # fiber (`ctx.connection.rpc.handle` mounts the route via the fiber's
 # webServer), but the stock row injects only webRuntime — a consumer mounting
-# a channel (dsh-im, dsh-rollback-plugin) would fail at boot. Inject the
+# a channel (dsh-rollback-plugin) would fail at boot. Inject the
 # server too; the loader mixes row inject with the module's own inject.
 - id: connection
   name: '@deepseek-ai/dsh-client-connection'
@@ -101,12 +101,6 @@
     # carries no config.
     - id: dsh-capability-toggle-plugin
       name: dsh-capability-toggle-plugin
-
-    # IM bot bridge (Feishu/WeChat/DingTalk/WeCom/QQ/Slack/Telegram/Discord/
-    # WhatsApp), third-party plugin shipped with the extension.
-    # Source: https://github.com/xmanrui/dsh-im (MIT)
-    - id: xmanrui-dsh-im
-      name: '@xmanrui/dsh-im'
 
     # Sandbox whitelist plugin: NOT inserted here — see the sandbox-seam
     # comment above. It is mounted as a profile bundle by

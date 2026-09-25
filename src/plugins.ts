@@ -28,8 +28,6 @@ const PLUGIN_NAMES = [
   // 它的运行时裸依赖只有 zod，由扩展自身的依赖闭包提供（dsh-app-boot 按
   // installation scope 路由），无需随包分发 node_modules。
   'dsh-capability-toggle-plugin',
-  // IM 机器人插件（随扩展分发，含自带运行时依赖 node_modules）。
-  '@xmanrui/dsh-im',
 ] as const
 
 /**
@@ -40,6 +38,9 @@ const RETIRED_PLUGIN_NAMES = [
   // 已由 dsh-capability-toggle-plugin 取代：同样按工作区开关 Skill / Host 全局
   // MCP，并扩展到工具、提示词、审批与安全守卫的会话 / 项目 / 全局三级开关。
   'dsh-workspace-scope',
+  // 第三方 IM 机器人插件（@xmanrui/dsh-im）：不再随扩展分发，也不再挂载
+  // 任何 patch 行；这里只为清掉上一版安装留下的副本。
+  '@xmanrui/dsh-im',
 ] as const
 
 /**
@@ -107,8 +108,8 @@ export function installPlugins(
       // Bundles may ship their built artifacts in lib/ (e.g. dsh-rollback-plugin).
       const libSource = path.join(source, 'lib')
       if (fs.existsSync(libSource)) fs.cpSync(libSource, path.join(target, 'lib'), { recursive: true })
-      // Plugins with external runtime dependencies ship a pruned production
-      // node_modules (e.g. @xmanrui/dsh-im: qrcode, dingtalk-stream, ...).
+      // Plugins with external runtime dependencies may ship a pruned production
+      // node_modules next to the bundle; copy it along when present.
       const depsSource = path.join(source, 'node_modules')
       if (fs.existsSync(depsSource)) {
         fs.cpSync(depsSource, path.join(target, 'node_modules'), { recursive: true })
@@ -119,7 +120,7 @@ export function installPlugins(
         if (fs.existsSync(from)) fs.copyFileSync(from, path.join(target, file))
       }
       // The bundle overlay declared by `dsh.bundle.patch` (e.g.
-      // @xmanrui/dsh-im/cordis.patch.yml). dsh-app-boot reads it for every
+      // dsh-whitelist-sandbox/cordis.patch.yml). dsh-app-boot reads it for every
       // package listed in a profile's `dsh.profile.bundles`, so a package
       // that declares it must ship the file, or that profile fails to load.
       const bundlePatch = path.join(source, 'cordis.patch.yml')

@@ -14,7 +14,7 @@
  *     `@deepseek-ai/dsh-client-ui-primitives`).
  *
  * Real directories (the plugins the extension installs there: dshui-client-ui-*,
- * dsh-rollback-plugin, @xmanrui/dsh-im, ...) are left untouched, as is every
+ * dsh-rollback-plugin, dsh-capability-toggle-plugin, ...) are left untouched, as is every
  * symlink that resolves inside the currently installed extension or points
  * somewhere that is not a dshui extension directory at all (e.g. an npx cache
  * target someone else owns). Removed are exactly: dangling links, and links into
