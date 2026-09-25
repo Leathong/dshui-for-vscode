@@ -28,6 +28,14 @@ const PLUGIN_NAMES = [
   // 它的运行时裸依赖只有 zod，由扩展自身的依赖闭包提供（dsh-app-boot 按
   // installation scope 路由），无需随包分发 node_modules。
   'dsh-capability-toggle-plugin',
+  // 第三方 IM 机器人插件（@xmanrui/dsh-im，作者 xmanrui，MIT）：12 个 IM 渠道 +
+  // 公网 AI Office。宿主 bundle 把 qrcode / dingtalk-stream / qqbot / wecom /
+  // imapflow / mailparser / nodemailer / undici / @matrix-org/olm 留作 external，
+  // 所以它的 stage 目录自带一份裁剪过的生产依赖闭包（见 dshui-plugins 下的
+  // node_modules，由下面的 installPlugins() 连同 lib/ 一起安装）；可选能力
+  // sharp（入站图片压缩）与 @tencent-qqmail/agently-cli（Email 的 Agent 邮箱）
+  // 不在闭包里，插件自身有降级路径。作用域包名即安装目录名。
+  '@xmanrui/dsh-im',
 ] as const
 
 /**
@@ -38,9 +46,6 @@ const RETIRED_PLUGIN_NAMES = [
   // 已由 dsh-capability-toggle-plugin 取代：同样按工作区开关 Skill / Host 全局
   // MCP，并扩展到工具、提示词、审批与安全守卫的会话 / 项目 / 全局三级开关。
   'dsh-workspace-scope',
-  // 第三方 IM 机器人插件（@xmanrui/dsh-im）：不再随扩展分发，也不再挂载
-  // 任何 patch 行；这里只为清掉上一版安装留下的副本。
-  '@xmanrui/dsh-im',
 ] as const
 
 /**

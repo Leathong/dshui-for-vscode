@@ -1,0 +1,10 @@
+# 本包作为 profile bundle 装载时的宿主行补丁（`package.json` 的
+# `dsh.bundle.patch` 指向本文件）。扩展下发的 patch.yml（--patch overlay 层）
+# 也插入了同样的行；两种装载方式互斥，见 plugins/plugin-development-guide.md §8。
+#
+# 行 id 是 `xmanrui-dsh-im`（作用域包不能直接当行 id 用），name 才是解析用的
+# 裸包名。客户端 bundle 注册的 id 必须等于**包名**（client-modules 以包名作
+# boot 图的 entry id），与本文件的行 id 无关。
+- insert:
+    - id: xmanrui-dsh-im
+      name: '@xmanrui/dsh-im'

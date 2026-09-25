@@ -16,6 +16,7 @@
   - [消息里的网络链接](#消息里的网络链接)
   - [多窗口（共享后端）](#多窗口共享后端)
   - [修改回滚](#修改回滚)
+  - [IM 机器人](#im-机器人)
 - [工作原理](#工作原理)
 - [开发流程](#开发流程)
   - [三级迭代，按需选择](#三级迭代按需选择)
@@ -72,6 +73,10 @@ agentic coding 框架，主张「一切皆插件」）的 Web UI 嵌入 VS Code 
   [多窗口（共享后端）](#多窗口共享后端)）。
 - **修改回滚**：agent 对工作区文件的每次修改都会进入侧边栏「修改列表」，可在 VS Code 原生 Diff
   中逐文件审查、接受或撤销（详见 [修改回滚](#修改回滚)）。
+- **IM 机器人**：内置第三方插件 [`@xmanrui/dsh-im`](https://github.com/xmanrui/dsh-im)
+  （作者 xmanrui，MIT 许可证，v4.28.0），扫码或填入凭据即可把飞书、微信、钉钉、企业微信、QQ、
+  Slack、Telegram、Discord、WhatsApp、iMessage、Email、Matrix 机器人接入 dsh，并提供公网
+  AI Office 连接器（详见 [IM 机器人](#im-机器人)）。
 
 ## 环境要求
 
@@ -289,6 +294,39 @@ host 插件轮询注册表，无存活窗口时自行退出。采纳方即使遇
   <em>修改回滚：侧边栏「修改列表」点击文件后，在 VS Code 原生 Diff 中逐 hunk 接受或撤销修改。</em>
 </p>
 
+### IM 机器人
+
+扩展内置第三方插件 [`@xmanrui/dsh-im`](https://github.com/xmanrui/dsh-im)（**来源：
+[github.com/xmanrui/dsh-im](https://github.com/xmanrui/dsh-im)，作者 xmanrui，MIT 许可证**，
+v4.28.0 随扩展分发，许可证与第三方声明见插件目录下的 `LICENSE` 与 `THIRD_PARTY_NOTICES.md`），
+把 IM 机器人接入 dsh：
+
+- **一个设置入口**：打开 dsh UI 的「设置 → 插件 → IM机器人」，通过扫码、App Manifest 或已有机器人
+  凭据接入并统一管理飞书、微信、钉钉、企业微信（智能机器人 / 自建应用）、QQ、Slack、Telegram、
+  Discord、WhatsApp、iMessage、Email（IMAP/SMTP 与 Agent 邮箱）与 Matrix（实验）共 12 个渠道，
+  另含公网 AI Office 连接器；**每个渠道都能接多个机器人**。凭据/Token 只提交到本机 Harness Host，
+  写入受保护的凭据存储，不回传给状态接口。
+- **IM 即会话入口**：机器人在 IM 中收到的消息交给 Harness 处理并流式回复；每个机器人维护独立的
+  Harness 工作区、模型与会话绑定，支持 `/workspace`、`/workspacelist`、`/sessionlist`、`/session`
+  等命令切换工作区与绑定会话。
+- **离开模式（飞书）**：在 dsh UI 会话输入框发送 `/leavemode on` 开启（全局生效，`/leavemode off`
+  关闭、`/leavemode` 查询）后，插件主动监听所有会话，把**提问、审批与最终结果**推送到飞书——
+  提问/审批以交互卡片推送，可直接点卡片按钮或「引用回复」卡片作答，人不在电脑前也能推进任务。
+  推送消息带工作区名称标记；不归属任何机器人工作区的会话由最近活跃的机器人兜底推送；
+  「引用回复」任意一条推送消息会把当前飞书对话切换到该消息所属的会话。
+- **随包分发的运行依赖**：它的宿主 bundle 把 `qrcode`、`dingtalk-stream`、`@tencent-connect/*`、
+  `@wecom/aibot-node-sdk`、`imapflow`、`mailparser`、`nodemailer`、`undici`、`@matrix-org/olm`
+  留作运行时依赖，stage 时由 `make stage-deps` 裁进插件目录的 `node_modules/`（约 12.8 MiB），
+  扩展激活时随 `lib/` 一并安装，**无需联网 `npm install`**。可选能力 `sharp`（入站图片压缩）与
+  `@tencent-qqmail/agently-cli`（Email 的 Agent 邮箱）未随包分发：超过模型上限的图片会改为存入
+  工作区并提示模型用工具读取，Agent 邮箱提示缺少 CLI，同渠道的 IMAP/SMTP 邮箱不受影响。
+- **更新方式**：插件自带的「更新」面板面向 `dsh plugin add` 安装到 profile 的副本（会去 npm 查
+  新版本）；扩展分发的副本不在它的管理路径内，面板会显示为不可更新——随扩展版本升级即可，扩展
+  激活时按版本覆盖安装。
+- **安全提示**：机器人的可见范围就是入站访问范围——请只把机器人开放给可信的租户、组织、群或
+  成员。各渠道的扫码/凭据接入流程与更多安全说明见
+  [上游 README](https://github.com/xmanrui/dsh-im#readme)。
+
 ## 工作原理
 
 ```
@@ -334,6 +372,13 @@ VS Code 侧边栏视图（webview）
     修改列表因此只剩 `dsh-rollback-plugin` 的 dock 一种来源。
   - `dsh-rollback-plugin`——修改回滚插件：记录 agent 的 `write` / `edit` 修改与会话基线快照，
     提供「修改列表」dock 与原生 Diff 审查（详见 [修改回滚](#修改回滚)）。
+  - `@xmanrui/dsh-im`——第三方 IM 机器人插件（**来源：
+    [github.com/xmanrui/dsh-im](https://github.com/xmanrui/dsh-im)，作者 xmanrui，MIT 许可证**）：
+    把飞书、微信、钉钉、企业微信、QQ、Slack、Telegram、Discord、WhatsApp、iMessage、Email、
+    Matrix 十二个渠道的 IM 机器人与公网 AI Office 接入 dsh（详见 [IM 机器人](#im-机器人)）。其宿主
+    bundle 把 `qrcode`、`dingtalk-stream`、qqbot / wecom SDK、`imapflow`、`mailparser`、
+    `nodemailer`、`undici`、`@matrix-org/olm` 声明为外部运行时依赖，因此插件目录自带一份裁剪过的
+    生产依赖 `node_modules/`（约 12.8 MiB），由 `installPlugins()` 随 `lib/` 一并安装。
 - **删除会话**：dsh 自带「归档」（隐藏会话、不删文件），但没有删除 RPC。插件在会话行菜单与悬停
   操作里**新增**「删除会话」（0.1.7 起上游把会话行操作改成 slot 条目，删除与归档/置顶并存）：点击后
   插件向 webview 外壳 postMessage（`dshui:deleteSession`，
@@ -570,4 +615,6 @@ npm run compile && npx @vscode/vsce package
 ## 许可证
 
 [MIT](LICENSE)。上游 [deepseek-harness](https://github.com/deepseek-ai/deepseek-harness) 亦为
-MIT 协议。随扩展分发的第三方插件 `dsh-capability-toggle-plugin`（作者 lifeopsgo）同为 MIT 协议。
+MIT 协议。随扩展分发的第三方插件 `dsh-capability-toggle-plugin`（作者 lifeopsgo）同为 MIT 协议；
+[`@xmanrui/dsh-im`](https://github.com/xmanrui/dsh-im)（作者 xmanrui）同为 MIT 协议，其许可证与
+第三方组件声明见 `dshui-plugins/@xmanrui/dsh-im/` 下的 `LICENSE` 与 `THIRD_PARTY_NOTICES.md`。

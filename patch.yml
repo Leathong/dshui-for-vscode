@@ -102,6 +102,26 @@
     - id: dsh-capability-toggle-plugin
       name: dsh-capability-toggle-plugin
 
+    # IM bot bridge for twelve channels (Feishu / WeChat / DingTalk / WeCom /
+    # QQ / Slack / Telegram / Discord / WhatsApp / iMessage / Email / Matrix)
+    # plus the public AI Office connector. Third-party plugin shipped with the
+    # extension — source: https://github.com/xmanrui/dsh-im (MIT). Its host
+    # bundle keeps qrcode / dingtalk-stream / qqbot / wecom / imapflow /
+    # mailparser / nodemailer / undici / @matrix-org/olm external, so
+    # `dshui-plugins/@xmanrui/dsh-im/` carries a pruned production node_modules
+    # that `installPlugins()` installs next to `lib/`.
+    #
+    # Note the scoped name: the row id (`xmanrui-dsh-im`) only labels the row,
+    # while `name` is the bare specifier resolved through
+    # `$DSH_HOME/profiles/node_modules`. Invariant 1 above therefore reads
+    # "bundle id = package.json name" (`@xmanrui/dsh-im`) for this row — the
+    # client-modules loader keys its boot graph by package name, not by row id.
+    # Mounted from this overlay (not as a profile bundle) because the plugin
+    # keeps its own settings UI and never writes a `configEditor` row, so
+    # layer-2 visibility does not matter here.
+    - id: xmanrui-dsh-im
+      name: '@xmanrui/dsh-im'
+
     # Sandbox whitelist plugin: NOT inserted here — see the sandbox-seam
     # comment above. It is mounted as a profile bundle by
     # `ensureProfileBundle()`, so its own `cordis.patch.yml` owns the
