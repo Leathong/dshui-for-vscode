@@ -309,11 +309,10 @@ v4.28.0 随扩展分发，许可证与第三方声明见插件目录下的 `LICE
 - **IM 即会话入口**：机器人在 IM 中收到的消息交给 Harness 处理并流式回复；每个机器人维护独立的
   Harness 工作区、模型与会话绑定，支持 `/workspace`、`/workspacelist`、`/sessionlist`、`/session`
   等命令切换工作区与绑定会话。
-- **离开模式（飞书）**：在 dsh UI 会话输入框发送 `/leavemode on` 开启（全局生效，`/leavemode off`
-  关闭、`/leavemode` 查询）后，插件主动监听所有会话，把**提问、审批与最终结果**推送到飞书——
-  提问/审批以交互卡片推送，可直接点卡片按钮或「引用回复」卡片作答，人不在电脑前也能推进任务。
-  推送消息带工作区名称标记；不归属任何机器人工作区的会话由最近活跃的机器人兜底推送；
-  「引用回复」任意一条推送消息会把当前飞书对话切换到该消息所属的会话。
+- **离开模式（飞书）**：在 dsh UI 会话输入框发送 `/away on` 开启（`/away off` 关闭、`/away` 查询、
+  `/away prune` 清理空闲工作区的群）后，插件为**有运行中会话**的工作区创建 `DSH-{workspace}` 飞书群
+  并接管这些会话。提问与审批以交互卡片推送，并与 Web 端**竞速**——谁先作答算谁的；IM 内部只由所属群
+  弹卡，不会在多个聊天里重复推送。群在飞书被解散后会自动重建，并在下一个同步周期重新接管。
 - **随包分发的运行依赖**：它的宿主 bundle 把 `qrcode`、`dingtalk-stream`、`@tencent-connect/*`、
   `@wecom/aibot-node-sdk`、`imapflow`、`mailparser`、`nodemailer`、`undici`、`@matrix-org/olm`
   留作运行时依赖，stage 时由 `make stage-deps` 裁进插件目录的 `node_modules/`（约 12.8 MiB），

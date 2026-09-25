@@ -353,13 +353,12 @@ directory), which connects IM bots to dsh:
   streaming replies. Each bot keeps its own Harness workspace, model and session binding;
   `/workspace`, `/workspacelist`, `/sessionlist`, and `/session` commands switch workspaces and bind
   sessions.
-- **Leave mode (Feishu):** send `/leavemode on` in the dsh UI session input to enable it globally
-  (`/leavemode off` disables, `/leavemode` shows the status). The plugin then watches all sessions and
-  pushes **questions, approvals, and final results** to Feishu — questions/approvals arrive as
-  interactive cards you answer by tapping a button or quote-replying, so work keeps moving while you're
-  away from the computer. Pushes are labeled with the workspace name; sessions that belong to no bot's
-  workspace are pushed by the most recently active bot as a fallback, and quote-replying any pushed
-  message switches the current Feishu conversation to that message's session.
+- **Away mode (Feishu):** send `/away on` in the dsh UI session input (`/away off` disables, `/away`
+  shows the status, `/away prune` dissolves groups for workspaces with nothing running). The plugin
+  creates a `DSH-{workspace}` Feishu group for every workspace that has a running session and hands
+  those sessions to it. Questions and approvals arrive as interactive cards that **race** the Web UI —
+  whichever answers first wins — and only the owning group shows a card, so nothing is pushed twice.
+  A group dissolved in Feishu is recreated and re-adopted on the next sync.
 - **Runtime dependencies ship with it:** its host bundle keeps `qrcode`, `dingtalk-stream`, the
   `@tencent-connect/*` and `@wecom/aibot-node-sdk` SDKs, `imapflow`, `mailparser`, `nodemailer`,
   `undici` and `@matrix-org/olm` external, so `make stage-deps` stages a pruned production
