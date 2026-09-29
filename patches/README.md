@@ -34,7 +34,9 @@ dshui 改动（51 个文件、约 160 KB，含客户端 bundle + host 运行时�
   引用 chip 投影之上**保留 markdown 链接投影**：`[label](destination)` 中白名单
   http/https/mailto 渲染为外链锚点，`new URL` 无法解析的目标渲染为经 `references.openFile` →
   `apply.ts` 的 `dshuiOpenPath` 解析打开的文件按钮——工作区相对目标按会话 cwd 拼接，`~` 家目录目标
-  （含被 `./`/`../` 前缀包裹的写法）保留 `~` 拼写交给 Host 展开，其余绝对 URL 保持字面）、
+  （含被 `./`/`../` 前缀包裹的写法）保留 `~` 拼写交给 Host 展开，其余绝对 URL 保持字面；目标的
+  `#L10` 锚点 / `:10` 后缀（含 `-L20`、`–` 区间写法，取首行）由 `filePathAndLine` 剥离，作为打开
+  手势的 `line` 选项传给 `openFile`）、
   `chat/MessageItem.module.css`
   （`.projectedText` 内联流动与 `.link` 链接样式）、`chat/register-node-renderers.ts`
   （为 `user` 注册 `UserMessageNodeView`（带 user-actions 子槽）、为 `steering` 注册
@@ -69,7 +71,9 @@ RPC；上游 0.1.7 新增的归档/置顶行操作保留并存）、每条用户
   bridge/CLI/URL 辅助函数（`dshuiOpenViaBridge` / `dshuiOpenViaCli` / `dshuiVscodeFileUrl` / origin
   感知的 bridge 选择），使聊天中的文件链接在宿主 VS Code 打开（走扩展内桥接，无系统弹窗）；没有这些
   标记的普通 `dsh` 部署保持上游原行为（`open [path]` / 文本意图 `open -t [path]`）。`PathOpenerInternals`
-  增加 `dshuiOrigin` 让点击来源参与路由。
+  增加 `dshuiOrigin` 让点击来源参与路由，增加 `dshuiLine` 把链接的行号透传成桥接请求的 `line`
+  查询参数（扩展的 openBridge 用它做 `showTextDocument` 选区）；`code` CLI 与 `vscode://file` 回退
+  只按文件寻址，没有行号语法，故只有桥接这一路消费行号。
 - `packages/client/connection/src/browser-auth.ts`：token 交换的 303 重定向保留除 launch token 之外
   的 `dshui_workspace` / `dshui_theme` 查询参数（0.1.7 起上游改为目录相对的 `./`，dshui 在此基础上
   保留非 token 查询参数），避免共享后端窗口在 token 交换后丢失工作区作用域。
@@ -82,8 +86,12 @@ RPC；上游 0.1.7 新增的归档/置顶行操作保留并存）、每条用户
   `tests/session-fork.host.spec.ts`（新增「子会话 inbox 为空」用例）与
   `tests/commands-create-fork.host.spec.ts`（假 Agent 补上 `inbox`）。
 - `packages/api/session-controller/src/index.ts` 与 `.../src/types.ts`：`openWorkspacePath` 请求
-  携带 `dshuiOrigin`，并把它透传给 opener internals（0.1.7 起 opener 多了
-  `openNativeAssociatedPath` / file-application 分支，dshui 的三处调用点已对齐）。`verifyDesktopPath`
+  携带 `dshuiOrigin` 与 `dshuiLine`，并把它俩透传给 opener internals（0.1.7 起 opener 多了
+  `openNativeAssociatedPath` / file-application 分支，dshui 的三处调用点已对齐）。`dshuiLine` 是链接
+  的行号：上游的 markdown 渲染器把 `#L10` / `:10` 后缀剥离成自己的 `openFile` 选项，不会留在路径里，
+  所以行号只能走请求字段；它经 native-command 变成桥接的 `line` 查询参数，由扩展 `showTextDocument`
+  的选区定位。回归用例见 `tests/session-open-workspace-path.host.spec.ts` 的
+  「threads the dshui requested line into the opener internals」。`verifyDesktopPath`
   校验前先经 `dshuiHomePath` 展开 `~`：浏览器不知道账号家目录，家目录链接只能以 `~` 拼写送到 Host，
   若直接 `resolve` 会被钉在服务器工作目录下（`<cwd>/~/.dsh/...`）。`verifyDesktopPath` 的校验同时接受
   软链别名：上游要求文件系统解析出的规范路径与浏览器给的拼写逐字相等，而文件系统按 realpath 标识目标，
@@ -97,7 +105,10 @@ RPC；上游 0.1.7 新增的归档/置顶行操作保留并存）、每条用户
   `packages/client/ui-settings-general/src/client/settings-document-store.ts`：客户端在调用上述两个
   remote 时附上窗口作用域（`__DSHUI_WORKSPACE__` 或 `dshui_workspace` 查询参数）；前者的
   `dshuiOpenPath` 决定文件链接目标的 Host 拼写（工作区相对 → 会话 cwd；家目录相对 → 去掉
-  `./`/`../` 前缀后保留 `~`）。
+  `./`/`../` 前缀后保留 `~`），并把上游的 `OpenFileOptions.line` 作为 `dshuiLine` 一起发出——上游
+  的 `ChatView` 一直把行号交给 `openFile`，dshui 改造打开路径时漏掉了它，于是带行号的链接只打开文件
+  顶部。用户消息里的链接由 dshui 自己的 `MessageItem.tsx` 投影渲染（见上文），那里同样解析
+  `#L10` / `:10` 后缀并把行号交给 `openFile`。
 - `packages/mcp/mcp-client/src/index.ts`：新增 `startup: 'eager' | 'lazy'` 配置（默认 `eager`）。
   `lazy` 时激活立即返回、由 supervisor 在后台连接并注册工具，慢速远端（如 OAuth 之后的服务器）
   不再拖住 dsh 启动；配套更新 README 与少量测试。

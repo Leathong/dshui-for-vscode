@@ -82,7 +82,7 @@ const CHECKS = [
   },
   {
     file: 'packages/util/native-command/src/path-opener.ts',
-    markers: ['dshuiOpenViaBridge', 'dshuiVscodeFileUrl', 'dshuiOpenViaCli'],
+    markers: ['dshuiOpenViaBridge', 'dshuiVscodeFileUrl', 'dshuiOpenViaCli', 'dshuiLine'],
   },
   {
     file: 'packages/client/connection/src/browser-auth.ts',
@@ -94,7 +94,7 @@ const CHECKS = [
   },
   {
     file: 'packages/client/ui-chat/src/client/chat/MessageItem.tsx',
-    markers: ['userLinkDestination', 'projectUserTextWithLinks', "renderSlot('conversation.chat.user-actions'"],
+    markers: ['userLinkDestination', 'projectUserTextWithLinks', 'filePathAndLine', "renderSlot('conversation.chat.user-actions'"],
   },
   {
     file: 'packages/client/ui-chat/src/client/chat/MessageItem.module.css',
@@ -114,7 +114,7 @@ const CHECKS = [
   },
   {
     file: 'packages/client/ui-chat/src/client/apply.ts',
-    markers: ['dshuiClickOrigin', 'dshuiOpenPath'],
+    markers: ['dshuiClickOrigin', 'dshuiOpenPath', 'dshuiLine: options.line'],
   },
   {
     file: 'packages/client/ui-settings-general/src/client/settings-document-store.ts',
@@ -130,7 +130,7 @@ const CHECKS = [
   },
   {
     file: 'packages/api/session-controller/src/index.ts',
-    markers: ['dshuiOrigin', 'dshuiHomePath'],
+    markers: ['dshuiOrigin', 'dshuiHomePath', 'dshuiLine'],
   },
   {
     file: 'packages/api/settings-controller/src/index.ts',

@@ -42,7 +42,10 @@ half is incomplete.
   a file-open button through `references.openFile` → `apply.ts`'s `dshuiOpenPath` — a workspace-relative
   destination is joined onto the session cwd, a `~` home destination (including one wrapped in
   `./`/`../` prefixes) keeps its `~` spelling for the Host to expand, and any other
-  absolute URL stays literal), `chat/MessageItem.module.css` (the `.projectedText` inline flow and
+  absolute URL stays literal; the destination's `#L10` anchor / `:10` suffix — including `-L20` and
+  en-dash ranges, of which the first line is kept — is split off by `filePathAndLine` and passed to
+  `openFile` as the open gesture's `line` option), `chat/MessageItem.module.css` (the `.projectedText`
+  inline flow and
   `.link` styles), `chat/register-node-renderers.ts` (registers `UserMessageNodeView` — with the
   user-actions child slot — for `user`, and `SteeringMessageNodeView` for `steering`),
   `contract/slots.ts` (`UserActionOwnerProps` and the `conversation.chat.user-actions` slot
@@ -83,7 +86,10 @@ The string patches the extension once applied to the npm package at runtime (see
   so chat file links open in the host VS Code (through the in-extension bridge, no system dialog); a
   plain `dsh` deployment without those markers keeps the stock behavior (`open [path]`, or
   `open -t [path]` for the text-editor intent). `PathOpenerInternals` gains `dshuiOrigin` so the
-  click origin takes part in routing.
+  click origin takes part in routing, and `dshuiLine` so a link's line travels as the bridge request's
+  `line` query parameter (the extension's openBridge turns it into the `showTextDocument` selection).
+  The `code` CLI and `vscode://file` fallbacks address a file only and have no line syntax, so the
+  bridge path is the one that consumes a line.
 - `packages/client/connection/src/browser-auth.ts`: the 303 redirect of the token exchange keeps the
   `dshui_workspace` / `dshui_theme` query params (besides `launch`), so a shared-backend window keeps
   its workspace scope after the token exchange.
@@ -97,9 +103,16 @@ The string patches the extension once applied to the npm package at runtime (see
   also updates `tests/session-fork.host.spec.ts` (a new "child inbox is empty" case) and
   `tests/commands-create-fork.host.spec.ts` (the fake Agent gains an `inbox`).
 - `packages/api/session-controller/src/index.ts` and `.../src/types.ts`: the `openWorkspacePath`
-  request carries `dshuiOrigin`, which is threaded into the opener internals (since 0.1.7 the opener
+  request carries `dshuiOrigin` and `dshuiLine`, which are threaded into the opener internals (since
+  0.1.7 the opener
   also has the `openNativeAssociatedPath` / file-application branches; the dshui call sites are
-  aligned with them). `verifyDesktopPath` expands `~` through `dshuiHomePath` before validating: the
+  aligned with them). `dshuiLine` is a link's line: the upstream markdown renderer strips a
+  `#L10` / `:10` suffix into its own `openFile` option rather than leaving it in the path, so the line
+  can only travel as a request field; native-command turns it into the bridge's `line` query
+  parameter, and the extension's `showTextDocument` selection lands on it. The regression case is
+  "threads the dshui requested line into the opener internals" in
+  `tests/session-open-workspace-path.host.spec.ts`. `verifyDesktopPath` expands `~` through
+  `dshuiHomePath` before validating: the
   browser cannot read the account home, so a home link arrives in its `~` spelling, and a bare
   `resolve` would staple it to the server's working directory (`<cwd>/~/.dsh/...`).
 - `packages/api/settings-controller/src/index.ts`: `openSettingsDocument(dshuiOrigin, signal)`
@@ -108,7 +121,11 @@ The string patches the extension once applied to the npm package at runtime (see
   `packages/client/ui-settings-general/src/client/settings-document-store.ts`: the client attaches the
   window scope (`__DSHUI_WORKSPACE__` or the `dshui_workspace` query param) to those two remote calls.
   The former's `dshuiOpenPath` also owns the file-link destination spelling (workspace-relative →
-  session cwd; home-relative → `~` kept after dropping `./`/`../` prefixes).
+  session cwd; home-relative → `~` kept after dropping `./`/`../` prefixes), and sends the upstream
+  `OpenFileOptions.line` along as `dshuiLine` — upstream's `ChatView` always passed a line to
+  `openFile`, and the dshui reroute of the open path lost it, so a line-numbered link opened the top of
+  the file. Links inside a user message are rendered by dshui's own `MessageItem.tsx` projection
+  (above), which splits the same `#L10` / `:10` suffixes and hands the line to `openFile` as well.
 - `packages/mcp/mcp-client/src/index.ts`: adds the `startup: 'eager' | 'lazy'` option (default
   `eager`). In `lazy` mode activation returns immediately and the supervisor connects and registers
   tools in the background, so a slow remote (for example one behind OAuth) never delays dsh startup;

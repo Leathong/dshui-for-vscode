@@ -25,7 +25,7 @@ index 7e900b92ae..785937a92d 100644
        throw new RemoteError(
          'gateway/internal',
 diff --git a/packages/api/session-controller/src/index.ts b/packages/api/session-controller/src/index.ts
-index 3fe15221fb..f5057a6fc4 100644
+index 3fe15221fb..35d43c6b7a 100644
 --- a/packages/api/session-controller/src/index.ts
 +++ b/packages/api/session-controller/src/index.ts
 @@ -1,14 +1,15 @@
@@ -98,22 +98,28 @@ index 3fe15221fb..f5057a6fc4 100644
    private readonly fileApplications: typeof nativeFileApplications
    private readonly openFileApplication: typeof openNativeFileApplication
    private readonly revealPath: (path: string, signal: AbortSignal) => Promise<void>
-@@ -343,9 +379,13 @@ export class SessionController extends TypertRemoteService {
+@@ -343,9 +379,19 @@ export class SessionController extends TypertRemoteService {
    ): Promise<SessionOpenWorkspacePathValue> {
      try {
        const path = await this.verifyDesktopPath(request.path, signal)
-+      // dshui patch: thread the click origin down to the opener internals so
-+      // the bridge router prefers the window the click happened in over
-+      // workspace longest-prefix ownership.
++      // dshui patch: thread the click origin and the line it asked to reveal
++      // down to the opener internals, so the bridge router prefers the window
++      // the click happened in over workspace longest-prefix ownership and the
++      // hosting editor lands on that line.
 +      const dshuiOrigin = request.dshuiOrigin
++      const dshuiLine = request.dshuiLine
++      const internals: PathOpenerInternals = {
++        ...dshuiOrigin === undefined ? {} : { dshuiOrigin },
++        ...dshuiLine === undefined ? {} : { dshuiLine },
++      }
        if (request.action === 'reveal') await this.revealPath(path, signal)
        else if (request.application !== undefined) await this.openFileApplication(path, request.application, signal)
 -      else await this.openPath(path, signal)
-+      else await this.openPath(path, signal, dshuiOrigin === undefined ? {} : { dshuiOrigin })
++      else await this.openPath(path, signal, internals)
        return { opened: true }
      } catch (error: unknown) {
        if (signal.aborted) throw new RemoteError('gateway/cancelled', 'path open was aborted', {})
-@@ -384,10 +424,17 @@ export class SessionController extends TypertRemoteService {
+@@ -384,10 +430,17 @@ export class SessionController extends TypertRemoteService {
    private async verifyDesktopPath(path: string, signal: AbortSignal): Promise<string> {
      if (path.length === 0) throw new RemoteError('gateway/bad-request', 'A non-empty file path is required', {})
      signal.throwIfAborted()
@@ -134,10 +140,10 @@ index 3fe15221fb..f5057a6fc4 100644
      }
      signal.throwIfAborted()
 diff --git a/packages/api/session-controller/src/types.ts b/packages/api/session-controller/src/types.ts
-index a8f0d7e450..fb7191683d 100644
+index a8f0d7e450..f3753bcb4f 100644
 --- a/packages/api/session-controller/src/types.ts
 +++ b/packages/api/session-controller/src/types.ts
-@@ -387,6 +387,12 @@ export interface SessionOpenWorkspacePathRequest {
+@@ -387,6 +387,19 @@ export interface SessionOpenWorkspacePathRequest {
    readonly application?: string
    /** Path after best-effort Session workspace resolution, in Host filesystem syntax. */
    readonly path: string
@@ -147,6 +153,13 @@ index a8f0d7e450..fb7191683d 100644
 +   * workspace-ownership routing.
 +   */
 +  readonly dshuiOrigin?: string
++  /**
++   * dshui patch: 1-based line the open gesture asked to reveal. A dsh web file
++   * link carries its `#L10` fragment as its own `openFile` option, which the
++   * client bundle forwards here; the Host hands it to the hosting editor's open
++   * bridge. Absent means the file opens at its top.
++   */
++  readonly dshuiLine?: number
  }
  
  /** Confirmation that the Host handed a workspace path to its native opener. */
@@ -254,7 +267,7 @@ index 137eeeb190..cf87f92fe8 100644
 +  })
  })
 diff --git a/packages/api/session-controller/tests/session-open-workspace-path.host.spec.ts b/packages/api/session-controller/tests/session-open-workspace-path.host.spec.ts
-index e8216b5214..7b9e9d55ee 100644
+index e8216b5214..9008839074 100644
 --- a/packages/api/session-controller/tests/session-open-workspace-path.host.spec.ts
 +++ b/packages/api/session-controller/tests/session-open-workspace-path.host.spec.ts
 @@ -1,4 +1,6 @@
@@ -265,7 +278,7 @@ index e8216b5214..7b9e9d55ee 100644
  import * as nativeCommand from '@deepseek-ai/dsh-native-command'
  import { Context } from '@deepseek-ai/cordis'
  import AgentRegistry from '@deepseek-ai/dsh-agent'
-@@ -66,10 +68,27 @@ describe('session/openWorkspacePath', () => {
+@@ -66,10 +68,48 @@ describe('session/openWorkspacePath', () => {
  
      await expect(remote.openWorkspacePath({ path: '/workspace/project/src/a.ts' }, signal))
        .resolves.toEqual({ ok: true, value: { opened: true } })
@@ -291,10 +304,31 @@ index e8216b5214..7b9e9d55ee 100644
 +    expect(openPath).toHaveBeenCalledWith(resolve('/workspace-b/src/a.ts'), signal, { dshuiOrigin: '/workspace-a' })
 +  })
 +
++  it('threads the dshui requested line into the opener internals', async () => {
++    const ctx = await context()
++    const openPath = vi.fn((_path: string, _signal: AbortSignal) => Promise.resolve())
++    const remote = createSessionTestRemote(ctx, {
++      defaultModelSelection: () => ({ provider: 'p', model: 'm' }),
++      cwd: '/default',
++      openPath,
++    })
++    const signal = new AbortController().signal
++
++    await expect(remote.openWorkspacePath({
++      path: '/workspace-b/src/a.ts',
++      dshuiOrigin: '/workspace-a',
++      dshuiLine: 268,
++    }, signal)).resolves.toEqual({ ok: true, value: { opened: true } })
++    expect(openPath).toHaveBeenCalledWith(resolve('/workspace-b/src/a.ts'), signal, {
++      dshuiOrigin: '/workspace-a',
++      dshuiLine: 268,
++    })
++  })
++
    it('normalizes relative and absolute Host-resolvable paths', async () => {
      const ctx = await context()
      const openPath = vi.fn((_path: string, _signal: AbortSignal) => Promise.resolve())
-@@ -84,6 +103,48 @@ describe('session/openWorkspacePath', () => {
+@@ -84,6 +124,48 @@ describe('session/openWorkspacePath', () => {
      expect(openPath.mock.calls.map(call => call[0])).toEqual([resolve('/workspace/result.html'), resolve('result.html')])
    })
  
@@ -343,7 +377,7 @@ index e8216b5214..7b9e9d55ee 100644
    it('rejects empty paths before opening anything', async () => {
      const ctx = await context()
      const openPath = vi.fn((_path: string, _signal: AbortSignal) => Promise.resolve())
-@@ -214,7 +275,7 @@ it('dispatches default-app opening to the association adapter', async () => {
+@@ -214,7 +296,7 @@ it('dispatches default-app opening to the association adapter', async () => {
    })
    const signal = new AbortController().signal
    await controller.openWorkspacePath({ path: '/report.html' }, signal)
@@ -498,7 +532,7 @@ index 215001dbb9..6174104d03 100644
  }
  
 diff --git a/packages/client/ui-chat/src/client/apply.ts b/packages/client/ui-chat/src/client/apply.ts
-index 8c86d6e918..253f31b987 100644
+index 8c86d6e918..dce9aa7553 100644
 --- a/packages/client/ui-chat/src/client/apply.ts
 +++ b/packages/client/ui-chat/src/client/apply.ts
 @@ -11,7 +11,7 @@ import type {} from '@deepseek-ai/dsh-client-ui-sidebar-browser/client'
@@ -556,12 +590,26 @@ index 8c86d6e918..253f31b987 100644
  const CHAT_NODE_INJECT: ChatNodeInjected = {
    hooks: {
      turnData: (_standard, { turnData }) => function useTurnData(key) {
-@@ -212,12 +251,20 @@ export function apply(ctx: Context): void {
-           // address: the file is one piece of content whether it is opened at
-           // its top or at line 400, so the same tab is revealed and told where
-           // to land.
--          openFile: async (path, options) => {
-+          openFile: async (path) => {
+@@ -200,24 +239,28 @@ export function apply(ctx: Context): void {
+             chatGroup: key => conversation.snapshot.getSnapshot().views.grouped('chat')?.groupSource(key as GroupKey),
+           },
+           fileMentions: (owner: TurnTailOwnerProps) => ctx.get('chatFileMentions')?.forClosing(owner, sessionId),
+-          // Files open in the right Sidebar, not in a desktop application: the
+-          // content stays in the product, beside the conversation that produced
+-          // it. A relative path, or an absolute one inside the session's
+-          // workspace, is addressed under this session's scope,
+-          // `dsh-resource://file/session/<id>/<path>`; an absolute path
+-          // elsewhere keeps its absolute spelling in the same Session's address.
+-          // Which tab type claims the
+-          // address is the Sidebar's decision, not this call site's.
+-          // A line travels as a navigation parameter, not as part of the
+-          // address: the file is one piece of content whether it is opened at
+-          // its top or at line 400, so the same tab is revealed and told where
+-          // to land.
++          // dshui patch: files open in the VS Code window hosting this UI, not
++          // in the in-product right Sidebar preview the stock implementation
++          // addressed with a `dsh-resource://file/session/<id>/<path>` URL.
+           openFile: async (path, options) => {
              const cwd = ctx.sessions.list.getSnapshot().byId[sessionId]?.cwd
 -            const url = fileAddressFor(sessionId, cwd, path)
 -            if (options?.line === undefined) ctx.sidebarRight.openResource(url)
@@ -573,10 +621,15 @@ index 8c86d6e918..253f31b987 100644
 +            // local open bridge, ahead of workspace-ownership routing.
 +            // `dshuiOpenPath` decides the Host-facing spelling: workspace
 +            // relative against the Session cwd, home relative as `~`.
++            // The upstream `OpenFileOptions.line` travels beside the path (the
++            // Sidebar used it as a navigation parameter; the bridge receives it
++            // as `dshuiLine`), so a `#L10` link lands on its line instead of
++            // the file top.
 +            const dshuiOrigin = dshuiClickOrigin()
 +            const result = await ctx.remote.session.openWorkspacePath({
 +              path: dshuiOpenPath(cwd, path),
 +              ...(dshuiOrigin === undefined ? {} : { dshuiOrigin }),
++              ...(options?.line === undefined ? {} : { dshuiLine: options.line }),
 +            })
 +            if (!result.ok) throw new Error(`path open failed: ${result.error.message}`)
            },
@@ -619,7 +672,7 @@ index abedf6985e..1d9f7b9179 100644
 +  text-decoration: underline;
 +}
 diff --git a/packages/client/ui-chat/src/client/chat/MessageItem.tsx b/packages/client/ui-chat/src/client/chat/MessageItem.tsx
-index d84a819f3c..fffe993e54 100644
+index d84a819f3c..d9c499a03c 100644
 --- a/packages/client/ui-chat/src/client/chat/MessageItem.tsx
 +++ b/packages/client/ui-chat/src/client/chat/MessageItem.tsx
 @@ -2,6 +2,7 @@ import { Fragment, memo, useEffect, useMemo, useState } from 'react'
@@ -630,7 +683,7 @@ index d84a819f3c..fffe993e54 100644
  import { fileExtension, FileTypeIcon, fileSizeText, JsonBlock, projectUserText, StateDot } from '@deepseek-ai/dsh-client-ui-primitives'
  import type { ChatNodeOwnerProps, ChatNodeViewProps, ChatViewSlotProps } from '../contract/slots.ts'
  import type { ModelRetryNode, TurnErrorNode, UserMessageNode } from '../contract/snapshot.ts'
-@@ -156,6 +157,88 @@ function TurnMaxTokensItem({ t }: {
+@@ -156,6 +157,115 @@ function TurnMaxTokensItem({ t }: {
    )
  }
  
@@ -642,7 +695,27 @@ index d84a819f3c..fffe993e54 100644
 + */
 +type UserLinkDestination =
 +  | { kind: 'external'; href: string; newTab: boolean }
-+  | { kind: 'file'; path: string }
++  | { kind: 'file'; path: string; line?: number }
++
++/**
++ * Split a file destination off its optional line reference — the two spellings
++ * dsh tells the model to write: the GitHub-style anchor (`a.dart#L10`,
++ * `a.dart#L10-L20`) and the trailing `:line` / `:line-end` / `:line–end`
++ * suffix. Only the first line survives: a range names one file opened at its
++ * start, and the open gesture below carries a single line.
++ * @param raw - A destination `new URL` could not parse.
++ * @returns the path without its line reference, plus its 1-based first line.
++ */
++function filePathAndLine(raw: string): { path: string; line?: number } {
++  const hash = raw.lastIndexOf('#')
++  if (hash !== -1) {
++    const anchored = /^L([1-9][0-9]*)(?:-L?([1-9][0-9]*))?$/.exec(raw.slice(hash + 1))
++    if (anchored !== null) return { path: raw.slice(0, hash), line: Number(anchored[1]) }
++  }
++  const suffixed = /:([1-9][0-9]*)(?:[-–]([1-9][0-9]*))?$/.exec(raw)
++  if (suffixed === null || suffixed.index === 0) return { path: raw }
++  return { path: raw.slice(0, suffixed.index), line: Number(suffixed[1]) }
++}
 +
 +/**
 + * @param raw - The verbatim `(destination)` of a `[label](destination)` token.
@@ -654,8 +727,9 @@ index d84a819f3c..fffe993e54 100644
 +  try {
 +    protocol = new URL(raw).protocol
 +  } catch {
-+    // Unparseable as an absolute URL — a (relative) file path.
-+    return { kind: 'file', path: raw }
++    // Unparseable as an absolute URL — a (relative) file path carrying an
++    // optional line reference in either spelling.
++    return { kind: 'file', ...filePathAndLine(raw) }
 +  }
 +  if (protocol === 'http:' || protocol === 'https:') return { kind: 'external', href: raw, newTab: true }
 +  return protocol === 'mailto:' ? { kind: 'external', href: raw, newTab: false } : null
@@ -667,8 +741,9 @@ index d84a819f3c..fffe993e54 100644
 + * tokens) plus `[label](destination)` markdown links (dshui overlay). An
 + * allowlisted absolute URL opens externally; a destination `new URL` cannot
 + * parse reads as a path the view's `openFile` resolves against the session
-+ * cwd; any other absolute URL keeps the literal syntax. Everything flows
-+ * inline in one pre-wrap span — block boxes would stack every segment.
++ * cwd, carrying its optional line reference as that gesture's line option; any
++ * other absolute URL keeps the literal syntax. Everything flows inline in one
++ * pre-wrap span — block boxes would stack every segment.
 + */
 +function projectUserTextWithLinks(
 +  text: string,
@@ -703,7 +778,12 @@ index d84a819f3c..fffe993e54 100644
 +            key={`l${m.index}`}
 +            type="button"
 +            className={css.link}
-+            onClick={() => { references?.openFile(destination.path) }}
++            onClick={() => {
++              references?.openFile(
++                destination.path,
++                destination.line === undefined ? undefined : { line: destination.line },
++              )
++            }}
 +          >
 +            {m[1]}
 +          </button>
@@ -719,7 +799,7 @@ index d84a819f3c..fffe993e54 100644
  /** Right-aligned bubble shared by user and steering rows. */
  function UserStyleBubble({
    content, renderMessageImages, actions, pending = false, echo = false, referenceLabels = [], skillNames = [],
-@@ -217,7 +300,7 @@ function UserStyleBubble({
+@@ -217,7 +327,7 @@ function UserStyleBubble({
            </div>
          )}
          {showBubble && <div className={css.bubble}>
@@ -728,7 +808,7 @@ index d84a819f3c..fffe993e54 100644
            {rest.map((block, i) => <JsonBlock key={i} label={t('message.extraBlock')} payload={block} truncatedLabel={truncated} />)}
          </div>}
          {referenceLabels.length > 0 && (
-@@ -316,6 +399,39 @@ export function PendingSubmissionBubble({ submission, renderMessageImages, t }:
+@@ -316,6 +426,39 @@ export function PendingSubmissionBubble({ submission, renderMessageImages, t }:
  
  /** User and admitted-steering keyed Chat renderer. */
  export const UserMessageNodeView = memo(function UserMessageNodeView({
@@ -841,10 +921,10 @@ index 5c7a8e37cd..8b0effa104 100644
    }
  }
 diff --git a/packages/client/ui-chat/tests/apply-inject.client.spec.tsx b/packages/client/ui-chat/tests/apply-inject.client.spec.tsx
-index 04dc15407d..7b6b5108a7 100644
+index 04dc15407d..17207c34f0 100644
 --- a/packages/client/ui-chat/tests/apply-inject.client.spec.tsx
 +++ b/packages/client/ui-chat/tests/apply-inject.client.spec.tsx
-@@ -186,26 +186,44 @@ describe('Chat inject API', () => {
+@@ -186,26 +186,58 @@ describe('Chat inject API', () => {
      await b.runtime.dispose()
    })
  
@@ -876,8 +956,21 @@ index 04dc15407d..7b6b5108a7 100644
 +  })
  
 -    // A line travels as the `file` type's navigation parameter, not in the address.
--    await injected.openFile('src/a.ts', { line: 7 })
++  it('forwards a link line to the Host opener', async () => {
++    const b = await bench()
++    const { injected } = b.chatViewApi(b.rootReference)
++    // The Markdown parser strips the `#L10` anchor off the destination into the
++    // open gesture's own option; the Host receives it beside the path so the
++    // hosting editor reveals that line instead of the file's top.
+     await injected.openFile('src/a.ts', { line: 7 })
 -    expect(b.sidebarRight.openResource).toHaveBeenLastCalledWith('dsh-resource://file/session/root-1/src/a.ts', { params: { line: 7 } })
++    expect(b.openWorkspacePath).toHaveBeenLastCalledWith({ path: '/proj/src/a.ts', dshuiLine: 7 })
++    // Without a line option the request carries none, so the file opens at its top.
++    await injected.openFile('src/a.ts')
++    expect(b.openWorkspacePath).toHaveBeenLastCalledWith({ path: '/proj/src/a.ts' })
++    await b.runtime.dispose()
++  })
++
 +  it('forwards a home-relative link destination in its `~` spelling', async () => {
 +    const b = await bench()
 +    const { injected } = b.chatViewApi(b.rootReference)
@@ -900,7 +993,7 @@ index 04dc15407d..7b6b5108a7 100644
      await b.runtime.dispose()
    })
  
-@@ -365,13 +383,49 @@ describe('Chat inject API', () => {
+@@ -365,13 +397,49 @@ describe('Chat inject API', () => {
      // The Host resolves the relative path against the root it holds for the
      // Session; the Client need not know it.
      await injected.openFile('src/a.ts')
@@ -1000,6 +1093,46 @@ index 5880bc5792..4d81ad98b4 100644
      case 'context':
        return <ContextMessageNodeView {...props as ChatNodeViewProps<'context'>} />
      case 'compaction':
+diff --git a/packages/client/ui-chat/tests/chat-view.client.spec.tsx b/packages/client/ui-chat/tests/chat-view.client.spec.tsx
+index 3bda5cad62..da252a857d 100644
+--- a/packages/client/ui-chat/tests/chat-view.client.spec.tsx
++++ b/packages/client/ui-chat/tests/chat-view.client.spec.tsx
+@@ -290,7 +290,7 @@ function makeHarness(
+   const useChatGroup = bindKeyedSnapshotSelector(
+     key => grouped?.groupSource(key as GroupKey) ?? absentGroup,
+   )
+-  const openFile = vi.fn<(path: string) => Promise<void>>().mockResolvedValue(undefined)
++  const openFile = vi.fn<(path: string, options?: { line?: number }) => Promise<void>>().mockResolvedValue(undefined)
+   const openSkill = vi.fn<(name: string) => void>()
+   const loadOlder = vi.fn()
+   const loadThrough = vi.fn<(seq: number) => Promise<void>>().mockResolvedValue(undefined)
+@@ -579,6 +579,26 @@ describe('Chat node rendering', () => {
+     expect(h.openFile).toHaveBeenCalledWith('src/index.ts', { line: 24 })
+   })
+ 
++  it('keeps the line of a Markdown file link inside a user bubble', () => {
++    // User text renders literally, so dshui's own link projection owns these:
++    // both line spellings must reach the opener as its line option.
++    const h = makeHarness({
++      nodes: [user(1, 'see [anchor](lib/a.dart#L268) and [suffix](lib/b.dart:94)')],
++    })
++    const view = render(<h.ChatView {...h.props} />)
++    fireEvent.click(view.getByRole('button', { name: 'anchor' }))
++    expect(h.openFile).toHaveBeenCalledWith('lib/a.dart', { line: 268 })
++    fireEvent.click(view.getByRole('button', { name: 'suffix' }))
++    expect(h.openFile).toHaveBeenCalledWith('lib/b.dart', { line: 94 })
++  })
++
++  it('opens a user-bubble file link without a line at the file top', () => {
++    const h = makeHarness({ nodes: [user(1, 'see [plain](lib/a.dart)')] })
++    const view = render(<h.ChatView {...h.props} />)
++    fireEvent.click(view.getByRole('button', { name: 'plain' }))
++    expect(h.openFile).toHaveBeenCalledWith('lib/a.dart')
++  })
++
+   it('threads the injected file-mention vocabulary into the closing prose only', () => {
+     const wrote = (seq: number, callId: string): ToolResultNode => ({
+       ...toolResult(seq, callId, 'write'),
 diff --git a/packages/client/ui-conversation/src/client/apply.ts b/packages/client/ui-conversation/src/client/apply.ts
 index 942444d3b7..76e638f863 100644
 --- a/packages/client/ui-conversation/src/client/apply.ts
@@ -2713,10 +2846,10 @@ index f41670178c..b4a440026f 100644
    }
  }
 diff --git a/packages/util/native-command/src/path-opener.ts b/packages/util/native-command/src/path-opener.ts
-index 67bbc35902..3e3e63e1cc 100644
+index 67bbc35902..bade6d967f 100644
 --- a/packages/util/native-command/src/path-opener.ts
 +++ b/packages/util/native-command/src/path-opener.ts
-@@ -28,6 +28,13 @@ export interface PathOpenerInternals {
+@@ -28,6 +28,22 @@ export interface PathOpenerInternals {
    /** Environment used for WSL markers and the desktop Linux browser convention. */
    env?: NodeJS.ProcessEnv
    run?: PathOpenerRunner
@@ -2727,10 +2860,19 @@ index 67bbc35902..3e3e63e1cc 100644
 +   * window's bridge, ahead of workspace-ownership routing.
 +   */
 +  dshuiOrigin?: string
++  /**
++   * dshui patch: 1-based line a file link asked to reveal. The dsh web UI
++   * strips the `#L10` fragment off a Markdown destination into its own
++   * `openFile` option before the path reaches the Host, so the line travels
++   * beside the path and is handed to the hosting editor as the bridge's
++   * `line` parameter. Only the bridge consumes it; the CLI and `vscode://file`
++   * fallbacks address a file and have no line syntax.
++   */
++  dshuiLine?: number
  }
  
  /** Documents a browser renders, as opposed to ones an editor merely edits. */
-@@ -163,6 +170,145 @@ async function openWslPath(path: string, signal: AbortSignal, run: PathOpenerRun
+@@ -163,6 +179,150 @@ async function openWslPath(path: string, signal: AbortSignal, run: PathOpenerRun
    await openWindowsPath(windowsPath, signal, run)
  }
  
@@ -2791,11 +2933,16 @@ index 67bbc35902..3e3e63e1cc 100644
 +  return null
 +}
 +
-+/** dshui patch: GET one open request to a bridge endpoint. */
-+async function dshuiBridgeRequest(target: { endpoint: string; token: string }, path: string, signal: AbortSignal): Promise<boolean> {
++/** dshui patch: GET one open request to a bridge endpoint. `line` is the
++ * 1-based line the extension's bridge reveals; it stays absent when the link
++ * named none, so the file opens at its top. */
++async function dshuiBridgeRequest(
++  target: { endpoint: string; token: string }, path: string, signal: AbortSignal, line?: number,
++): Promise<boolean> {
 +  if (target.endpoint === '') return false
 +  try {
 +    let url = target.endpoint + '?path=' + encodeURIComponent(path)
++    if (line !== undefined) url += '&line=' + String(line)
 +    if (target.token !== '') url += '&token=' + encodeURIComponent(target.token)
 +    const response = await fetch(url, { signal })
 +    return response.ok
@@ -2839,17 +2986,17 @@ index 67bbc35902..3e3e63e1cc 100644
 +/** dshui patch: ask the hosting VS Code (via a window's local open bridge) to
 + * open a path. The click origin is authoritative; workspace routing (longest
 + * prefix, then the owner bridge) applies only when no origin was attached. */
-+async function dshuiOpenViaBridge(path: string, signal: AbortSignal, origin: string | undefined): Promise<boolean> {
++async function dshuiOpenViaBridge(path: string, signal: AbortSignal, origin: string | undefined, line?: number): Promise<boolean> {
 +  const originWs = dshuiOriginWorkspace(origin ?? '')
 +  if (originWs !== null) {
 +    const own = await dshuiBridgeForWorkspace(originWs)
-+    if (own !== null && await dshuiBridgeRequest(own, path, signal)) return true
++    if (own !== null && await dshuiBridgeRequest(own, path, signal, line)) return true
 +  }
 +  const target = await dshuiPickBridgeForPath(path)
-+  if (target !== null && await dshuiBridgeRequest(target, path, signal)) return true
++  if (target !== null && await dshuiBridgeRequest(target, path, signal, line)) return true
 +  const endpoint = process.env.DSHUI_OPEN_ENDPOINT
 +  const token = process.env.DSHUI_OPEN_TOKEN
-+  if (endpoint !== undefined && await dshuiBridgeRequest({ endpoint, token: token ?? '' }, path, signal)) return true
++  if (endpoint !== undefined && await dshuiBridgeRequest({ endpoint, token: token ?? '' }, path, signal, line)) return true
 +  return false
 +}
 +
@@ -2876,7 +3023,7 @@ index 67bbc35902..3e3e63e1cc 100644
  /** Dispatch one shell-free platform command for the requested open intent. */
  async function openNativePathWithIntent(
    path: string,
-@@ -179,6 +325,18 @@ async function openNativePathWithIntent(
+@@ -179,6 +339,18 @@ async function openNativePathWithIntent(
      && await openInBrowser(path, signal, platform, run, env)) return
  
    if (platform === 'darwin') {
@@ -2887,7 +3034,7 @@ index 67bbc35902..3e3e63e1cc 100644
 +    // above. A plain dsh deployment keeps the stock `open` behavior (including
 +    // `-t` for the text-editor intent).
 +    if (dshuiHosted(env)) {
-+      if (await dshuiOpenViaBridge(path, signal, internals.dshuiOrigin)) return
++      if (await dshuiOpenViaBridge(path, signal, internals.dshuiOrigin, internals.dshuiLine)) return
 +      if (await dshuiOpenViaCli(path, signal)) return
 +      await run('open', [dshuiVscodeFileUrl(path)], signal)
 +      return

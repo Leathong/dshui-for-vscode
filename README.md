@@ -226,7 +226,11 @@ VS Code 的**输出面板**（View → Output → 下拉选择 **dsh UI**，或�
   BOM UTF-16 例外，故 GBK 等遗留编码仍按文本打开）。非文本改走 `vscode.open`：**图片用内置图片预览**
   打开，其余二进制交给 VS Code 的二进制查看器——此前这些文件被 `showTextDocument` 直接拒绝，只在日志里
   留下 “File seems to be binary and cannot be opened as text”；连 `vscode.open` 也失败时退回系统默认
-  程序。行号定位（`#L10`、`:10` 等）只对文本文件生效；
+  程序；
+- **行号定位**：链接目标里的 `#L10`（GitHub 风格锚点；`#L10-L20` 这类区间取首行）与 `:10`（含
+  `:10-20`、en dash 区间）后缀在打开前被剥离并解析成 1-based 行号，随打开请求以 `dshuiLine` 传给
+  宿主桥，由 `showTextDocument` 的选区把该行滚入视野并选中。行号定位只对文本文件生效，非文本走
+  预览 / 二进制查看器；
 - `.html` / `.pdf` 仍走系统浏览器打开；可用 `dshui.openFilesInVscode` 关闭（恢复系统默认程序）。
 
 ### 消息里的网络链接
@@ -508,13 +512,13 @@ cd .. && node scripts/verify-patches.mjs   # 逐个标记缺失即说明该文�
 #    - ui-conversation/src/client/skeleton/ConversationRoot.module.css  scoped hero 贴底
 #    - ui-conversation/src/client/skeleton/HeroShell.module.css       .workspaceStatic
 #    - ui-conversation/tsdown.config.ts                bundle id 改为 dshui-client-ui-conversation
-#    - ui-chat/src/client/chat/MessageItem.tsx         UserMessageNodeView / SteeringMessageNodeView 拆分与 user-actions 子槽、markdown 链接投影
+#    - ui-chat/src/client/chat/MessageItem.tsx         UserMessageNodeView / SteeringMessageNodeView 拆分与 user-actions 子槽、markdown 链接投影（含 #L10/:10 行号）
 #    - ui-chat/src/client/chat/register-node-renderers.ts  user 带 user-actions 子槽、steering 用无槽渲染器
 #    - ui-chat/src/client/contract/slots.ts            UserActionOwnerProps 与 conversation.chat.user-actions 槽声明
 #    - packages/client/tsdown.client.ts                workspaceManifest 对 dshui-client-* id 按包目录回退（rc.1 起按包名校验）
-#    - packages/util/native-command/src/path-opener.ts  darwin 分支改桥接/CLI/vscode://file + dshuiOrigin
+#    - packages/util/native-command/src/path-opener.ts  darwin 分支改桥接/CLI/vscode://file + dshuiOrigin/dshuiLine（行号经桥接 line 参数）
 #    - packages/client/connection/src/browser-auth.ts     token 交换重定向保留 dshui 查询参数（0.1.7 起基址是 ./）
-#    - packages/api/session-controller/src/{index,types}.ts  openWorkspacePath 透传 dshuiOrigin；verifyDesktopPath 用 dshuiHomePath 展开 ~
+#    - packages/api/session-controller/src/{index,types}.ts  openWorkspacePath 透传 dshuiOrigin/dshuiLine；verifyDesktopPath 用 dshuiHomePath 展开 ~
 #    - packages/api/settings-controller/src/index.ts         openSettingsDocument(dshuiOrigin, signal)
 #    - packages/client/ui-chat/src/client/apply.ts           客户端附上窗口作用域 dshuiClickOrigin；dshuiOpenPath 决定链接目标拼写（相对 → 会话 cwd，家目录 → 保留 ~）
 #    - packages/mcp/mcp-client/src/index.ts                  startup: eager|lazy

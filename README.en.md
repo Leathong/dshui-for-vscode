@@ -586,11 +586,11 @@ node scripts/verify-patches.mjs      # each file flagged as missing needs its pa
 #    - ui-chat/src/client/chat/register-node-renderers.ts  user declares the user-actions child; steering uses the strip-free renderer
 #    - ui-chat/src/client/contract/slots.ts            UserActionOwnerProps and the conversation.chat.user-actions slot
 #    - packages/client/tsdown.client.ts                workspaceManifest resolves dshui-client-* ids by package directory (rc.1 validates by package name)
-#    - packages/util/native-command/src/path-opener.ts  darwin bridge/CLI/vscode://file branch + dshuiOrigin
+#    - packages/util/native-command/src/path-opener.ts  darwin bridge/CLI/vscode://file branch + dshuiOrigin/dshuiLine (line travels as the bridge line param)
 #    - packages/client/connection/src/browser-auth.ts   keep dshui query params through the token redirect (0.1.7 base is ./)
-#    - packages/api/session-controller/src/{index,types}.ts  openWorkspacePath threads dshuiOrigin; verifyDesktopPath expands ~ via dshuiHomePath
+#    - packages/api/session-controller/src/{index,types}.ts  openWorkspacePath threads dshuiOrigin/dshuiLine; verifyDesktopPath expands ~ via dshuiHomePath
 #    - packages/api/settings-controller/src/index.ts         openSettingsDocument(dshuiOrigin, signal)
-#    - packages/client/ui-chat/src/client/apply.ts           client attaches the window scope (dshuiClickOrigin); dshuiOpenPath owns the link destination spelling (relative → session cwd, home → ~ kept)
+#    - packages/client/ui-chat/src/client/apply.ts           client attaches the window scope (dshuiClickOrigin) and the link line (dshuiLine); dshuiOpenPath owns the link destination spelling (relative → session cwd, home → ~ kept)
 #    - packages/mcp/mcp-client/src/index.ts                  startup: eager|lazy
 
 # 4. Rebuild and copy in
