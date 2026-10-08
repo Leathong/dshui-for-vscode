@@ -46,6 +46,11 @@ const RETIRED_PLUGIN_NAMES = [
   // 已由 dsh-capability-toggle-plugin 取代：同样按工作区开关 Skill / Host 全局
   // MCP，并扩展到工具、提示词、审批与安全守卫的会话 / 项目 / 全局三级开关。
   'dsh-workspace-scope',
+  // dsh web 认证 401 的临时诊断/热修（服务器侧请求追踪 + webview cookie 探针 +
+  // 跨站 Set-Cookie 放宽）。根因已由 dsh 源码补丁修掉（browser-auth.ts 按
+  // sec-fetch-* 分叉 SameSite），这两个包不再随扩展分发，只在此清掉已安装副本。
+  'dshui-host-auth-diag',
+  'dshui-host-webauth-hotfix',
 ] as const
 
 /**

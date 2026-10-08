@@ -489,10 +489,63 @@ index 6d8b867eea..69d97d4429 100644
 +  await expect(controller.openSettingsDocument(undefined, abort.signal)).rejects.toMatchObject({ code: 'gateway/cancelled' })
  })
 diff --git a/packages/client/connection/src/browser-auth.ts b/packages/client/connection/src/browser-auth.ts
-index 5691180d96..cff7c02709 100644
+index 5691180d96..cc5d997012 100644
 --- a/packages/client/connection/src/browser-auth.ts
 +++ b/packages/client/connection/src/browser-auth.ts
-@@ -253,7 +253,12 @@ export class BrowserAuth {
+@@ -77,6 +77,18 @@ function requestAuthority(headers: ConnectionTrustRequest['headers']): string |
+   }
+ }
+ 
++/**
++ * Whether the index request is a cross-site or embedded navigation — the
++ * context in which a non-`None` SameSite cookie cannot be stored (see
++ * {@link sessionCookie}).
++ * @param headers - request headers carrying the browser's Fetch Metadata.
++ * @returns true for a cross-site or iframe navigation.
++ */
++function crossSiteNavigation(headers: ConnectionTrustRequest['headers']): boolean {
++  return header(headers, 'sec-fetch-site') === 'cross-site'
++    || header(headers, 'sec-fetch-dest') === 'iframe'
++}
++
+ function canonicalSecret(value: unknown): Buffer | undefined {
+   if (typeof value !== 'string') return undefined
+   const decoded = decodeBase64Url(value)
+@@ -117,9 +129,30 @@ function cookieValue(headerValue: string, name: string): string | undefined {
+   return undefined
+ }
+ 
+-/** Serialize the fixed browser-session attributes; generated names and values are cookie-safe base64url. */
+-function sessionCookie(name: string, value: string, expiresAt: number, maxAgeSeconds: number): string {
+-  return `${name}=${value}; Max-Age=${String(maxAgeSeconds)}; Path=/; Expires=${new Date(expiresAt).toUTCString()}; HttpOnly; SameSite=Strict`
++/**
++ * Serialize the browser-session cookie attributes; generated names and values
++ * are cookie-safe base64url.
++ *
++ * dshui patch: a browser refuses to **store** a `SameSite=Strict` (or `Lax`)
++ * cookie set by a cross-site response, and the VS Code webview embeds this
++ * server in a cross-site iframe (`sec-fetch-site: cross-site`,
++ * `sec-fetch-dest: iframe`). The token exchange's cookie was therefore dropped
++ * and the redirect back to the index answered 401, so an embedded or
++ * cross-site navigation gets `SameSite=None; Secure` instead — 127.0.0.1 is a
++ * potentially-trustworthy origin, so `Secure` is accepted over plain HTTP.
++ * Every top-level navigation keeps `Strict`. Cross-site request forgery stays
++ * covered by `isTrustedApiRequest`, which refuses `sec-fetch-site: cross-site`
++ * and non-loopback Hosts, while the page's own `/api` calls are same-origin.
++ * @param name - generated cookie name.
++ * @param value - signed cookie payload.
++ * @param expiresAt - absolute expiry (epoch ms) for the `Expires` attribute.
++ * @param maxAgeSeconds - cookie lifetime for `Max-Age`.
++ * @param crossSite - the navigations this cookie answers are cross-site/embedded.
++ */
++function sessionCookie(
++  name: string, value: string, expiresAt: number, maxAgeSeconds: number, crossSite: boolean,
++): string {
++  return `${name}=${value}; Max-Age=${String(maxAgeSeconds)}; Path=/; Expires=${new Date(expiresAt).toUTCString()}; HttpOnly; SameSite=${crossSite ? 'None; Secure' : 'Strict'}`
+ }
+ 
+ function signature(secret: Buffer, body: string): Buffer {
+@@ -253,10 +286,16 @@ export class BrowserAuth {
          }, this.secret)
          res.writeHead(303, {
            'cache-control': 'no-store',
@@ -506,6 +559,50 @@ index 5691180d96..cff7c02709 100644
            'referrer-policy': 'no-referrer',
            'set-cookie': sessionCookie(
              cookieName(authority), value, expiresAt, Math.floor(this.maxAgeMilliseconds / 1000),
++            crossSiteNavigation(req.headers),
+           ),
+         })
+         res.end()
+diff --git a/packages/client/connection/tests/browser-auth.host.spec.ts b/packages/client/connection/tests/browser-auth.host.spec.ts
+index c271aa313b..fa149a1dab 100644
+--- a/packages/client/connection/tests/browser-auth.host.spec.ts
++++ b/packages/client/connection/tests/browser-auth.host.spec.ts
+@@ -140,6 +140,35 @@ describe('BrowserAuth', () => {
+     })
+   })
+ 
++  it('relaxes the session cookie only for a cross-site or embedded navigation', async () => {
++    const auth = await createAuth(new RecordCredentials())
++    const launchUrl = new URL(auth.authenticatedUrl('http://127.0.0.1:3080'))
++    const exchangeWith = (metadata: Readonly<Record<string, string>>): ResponseState => {
++      const res = response()
++      expect(auth.authorizeIndex({
++        method: 'GET',
++        url: `${launchUrl.pathname}${launchUrl.search}`,
++        headers: { host: '127.0.0.1:3080', ...metadata },
++      }, res.value)).toBe(false)
++      return res.state
++    }
++
++    // A browser refuses to store a Strict cookie from a cross-site response, and
++    // an embedded document can never be same-site with the harness authority.
++    for (const embedded of [
++      { 'sec-fetch-site': 'cross-site', 'sec-fetch-dest': 'document' },
++      { 'sec-fetch-site': 'same-site', 'sec-fetch-dest': 'iframe' },
++    ]) {
++      expect(exchangeWith(embedded).headers?.['set-cookie'])
++        .toMatch(/; HttpOnly; SameSite=None; Secure$/u)
++    }
++    // Top-level navigations (system browser, VS Code browser tab) keep Strict.
++    expect(exchangeWith({ 'sec-fetch-site': 'none', 'sec-fetch-dest': 'document' }).headers?.['set-cookie'])
++      .toMatch(/; HttpOnly; SameSite=Strict$/u)
++    // Browsers without Fetch Metadata (Safari) keep the stricter attribute.
++    expect(exchangeWith({}).headers?.['set-cookie']).toMatch(/; HttpOnly; SameSite=Strict$/u)
++  })
++
+   it('preserves the caller authority and mount while adding only this process token', async () => {
+     const auth = await createAuth(new RecordCredentials())
+     const mounted = new URL(auth.authenticatedUrl('https://gateway.example/tools/dsh/'))
 diff --git a/packages/client/tsdown.client.ts b/packages/client/tsdown.client.ts
 index 215001dbb9..6174104d03 100644
 --- a/packages/client/tsdown.client.ts
