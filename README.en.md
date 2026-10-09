@@ -529,29 +529,38 @@ version announced once) and notifies when the bundled version is outdated — bu
 only a hint; upgrading still requires manually repackaging and reinstalling the extension via the full
 workflow below.
 
-The extension binds two dsh versions together, and both must be aligned on upgrade:
+The extension binds three dsh versions together, and all must be aligned on upgrade:
 
-1. **CLI runtime:** `dependencies["@deepseek-ai/dsh"]` in `package.json` (currently `0.1.7-rc.2`).
-2. **Client bundle source:** the `.dsh-src` checkout (currently `dsh-v0.1.7-rc.2` with the dshui
+1. **CLI runtime:** `dependencies["@deepseek-ai/dsh"]` in `package.json` (currently `0.2.1-alpha.1`).
+2. **Client bundle source:** the `.dsh-src` checkout (currently `dsh-v0.2.1-alpha.1` with the dshui
    client patch re-applied — since 0.1.2 the session/chat clients were restructured, so re-apply the
    patch to the new structure per `scripts/verify-patches.mjs`; since the repo's master may lag behind
    the npm release, align by checking each package's version in its `package.json` and confirm with
    real runtime tests).
+3. **Plugin manifest `peerDependencies`:** from dsh 0.2.1-alpha.1 on, `app-boot` reads every plugin
+   row's `peerDependencies` and **disables the row** when any `@deepseek-ai/dsh` / `@deepseek-ai/dsh-*`
+   range does not satisfy the running version
+   (`semver.satisfies(..., { includePrerelease: true })`), printing
+   `Plugin <name>@<version> is incompatible with dsh <runtime>: peerDependencies {...}` to stderr.
+   After an upgrade, raise those ranges in `plugins/*/package.json` onto the new line
+   (`>=0.2.1-0 <0.3.0-0` for this release) or the plugin silently stops loading. See
+   `plugins/plugin-development-guide.md`, §3.
 
 Upgrade steps:
 
 ```sh
-# 0. (Optional) Re-checkout source aligned with the target version — the base commit is pinned to the
-#    value in patches/README.md
+# 0. Re-checkout source aligned with the target version — the base commit is pinned to the
+#    value in patches/README.md; use --3way on a rebase so only genuinely conflicting hunks are marked
 #    git clone https://github.com/deepseek-ai/deepseek-harness.git .dsh-src
-#    cd .dsh-src && git fetch origin <base commit> && git checkout FETCH_HEAD && git apply ../patches/dshui-bundles.patch
+#    cd .dsh-src && git fetch origin <base commit> && git checkout FETCH_HEAD && git apply --3way ../patches/dshui-bundles.patch
+#    Note: commit the overlay (or at least leave it in the working tree) before re-exporting. Upstream's
+#    "third-party notices" pre-commit hook fails because dshui renames the bundle ids, so commit with --no-verify.
 
-# 1. Upgrade the bundled CLI
-npm install @deepseek-ai/dsh@<new version>
-
-# 1b. Rebuild the source checkout. On a rebase you MUST clean first: the previous version's stale
-#     typert remote declarations in each package's lib/types and *.tsbuildinfo otherwise make tsc -b
-#     reuse them and raise dozens of bogus "remote method does not exist" errors.
+# 1. The bundled CLI is NOT installed from npm: preinstall's sync-dsh fills node_modules/@deepseek-ai/*
+#    from the .dsh-src build output. Rebuild the source checkout instead. On a rebase you MUST clean
+#    first: the previous version's stale typert remote declarations in each package's lib/types and
+#    *.tsbuildinfo otherwise make tsc -b reuse them and raise dozens of bogus "remote method does not
+#    exist" errors.
 cd .dsh-src && pnpm install && pnpm run clean \
   && pnpm run build:lib:host && pnpm run build:lib:client \
   && pnpm run gen-client-catalog
@@ -582,6 +591,9 @@ node scripts/verify-patches.mjs      # each file flagged as missing needs its pa
 #    - ui-conversation/src/client/skeleton/ConversationRoot.module.css  scoped hero pinned to the bottom
 #    - ui-conversation/src/client/skeleton/HeroShell.module.css       .workspaceStatic
 #    - ui-conversation/tsdown.config.ts                bundle id → dshui-client-ui-conversation
+#    - ui-conversation/src/client/apply.ts             concreteConversation returns ConversationController|undefined;
+#                                                      selectWorkspace guards it explicitly, and the composer inject degrades
+#                                                      to the absent posture instead of holding the slot dead
 #    - ui-chat/src/client/chat/MessageItem.tsx         UserMessageNodeView / SteeringMessageNodeView split, user-actions child slot, markdown link projection
 #    - ui-chat/src/client/chat/register-node-renderers.ts  user declares the user-actions child; steering uses the strip-free renderer
 #    - ui-chat/src/client/contract/slots.ts            UserActionOwnerProps and the conversation.chat.user-actions slot
@@ -638,13 +650,13 @@ Other drift-prone spots to check after every upgrade:
   (`git apply` errors) — just rewrite it for the new source; when the bridge is unavailable the opener
   automatically falls back to `vscode://file`.
 - **Re-exporting the patch requires `--binary`, and the base commit must move with it:** the patch is
-  pinned to dsh `0.1.7-rc.2` (`477b4f42…`, see `patches/README.md` and Makefile's `DSH_BASE`) and is
+  pinned to dsh `0.2.1-alpha.1` (`5badb150…`, see `patches/README.md` and Makefile's `DSH_BASE`) and is
   exported with `git -C .dsh-src diff --binary <base commit> > patches/dshui-bundles.patch` (`make
   dsh-gen-patch` already does this). Both halves have bitten us: without `--binary`, `git diff` writes
   only a `Binary files ... differ` placeholder (no content) for the PNG/ICO assets the base snapshot
   adds, and `git apply` then reports `cannot apply binary patch ... without full index line` and
   rejects the whole patch; exporting against a stale base swallows the entire upstream delta (the
-  rc.1-based export came out as 3447 files / 15.2 MB, where the correct size is 51 files / ~160 KB).
+  rc.1-based export came out as 3447 files / 15.2 MB, where the correct size is 53 files / ~170 KB).
 - **A dsh version bump needs `make deploy`, not just `make sync`:** `make sync` only copies `out/`,
   `dshui-plugins/`, `patch.yml`, and `package.json` — it **does not touch
   `node_modules/@deepseek-ai`**. With the old host closure in place the new client bundles fail to

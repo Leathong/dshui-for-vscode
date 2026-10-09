@@ -75,10 +75,10 @@ DSH_SRC ?= .dsh-src
 # DSH_REPO  — 上游仓库
 DSH_REPO ?= https://github.com/deepseek-ai/deepseek-harness.git
 # DSH_BASE  — 锁定基提交（来自 patches/README.md，不能漂移，漂移会导致补丁无法套用）
-# 当前为 dsh 0.1.7-rc.2 的发布合并提交（tag dsh-v0.1.7-rc.2）。换基升级后必须同步改这里，
+# 当前为 dsh 0.2.1-alpha.1 的发布合并提交（tag dsh-v0.2.1-alpha.1）。换基升级后必须同步改这里，
 # 否则 dsh-gen-patch 会把「上一版基提交 → 新版」的全部上游差异一并导出（曾导出过 3447 文件
 # / 15 MB 的整版快照），补丁随即不可用。
-DSH_BASE ?= 477b4f420553e8a52c2fbccc464d7561b239c443
+DSH_BASE ?= 5badb15009ae1756c3afe0ae0cef1faafc290ccc
 # DSH_PATCH — dshui 未归档改动（client bundle + host 运行时）
 DSH_PATCH := patches/dshui-bundles.patch
 # DSH_PNPM — 包管理器，需要 pnpm 11.7.0、Node ^22.19 || >=24
@@ -128,7 +128,7 @@ dsh-apply-patch:
 # 由于「从基提交导出」，已提交或未提交的改动都能导出，无需先重置回基提交，也不用改动必须未提交。
 # 适用：上游基提交漂移后，按 README「跟随 dsh 版本升级」手动逐个重套补丁，需要把改动固化回补丁文件。
 # 前置：.dsh-src 检出在锁定基提交之上（相对 $(DSH_BASE) 存在改动；HEAD 可领先基提交）。
-# --binary 不可省略：0.1.7-rc.2 的上游快照新增了 PNG/ICO 等二进制资产，普通 git diff 只会写下
+# --binary 不可省略：0.1.7-rc.2 起的上游快照含 PNG/ICO 等二进制资产，普通 git diff 只会写下
 # 「Binary files ... differ」占位（不含内容），git apply 遇到就整体报
 # 「cannot apply binary patch ... without full index line」并拒绝套用。dshui 自身的改动目前全是文本，
 # 但只要基提交里含二进制新增就会踩中，所以导出时一律带 --binary。

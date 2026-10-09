@@ -3,7 +3,7 @@
 > 中文 · [English](README.en.md)
 
 `dshui-bundles.patch` 是对 [deepseek-harness](https://github.com/deepseek-ai/deepseek-harness) 源码的
-dshui 改动（51 个文件、约 160 KB，含客户端 bundle + host 运行时两大部分，基提交为 dsh `0.1.7-rc.2`）。
+dshui 改动（53 个文件、约 170 KB，含客户端 bundle + host 运行时两大部分，基提交为 dsh `0.2.1-alpha.1`）。
 客户端与 host 必须**对齐**到同一基提交并一起套用，因此合并为单个补丁——套一半都是不完整的。
 
 ## 客户端 bundle（浏览器 SPA）
@@ -73,7 +73,10 @@ RPC；上游 0.1.7 新增的归档/置顶行操作保留并存）、每条用户
   标记的普通 `dsh` 部署保持上游原行为（`open [path]` / 文本意图 `open -t [path]`）。`PathOpenerInternals`
   增加 `dshuiOrigin` 让点击来源参与路由，增加 `dshuiLine` 把链接的行号透传成桥接请求的 `line`
   查询参数（扩展的 openBridge 用它做 `showTextDocument` 选区）；`code` CLI 与 `vscode://file` 回退
-  只按文件寻址，没有行号语法，故只有桥接这一路消费行号。
+  只按文件寻址，没有行号语法，故只有桥接这一路消费行号。0.2.x 起 `runNativeCommand` 的第 4 个参数
+  `window: 'hidden' | 'visible'` 变为**必填**，dshui 的 CLI 回退调用补上 `'hidden'`（上游也把 darwin
+  分支三处 `open` 调用都改成了显式 `'hidden'`）；漏传是 0.2.1 重基时唯一的编译错误
+  （`error TS2554: Expected 4 arguments, but got 3`）。
 - `packages/client/connection/src/browser-auth.ts`：token 交换的 303 重定向保留除 launch token 之外
   的 `dshui_workspace` / `dshui_theme` 查询参数（0.1.7 起上游改为目录相对的 `./`，dshui 在此基础上
   保留非 token 查询参数），避免共享后端窗口在 token 交换后丢失工作区作用域。
@@ -120,27 +123,33 @@ RPC；上游 0.1.7 新增的归档/置顶行操作保留并存）、每条用户
 
 ## 应用（必须锁定基提交）
 
-补丁针对的基提交（**固定，不能漂移**）——dsh `0.1.7-rc.2` 的发布合并提交（tag `dsh-v0.1.7-rc.2`）：
+补丁针对的基提交（**固定，不能漂移**）——dsh `0.2.1-alpha.1` 的发布合并提交（tag `dsh-v0.2.1-alpha.1`）：
 
 ```
-477b4f420553e8a52c2fbccc464d7561b239c443
+5badb15009ae1756c3afe0ae0cef1faafc290ccc
 ```
 
 ```sh
 git clone https://github.com/deepseek-ai/deepseek-harness.git .dsh-src
 cd .dsh-src
-git fetch origin 477b4f420553e8a52c2fbccc464d7561b239c443 && git checkout FETCH_HEAD
-git apply ../patches/dshui-bundles.patch            # 基提交不匹配会安全失败
+git fetch origin 5badb15009ae1756c3afe0ae0cef1faafc290ccc && git checkout FETCH_HEAD
+git apply --3way ../patches/dshui-bundles.patch     # 基提交不匹配会安全失败
 pnpm install                                        # 需要 pnpm 11.7.0、Node ^22.19 || >=24
 pnpm run clean                                      # 升级换基时必须清掉上一版的 lib/ 与 tsbuildinfo
 pnpm run build:lib:host
 pnpm run build:lib:client
+pnpm run build:web                                  # 浏览器 shell（漏掉会让客户端插件全部加载失败）
 pnpm run gen-client-catalog                         # 槽目录跟随 ui-chat 的槽声明重新生成
 cd ..
 node scripts/sync-dsh.mjs                           # @deepseek-ai/* 源码产物拷入 node_modules
 node scripts/copy-clients.mjs                       # 两个 UI 包的 client.js 拷入 dshui-plugins/（校验 bundle id）
 npm run compile
 ```
+
+> 换基（上游版本跃迁）时用 `git apply --3way`：三方合并会把真正冲突的 hunk 标出来，
+> 只有上游同时改过的少数文件需要手工对齐。0.1.7-rc.2 → 0.2.1-alpha.1 那次只有 3 处冲突
+> （`ui-conversation/src/client/apply.ts`、`ui-chat/.../MessageItem.tsx`、
+> `util/native-command/src/path-opener.ts`），其余 50 个文件干净套用。
 
 ### 重新导出补丁
 
@@ -156,7 +165,7 @@ git -C .dsh-src diff --binary <基提交> > patches/dshui-bundles.patch
   目前全是文本，但只要基提交里含二进制新增就会踩中，所以一律带 `--binary`。
 - **基提交必须跟着换**：`DSH_BASE`（Makefile）与本文档的 SHA 必须等于导出时用的那个提交。用旧基提交
   导出的补丁会把「旧基提交 → 新版」的全部上游差异一起装进去（rc.1 基提交导出时是 3447 文件 / 15.2 MB），
-  补丁随即变得不可用；正常应稳定在 51 个文件 / 约 160 KB。
+  补丁随即变得不可用；正常应稳定在 53 个文件 / 约 170 KB。
 - **导出别用 `cd` 写法**：`make dsh-gen-patch` 用 `git -C $(DSH_SRC)` 加绝对输出路径。此前写成
   花括号组内 `cd $(DSH_SRC) && git diff … > "../patches/…"`，一旦 `cd` 失败，重定向会先把 patch
   截断成空文件再报错——补丁静默损毁。
@@ -170,3 +179,39 @@ git -C .dsh-src diff --binary <基提交> > patches/dshui-bundles.patch
 `git apply` 失败即说明基提交已漂移——按 [README「跟随 dsh 版本升级」](../README.md#跟随-dsh-版本升级)
 一节的清单逐个重套（改动都很小，按文件内注释即可）。dsh 是 MIT 协议，本补丁与其产物可自由
 修改/分发，保留上游版权声明即可。
+
+## 0.1.7-rc.2 → 0.2.1-alpha.1 重基记录
+
+上游在两个版本之间改了 4959 个文件（+101k/-113k 行），但与本补丁相交的只有 24 个文件、约 450 行。
+三方合并只冲突 3 处，其余 50 个文件干净套用：
+
+| 文件 | 上游改动 | 处理 |
+|---|---|---|
+| `packages/client/ui-conversation/src/client/apply.ts` | `from.snapshot.draft` → `from.draftSnapshot`（对象），判空写作 `draft.text !== ''`；`concreteConversation` 恢复为非可选返回 | 保留 dshui 的显式 `=== undefined` 判空 + 抛错（dshui 把它改成了 `ConversationController \| undefined`），判空表达式改用上游的 `draft.text` |
+| `packages/client/ui-chat/src/client/chat/MessageItem.tsx` | 新增 `TextShimmer` 导入 | 合并两侧：既保留 dshui 的 `import type { PropsRenderSlots }`，也保留上游的 `TextShimmer` |
+| `packages/util/native-command/src/path-opener.ts` | darwin 分支三处 `open` 调用补上显式 `'hidden'`；`runNativeCommand` 的 `window` 参数变为必填 | dshui 的宿主分支同样传 `'hidden'`；`dshuiOpenViaCli` 补上第 4 个参数 |
+
+其余需要留意但不冲突的变更：`packages/client/ui-chat/tests/chat-view.client.spec.tsx` 被上游大改
+（100+/46-），`slot-catalog.ts` 由 `pnpm run gen-client-catalog` 重新生成（内容与补丁里的一致）。
+
+### 覆盖层下必然为红的上游用例（不是回归）
+
+`pnpm run test:gui`（`vitest run packages/client packages/host`）在套用本补丁后固定有 4 个文件失败。
+它们都是**覆盖层有意改变上游行为**的必然结果，重基时不要当成回归去追：
+
+| 用例 | 原因 |
+|---|---|
+| `packages/client/ui-tool/tests/toolview-slot.client.spec.tsx` | 上游 0.2.x 把文件打开改成产品内右侧预览（断言 `sidebarRight.openResource('dsh-resource://file/session/…')` 被调用且 `openWorkspacePath` **不**被调用），而 dshui 的 `ui-chat/apply.ts` 把 `openFile` 改成走 `remote.session.openWorkspacePath`，交给扩展宿主在 VS Code 编辑器里打开——这正是本扩展的存在意义 |
+| `packages/client/ui-tool/tests/chat-ptc-subcalls.client.spec.tsx` | 同上，另一条 file-path 点击路径 |
+| `packages/client/ui-theme/tests/radius-styles.client.spec.ts` | dshui 在 `ui-conversation/src/client/skeleton/HeroShell.module.css` 的 `.workspaceStatic` 用了 `border-radius: 16px`，不在 `ui-theme/tests/expected/radius-exceptions.expected.json` 的例外表里。想消掉这个红就把该值换成 `--dsw-radius-*` token，或把例外加进那份 expected JSON |
+| `packages/client/ui-trajectory/tests/client-bundle.client.spec.ts` | **与本补丁无关**：在未打补丁的基提交上同样失败（`slots.entries('conversation.view')` 为空），是上游在 0.2.1-alpha.1 上的既有问题 |
+
+另外两个环境陷阱（本地跑门禁时踩过）：
+
+- **`packages/util/native-command/tests/path-opener.spec.ts` 在 dshui 宿主的终端里会假红**：该 shell 继承了
+  `DSHUI_OPEN_ENDPOINT` / `DSHUI_BRIDGES_FILE` / `DSHUI_CODE_CLI`，于是 `dshuiHosted(process.env)` 为真，
+  darwin 分支转向桥接/CLI 路径，而用例把 `node:child_process` 的 `execFile` mock 成永不回调 → 5 个用例
+  5s 超时。用 `env -u DSHUI_OPEN_ENDPOINT -u DSHUI_BRIDGES_FILE -u DSHUI_CODE_CLI` 复跑即 60/60 通过。
+- 客户端的用例走源码平面（tsconfig paths），但 `client-bundle` 一类用例读的是 `lib/client.js` 产物，
+  必须先在 `.dsh-src` 跑过 `pnpm run build:lib:client` 才有意义。
+

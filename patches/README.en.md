@@ -3,8 +3,8 @@
 > English · [中文](README.md)
 
 `dshui-bundles.patch` contains the dshui modifications to the source of
-[deepseek-harness](https://github.com/deepseek-ai/deepseek-harness) (51 files, ~160 KB: the client
-bundles and the host runtime, based on dsh `0.1.7-rc.2`). The client and the host must be **aligned**
+[deepseek-harness](https://github.com/deepseek-ai/deepseek-harness) (53 files, ~170 KB: the client
+bundles and the host runtime, based on dsh `0.2.1-alpha.1`). The client and the host must be **aligned**
 to the same base commit and applied together, so they are merged into a single patch — applying only
 half is incomplete.
 
@@ -140,29 +140,36 @@ in `node_modules/@deepseek-ai/*`; this patch reproduces them from source.
 
 ## Applying (the base commit is pinned)
 
-The patch targets this base commit (**pinned; it must not drift**) — the dsh `0.1.7-rc.2` release
-merge (tag `dsh-v0.1.7-rc.2`):
+The patch targets this base commit (**pinned; it must not drift**) — the dsh `0.2.1-alpha.1` release
+merge (tag `dsh-v0.2.1-alpha.1`):
 
 ```
-477b4f420553e8a52c2fbccc464d7561b239c443
+5badb15009ae1756c3afe0ae0cef1faafc290ccc
 ```
 
 ```sh
 git clone https://github.com/deepseek-ai/deepseek-harness.git .dsh-src
 cd .dsh-src
-git fetch origin 477b4f420553e8a52c2fbccc464d7561b239c443 && git checkout FETCH_HEAD
-git apply ../patches/dshui-bundles.patch            # fails safely if the base commit mismatches
+git fetch origin 5badb15009ae1756c3afe0ae0cef1faafc290ccc && git checkout FETCH_HEAD
+git apply --3way ../patches/dshui-bundles.patch     # fails safely if the base commit mismatches
 pnpm install                                        # requires pnpm 11.7.0, Node ^22.19 || >=24
 pnpm run clean                                      # REQUIRED on a rebase: drop the previous
                                                     # version's lib/ and tsbuildinfo
 pnpm run build:lib:host
 pnpm run build:lib:client
+pnpm run build:web                                  # browser shell (missing it fails every client plugin)
 pnpm run gen-client-catalog                         # regenerate the slot catalog
 cd ..
 node scripts/sync-dsh.mjs                           # copies the @deepseek-ai/* source artifacts into node_modules
 node scripts/copy-clients.mjs                       # copies the two UI bundles into dshui-plugins/ (asserts the bundle id)
 npm run compile
 ```
+
+> Use `git apply --3way` when moving to a new base: the three-way merge marks only the genuinely
+> conflicting hunks, so just the few files upstream also touched need hand alignment. The
+> 0.1.7-rc.2 → 0.2.1-alpha.1 move conflicted in 3 places
+> (`ui-conversation/src/client/apply.ts`, `ui-chat/.../MessageItem.tsx`,
+> `util/native-command/src/path-opener.ts`); the other 50 files applied cleanly.
 
 ### Re-exporting the patch
 
@@ -180,7 +187,7 @@ git -C .dsh-src diff --binary <base commit> > patches/dshui-bundles.patch
 - **The base commit must move with the rebase.** `DSH_BASE` (Makefile) and the SHA in this file must
   equal the commit the export used. A patch exported against a stale base swallows the entire
   upstream delta (the rc.1-based export was 3447 files / 15.2 MB) and becomes unusable; a correct
-  export stays at 51 files / ~160 KB.
+  export stays at 53 files / ~170 KB.
 - **Do not export with a `cd` recipe.** `make dsh-gen-patch` uses `git -C $(DSH_SRC)` plus an
   absolute output path. The earlier form — `cd $(DSH_SRC) && git diff … > "../patches/…"` inside a
   brace group — truncated the patch to an empty file first and only then reported the failed `cd`,
@@ -196,3 +203,42 @@ A failed `git apply` means the base commit has drifted — re-apply each change 
 main [README, section "Upgrading with dsh Releases"](../README.en.md#upgrading-with-dsh-releases) (the
 changes are small; follow the comments in each file). dsh is MIT-licensed, so this patch and its
 artifacts may be freely modified and redistributed as long as the upstream copyright notice is kept.
+
+## Rebase record: 0.1.7-rc.2 → 0.2.1-alpha.1
+
+Upstream changed 4959 files between the two bases (+101k/-113k lines), but only 24 of them intersect
+this patch (~450 lines). The three-way merge conflicted in 3 places; the other 50 files applied
+cleanly:
+
+| File | Upstream change | Resolution |
+|---|---|---|
+| `packages/client/ui-conversation/src/client/apply.ts` | `from.snapshot.draft` → `from.draftSnapshot` (an object), compared as `draft.text !== ''`; `concreteConversation` back to a non-optional return | Keep dshui's explicit `=== undefined` guard and throw (dshui widened the return to `ConversationController \| undefined`) and take upstream's `draft.text` for the empty check |
+| `packages/client/ui-chat/src/client/chat/MessageItem.tsx` | new `TextShimmer` import | Merge both sides: dshui's `import type { PropsRenderSlots }` plus upstream's `TextShimmer` |
+| `packages/util/native-command/src/path-opener.ts` | three darwin `open` calls now pass an explicit `'hidden'`; `runNativeCommand`'s `window` parameter became required | Pass `'hidden'` in dshui's hosted branch too; add the 4th argument to `dshuiOpenViaCli` |
+
+Other changes worth noting though they did not conflict: upstream rewrote
+`packages/client/ui-chat/tests/chat-view.client.spec.tsx` (100+/46-), and `slot-catalog.ts` is
+regenerated by `pnpm run gen-client-catalog` (byte-identical to the patched file).
+
+### Upstream specs that are always red under the overlay (not regressions)
+
+`pnpm run test:gui` (`vitest run packages/client packages/host`) leaves 4 failing files once this patch
+is applied. Every one of them is the necessary consequence of the overlay deliberately changing upstream
+behavior — do not chase them as rebase regressions:
+
+| Spec | Cause |
+|---|---|
+| `packages/client/ui-tool/tests/toolview-slot.client.spec.tsx` | Upstream 0.2.x opens files in the in-product right Sidebar (it asserts `sidebarRight.openResource('dsh-resource://file/session/…')` is called and `openWorkspacePath` is **not**), while dshui's `ui-chat/apply.ts` routes `openFile` through `remote.session.openWorkspacePath` so the hosting extension opens the file in the VS Code editor — the whole point of this extension |
+| `packages/client/ui-tool/tests/chat-ptc-subcalls.client.spec.tsx` | Same, along a second file-path click route |
+| `packages/client/ui-theme/tests/radius-styles.client.spec.ts` | dshui's `ui-conversation/src/client/skeleton/HeroShell.module.css` sets `.workspaceStatic { border-radius: 16px }`, which is absent from `ui-theme/tests/expected/radius-exceptions.expected.json`. To clear it, switch the value to a `--dsw-radius-*` token or add the exception to that expected file |
+| `packages/client/ui-trajectory/tests/client-bundle.client.spec.ts` | **Unrelated to this patch**: it fails the same way on the unpatched base commit (`slots.entries('conversation.view')` is empty), an upstream issue at 0.2.1-alpha.1 |
+
+Two environment traps met while running the gates locally:
+
+- **`packages/util/native-command/tests/path-opener.spec.ts` is falsely red inside a dshui-hosted
+  shell**: it inherits `DSHUI_OPEN_ENDPOINT` / `DSHUI_BRIDGES_FILE` / `DSHUI_CODE_CLI`, so
+  `dshuiHosted(process.env)` is true and the darwin branch takes the bridge/CLI route while the spec
+  mocks `node:child_process`'s `execFile` to never call back — 5 cases time out at 5s. Re-run with
+  `env -u DSHUI_OPEN_ENDPOINT -u DSHUI_BRIDGES_FILE -u DSHUI_CODE_CLI` and it is 60/60.
+- Client specs run on the source plane (tsconfig paths), but `client-bundle`-style specs read the
+  `lib/client.js` artifact, so `pnpm run build:lib:client` must have run in `.dsh-src` first.
