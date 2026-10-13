@@ -197,6 +197,7 @@ fingerprint`): install Node.js ≥ 22.19 (or point `dshui.server.nodePath` at a 
 | `dshui.server.nodePath` | empty | Node ≥ 22.19 binary used to launch the dsh CLI. Empty = auto-detect (`PATH`, then Homebrew / nvm / fnm / asdf / Volta / Program Files locations); `electron` = force VS Code's embedded Electron runtime (only works for dsh ≤ 0.1.5). Run **dsh UI: Restart dsh Server** after changing it |
 | `dshui.openFilesInVscode` | `true` | Open file links from chat in **the current VS Code** window (via the extension's bridge, no system popup) instead of the OS default editor |
 | `dshui.checkDshUpdates` | `true` | Check the npm registry for newer dsh releases at startup and notify when the bundled version is outdated (throttled to once per 24h; each new version is announced once; can be disabled) |
+| `dshui.windowOrigin` | `true` | Load the shared server through a **per-window loopback origin** (an in-extension proxy): the browser's per-origin connection pool and localStorage/IndexedDB belong to that window alone, so windows never starve each other's requests or leak workspace state into each other, and the workspace scope is pinned into the served page instead of a droppable URL query. Disable to make every window use `127.0.0.1:<port>` directly |
 
 ### Referencing Files and Code Selections
 
@@ -301,6 +302,31 @@ Notes:
   session and view state and never sees another workspace's. Windows on the same folder still share
   (reload restores within the workspace); a plain browser hit on the server root without a workspace
   query keeps stock unscoped behavior.
+- **Launch token verified against the live server:** the token a window cached for the shared server
+  may belong to a process another window already replaced while the webview's cookie stays valid. A
+  request carrying such a token takes the "already authenticated, token mismatch" redirect, which
+  drops `?dshui_workspace` (and `dshui_theme`) — the panel then adopts the server's own working
+  directory and new sessions are created in the wrong workspace. Every navigation therefore probes
+  the candidates with `GET /?token=…` (child's own token → registry → last cached) and uses only a
+  token the live server accepts; when none is accepted the index loads without a token (cookie
+  authentication does not redirect, so the scope survives). The lease heartbeat also re-registers
+  this window after another window prunes its entry by TTL (registry and bridge table), so a shared
+  server is not reaped while windows still use it — the reap is what changes the token.
+- **Per-window origin:** every window loads the shared server through an in-extension loopback proxy
+  (`dshui.windowOrigin`, on by default), so the browser's **per-origin HTTP connection pool** and its
+  localStorage/IndexedDB belong to that window alone. With one shared origin the whole VS Code
+  instance has six HTTP/1.1 connection slots: once any window saturates or leaks them, other windows'
+  `/api` calls (sending a message is one POST) queue inside the browser forever — the UI still accepts
+  input while the host receives nothing and reports nothing. The proxy also pins the workspace scope
+  **into the served page** (overriding the host plugin's injected `window.__DSHUI_WORKSPACE__`), so the
+  scope no longer depends on a URL query a redirect can drop. There is still exactly **one dsh
+  process**: a single writer, one set of IM connections, no port conflicts.
+- **Shared-server liveness watchdog:** a window that adopted another window's server cannot observe
+  that process exiting or being replaced (its handle still reports running), so the panel stays on a
+  dead transport: input works, send looks accepted, and the message is written into a closed stream
+  and silently lost. The extension probes the rendezvous port every 15 seconds, drops a dead adopted
+  handle and re-rendezvouses, and re-navigates the panel when the server generation (launch token)
+  changes so each window rebuilds its own connection.
 - Sharing only applies on the fixed port (the default); with `dshui.server.port = 0`, every window
   starts its own server on a random port.
 
@@ -599,7 +625,7 @@ node scripts/verify-patches.mjs      # each file flagged as missing needs its pa
 #    - ui-chat/src/client/contract/slots.ts            UserActionOwnerProps and the conversation.chat.user-actions slot
 #    - packages/client/tsdown.client.ts                workspaceManifest resolves dshui-client-* ids by package directory (rc.1 validates by package name)
 #    - packages/util/native-command/src/path-opener.ts  darwin bridge/CLI/vscode://file branch + dshuiOrigin/dshuiLine (line travels as the bridge line param)
-#    - packages/client/connection/src/browser-auth.ts   keep dshui query params through the token redirect (0.1.7 base is ./)
+#    - packages/client/connection/src/browser-auth.ts   both index 303 redirects (token exchange / authenticated token mismatch) keep dshui query params
 #    - packages/api/session-controller/src/{index,types}.ts  openWorkspacePath threads dshuiOrigin/dshuiLine; verifyDesktopPath expands ~ via dshuiHomePath
 #    - packages/api/settings-controller/src/index.ts         openSettingsDocument(dshuiOrigin, signal)
 #    - packages/client/ui-chat/src/client/apply.ts           client attaches the window scope (dshuiClickOrigin) and the link line (dshuiLine); dshuiOpenPath owns the link destination spelling (relative → session cwd, home → ~ kept)
@@ -641,8 +667,8 @@ Other drift-prone spots to check after every upgrade:
     mismatch skip those rows entirely.
 
 - **The host part of `patches/dshui-bundles.patch`**: it targets the darwin-open branch of
-  `packages/util/native-command/src/path-opener.ts`, the token-exchange redirect in
-  `packages/client/connection/src/browser-auth.ts`, and the step in
+  `packages/util/native-command/src/path-opener.ts`, the index redirects in
+  `packages/client/connection/src/browser-auth.ts` (they keep the workspace-scope query params), and the step in
   `packages/api/session-controller/src/commands.ts` that clears a forked child's inherited queue, and
   it depends on the server environment variables `DSHUI_OPEN_ENDPOINT` (injected by the extension when
   starting the bridge), `DSHUI_CODE_CLI` (the in-app `code` CLI path, the fallback when the bridge is

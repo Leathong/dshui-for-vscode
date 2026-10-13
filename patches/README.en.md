@@ -90,9 +90,11 @@ The string patches the extension once applied to the npm package at runtime (see
   `line` query parameter (the extension's openBridge turns it into the `showTextDocument` selection).
   The `code` CLI and `vscode://file` fallbacks address a file only and have no line syntax, so the
   bridge path is the one that consumes a line.
-- `packages/client/connection/src/browser-auth.ts`: the 303 redirect of the token exchange keeps the
-  `dshui_workspace` / `dshui_theme` query params (besides `launch`), so a shared-backend window keeps
-  its workspace scope after the token exchange.
+- `packages/client/connection/src/browser-auth.ts`: both index 303 redirects (the token exchange and
+  the "cookie authenticated, token mismatch" case) keep the `dshui_workspace` / `dshui_theme` query
+  params besides `launch` (upstream 0.1.7 answers a bare directory-relative `./`, which drops the
+  scope too), so a shared-backend window whose token went stale does not silently adopt the server's
+  own working directory.
 - `packages/api/session-controller/src/commands.ts`: a `session.fork` child now runs `inbox.clear()`
   right after creation, discarding the **pending queue** it inherited from the source seed (the
   dangling next-turn / next-step `agent/inbox/spliced` inserts). Previously, forking a session whose

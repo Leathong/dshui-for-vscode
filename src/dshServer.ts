@@ -287,6 +287,37 @@ function probeDshuiServerOnce(port: number, timeoutMs: number): Promise<boolean>
 }
 
 /**
+ * Whether the dsh web server listening on `port` accepts one launch token.
+ *
+ * The root index answers the matching token with a 303 cookie exchange; a
+ * token the process does not know is answered with 401, or — when the caller
+ * already holds a valid browser cookie — with a bare `./` redirect that drops
+ * every query parameter, the `dshui_workspace` scope included. No cookie
+ * travels with this probe, so the answer depends on the token alone.
+ * @param port - the server's loopback port.
+ * @param token - candidate process launch token.
+ * @param timeoutMs - per-request timeout.
+ * @returns true only when the live server accepts the token.
+ */
+export function verifyLaunchToken(port: number, token: string, timeoutMs = 2000): Promise<boolean> {
+  return new Promise((resolve) => {
+    if (token === '') {
+      resolve(false)
+      return
+    }
+    const req = http.get(
+      { host: '127.0.0.1', port, path: `/?token=${encodeURIComponent(token)}`, timeout: timeoutMs },
+      (res) => {
+        res.resume()
+        resolve(res.statusCode === 303)
+      },
+    )
+    req.on('timeout', () => { req.destroy(); resolve(false) })
+    req.on('error', () => { resolve(false) })
+  })
+}
+
+/**
  * True when a dshui-managed dsh web server is already serving on the port:
  * the index page carries the injected `__DSHUI_WORKSPACE__` marker, so a
  * random non-dsh process occupying the port is not mistaken for one. The

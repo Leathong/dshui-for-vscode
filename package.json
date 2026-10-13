@@ -183,6 +183,11 @@
           "type": "boolean",
           "default": true,
           "description": "Check the npm registry for newer @deepseek-ai/dsh releases at startup and notify when the bundled version is outdated. Throttled to once per 24h; each new version is announced once."
+        },
+        "dshui.windowOrigin": {
+          "type": "boolean",
+          "default": true,
+          "description": "Give every window its own loopback origin in front of the shared dsh server. The browser's per-origin HTTP connection pool and storage (localStorage/IndexedDB) then belong to that window alone: windows cannot starve each other's requests or leak workspace state into each other, and the workspace scope is pinned into the served page instead of a droppable URL query. Turn off to load the shared server address directly (all windows share one origin)."
         }
       }
     }

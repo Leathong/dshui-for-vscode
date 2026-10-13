@@ -33,6 +33,18 @@ const HOST_INSTANCE_ID = `${process.pid}:${Date.now().toString(36)}:${Math.rando
 export const SERVER_USER_LEASE_TTL_MS = 45_000
 const SERVER_USER_HEARTBEAT_MS = 10_000
 
+/**
+ * True while this extension host counts itself a user of the shared server.
+ * The heartbeat re-adds a lease that another window pruned while this host was
+ * blocked past the TTL, so the server never sees an empty user list under a
+ * running window; an intentional unregister (this window abandoning the shared
+ * backend) clears the flag and the heartbeat stops resurrecting the entry.
+ */
+let sharedUserRegistered = false
+
+/** This window's last open-bridge registration, replayed by the heartbeat. */
+let bridgeRegistration: { workspace: string; endpoint: string; token: string } | null = null
+
 /** One extension host using the shared server. */
 export interface ServerUser {
   pid: number
@@ -224,6 +236,7 @@ export async function registerServerUser(dshHome: string, port: number, owner: b
     // 会把本窗口误判为不存在而退出共享服务器（见文件头注释的竞态）。
     if (existing === null && !owner) {
       writeRegistry(dshHome, { port, owner: 0, users: [currentServerUser()] })
+      sharedUserRegistered = true
       return
     }
     const users = (existing?.users ?? [])
@@ -235,6 +248,7 @@ export async function registerServerUser(dshHome: string, port: number, owner: b
       users,
       ...resolvedToken !== undefined ? { token: resolvedToken } : {},
     })
+    sharedUserRegistered = true
   })
 }
 
@@ -265,6 +279,9 @@ export async function unregisterServerUser(dshHome: string, shared: boolean): Pr
       users: existing.users.filter((user) => user.pid !== process.pid && isServerUserLive(user)),
     })
   })
+  // From here the heartbeat must not write this window back: unregistering is
+  // what lets the detached server reap itself once nobody uses it.
+  sharedUserRegistered = false
 }
 
 /** True when the registry tracks any live user other than this process. */
@@ -285,16 +302,24 @@ async function refreshSharedLeases(dshHome: string): Promise<void> {
   await withRegistryLock(dshHome, () => {
     const registry = readRegistry(dshHome)
     if (registry !== null) {
-      const hasSelf = registry.users.some((user) => user.pid === process.pid && user.id === HOST_INSTANCE_ID)
+      // Re-add this window's own lease rather than only refreshing it: another
+      // window prunes entries whose `lastSeen` outlived the TTL, and a blocked
+      // extension host routinely misses that window. A dropped entry that the
+      // heartbeat never restores makes the server see no live users and reap
+      // itself under a running window (which then respawns it — and every
+      // window's cached launch token goes stale).
       const users = registry.users.filter((user) => user.pid !== process.pid && isServerUserLive(user))
-      if (hasSelf) users.push(currentServerUser())
+      if (sharedUserRegistered) users.push(currentServerUser())
       writeRegistry(dshHome, { ...registry, users })
     }
 
-    const bridges = readBridges(dshHome)
-    const existing = bridges[process.pid]
-    if (existing !== undefined) {
-      bridges[process.pid] = { ...existing, id: HOST_INSTANCE_ID, lastSeen: Date.now() }
+    const bridge = bridgeRegistration
+    if (bridge !== null) {
+      // Same one-shot hazard for the open-bridge table: a pruned entry is
+      // re-created from the last registration so file links keep routing to
+      // this window instead of the owner's.
+      const bridges = readBridges(dshHome)
+      bridges[process.pid] = { pid: process.pid, id: HOST_INSTANCE_ID, ...bridge, lastSeen: Date.now() }
       writeBridges(dshHome, bridges)
     }
   })
@@ -406,6 +431,7 @@ function writeBridges(dshHome: string, bridges: Record<number, BridgeEntry>): vo
  * @param token - per-window token required by this bridge.
  */
 export async function registerBridge(dshHome: string, workspace: string, endpoint: string, token: string): Promise<void> {
+  bridgeRegistration = { workspace, endpoint, token }
   await withRegistryLock(dshHome, () => {
     const bridges = readBridges(dshHome)
     bridges[process.pid] = {
@@ -422,6 +448,9 @@ export async function registerBridge(dshHome: string, workspace: string, endpoin
 
 /** Remove this window's open-bridge registration. */
 export async function unregisterBridge(dshHome: string): Promise<void> {
+  // Clear the replay record first: the heartbeat must not re-create the entry
+  // of a window that is leaving the shared backend.
+  bridgeRegistration = null
   await withRegistryLock(dshHome, () => {
     const bridges = readBridges(dshHome)
     delete bridges[process.pid]

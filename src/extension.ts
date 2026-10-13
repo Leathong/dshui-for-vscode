@@ -11,10 +11,11 @@ import * as fs from 'node:fs'
 import * as https from 'node:https'
 import * as path from 'node:path'
 import * as vscode from 'vscode'
-import { bundledCliPath, DshServer, probeDshuiMarker, probeDshuiServer } from './dshServer'
+import { bundledCliPath, DshServer, probeDshuiMarker, probeDshuiServer, verifyLaunchToken } from './dshServer'
 import { installCrashHandlers, logger, setLogFile } from './logger'
 import { killProcessOnPort } from './killPort'
 import { OpenBridge } from './openBridge'
+import { WindowProxy } from './windowProxy'
 import { isObject, RollbackReviewManager, type RollbackFileChange } from './rollbackReview'
 import { ensureProfileBundle, installPlugins, resolveDshHome, type InstalledPlugin } from './plugins'
 import {
@@ -264,6 +265,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   let currentWorkspacePath: string | undefined
   let registeredSharedUser = false
   let serverUserHeartbeat: NodeJS.Timeout | null = null
+  /** Shared-server liveness watchdog (see `watchSharedServer`). */
+  let serverWatch: NodeJS.Timeout | null = null
   /** Set by the dispose handler: no recovery path may start a server afterwards. */
   let deactivating = false
   /**
@@ -278,6 +281,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   /** Wait a moment before re-rendezvousing, so another window's respawn can land first. */
   const SERVER_RECOVERY_DELAY_MS = 1500
   let recoveryResetTimer: NodeJS.Timeout | null = null
+  /** How often the shared-server watchdog re-checks the port this window uses. */
+  const SERVER_WATCH_MS = 15_000
+  /**
+   * Server generation (port plus the launch token the live process accepted)
+   * the panel is currently pointed at. A different generation means another
+   * process now serves the rendezvous port: the page's WebSocket died with the
+   * old one and must be rebuilt (see `watchSharedServer`).
+   */
+  let navigatedGeneration = ''
   const reviewManager = new RollbackReviewManager()
   reviewManager.onDidChange = () => {
     if (currentView !== null) {
@@ -310,6 +322,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       }
     }
   }
+
+  // Each window loads the shared server through its own loopback origin, so the
+  // browser's per-origin HTTP pool and storage belong to this window alone (see
+  // `WindowProxy`): a shared origin lets one window's leaked or saturated
+  // connections silently swallow every other window's RPC POSTs.
+  const isolatedOrigin = vscode.workspace.getConfiguration('dshui').get<boolean>('windowOrigin') ?? true
+  const windowProxy = new WindowProxy({
+    targetPort: () => server?.port,
+    scope: () => currentWorkspace() ?? '',
+  })
 
   // dsh 版本感知：启动时异步对比 npm 最新版与内置 CLI，过旧且未提示过时通知。
   // 静默失败（无网络/解析错误不打扰）；24 小时节流；同一新版本只提示一次；
@@ -351,6 +373,35 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     try { return fs.realpathSync(raw) } catch { return raw }
   }
 
+  /**
+   * The launch token the server listening on `port` actually accepts, or ''
+   * when no candidate is accepted.
+   *
+   * A shared server outlives the window that spawned it and can be replaced by
+   * another window, so the token this window cached at attach time may belong
+   * to a dead process. Such a token is still an authenticated request (the
+   * webview keeps a signed cookie), but the index answers it with a bare `./`
+   * redirect that drops every query parameter — `dshui_workspace` included —
+   * and the panel then silently adopts the server's own working directory as
+   * its workspace, so new sessions land in the wrong folder. Loading the index
+   * with no token at all avoids that redirect: the cookie-authenticated
+   * response keeps the scope from the URL.
+   * @param port - the shared server's loopback port.
+   * @returns the accepted token, or '' to load the index without one.
+   */
+  async function resolveLaunchToken(port: number): Promise<string> {
+    const candidates = new Set<string>()
+    if (server !== null && server.port === port) candidates.add(server.launchTokenValue)
+    candidates.add(readRegistry(dshHome)?.token ?? '')
+    candidates.add(serverLaunchToken)
+    for (const candidate of candidates) {
+      if (candidate === '') continue
+      if (await verifyLaunchToken(port, candidate)) return candidate
+    }
+    logger.warn(`[dshui] no launch token accepted on port ${port}; loading the index cookie-authenticated`)
+    return ''
+  }
+
   /** The dsh UI color scheme matching VS Code's active color theme (high-contrast maps to its dark/light base). */
   function activeColorScheme(): 'dark' | 'light' {
     switch (vscode.window.activeColorTheme.kind) {
@@ -379,7 +430,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     })
   }
 
-  /** (Re)start the server for the given workspace, reusing a live one bound to the same folder. */
+  /**
+   * (Re)start the server for the given workspace, reusing a live one bound to
+   * the same folder. An adopted (child-less) handle can outlive the process it
+   * points at; every URL built for such a handle resolves the launch token
+   * against the live server first (see {@link resolveLaunchToken}).
+   */
   function startServer(workspacePath: string): Promise<number> {
     if (server !== null && server.running && server.port !== undefined && server.cwd === workspacePath) {
       return Promise.resolve(server.port)
@@ -423,11 +479,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       }
     }
     const notifyReady = (boundPort: number): void => {
-      // Prefer the process token we just read from the child's URL; when this
-      // window adopted another window's server (launchTokenValue is empty),
-      // fall back to the shared registry record so the webview can still
-      // authenticate against the server's browser-token index.
-      serverLaunchToken = server?.launchTokenValue || readRegistry(dshHome)?.token || serverLaunchToken
+      // The child we spawned prints its own token on the boot URL, which is
+      // authoritative. An adopted handle has none: its token is resolved (and
+      // verified against the live server) on every navigation instead, since
+      // the registry record may still describe the process it replaced.
+      serverLaunchToken = server?.launchTokenValue || serverLaunchToken
       logger.info(`[dshui] dsh web ready on port ${boundPort} for ${workspacePath}`)
       serverStart = null
       // 只有稳定运行一段时间的服务器才归还自愈预算，避免「起来就死」的无限重启。
@@ -435,7 +491,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       recoveryResetTimer = setTimeout(() => { serverRecoveries = 0 }, SERVER_RECOVERY_STABLE_MS)
       recoveryResetTimer.unref()
       if (currentView !== null && currentWorkspacePath === workspacePath) {
-        navigate(currentView.webview, workspacePath, boundPort)
+        void navigate(currentView.webview, workspacePath, boundPort)
       }
     }
     // 共享后端：把本窗口登记为共享服务器的用户（owner = 自己拉起的服务器）。
@@ -474,9 +530,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         // 注册自己的工作区（host 插件会经 marker 登记）并以普通用户身份加入。
         if (await probeDshuiServer(port)) {
           server = DshServer.attach(port, workspacePath)
-          // Adopt the owner window's launch token so the browser-auth index can
-          // exchange it for a signed cookie (otherwise this window's webview 401s).
-          serverLaunchToken = readRegistry(dshHome)?.token ?? ''
+          // Adopt the live server's launch token so the browser-auth index can
+          // exchange it for a signed cookie (otherwise this window's webview
+          // 401s). Resolution verifies every candidate against that server, so
+          // a registry record left behind by a dead process is never reused.
           writeWorkspaceMarker(dshHome, workspacePath)
           await registerUse(port, false)
           notifyReady(port)
@@ -580,18 +637,128 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }, SERVER_RECOVERY_DELAY_MS)
   }
 
-  /** Point a view's iframe at the server URL for the given scope. The URL also
+  /** Build the server URL for one scope. The URL also
    *  carries the current VS Code color scheme (`dshui_theme`) so the embedded
    *  SPA boots with the right palette before any relayed message arrives. Since
    *  dsh 0.1.2 the index is behind browser-token auth, so the dsh launch token
    *  rides the URL too (`token=`), letting the server mint a signed cookie. */
-  function makeUrl(workspacePath: string, port: number, token = serverLaunchToken): string {
-    return `http://127.0.0.1:${port}/?${token === '' ? '' : `token=${encodeURIComponent(token)}&`}dshui_workspace=${encodeURIComponent(workspacePath)}&dshui_theme=${activeColorScheme()}`
+  function makeUrl(workspacePath: string, origin: string, token: string): string {
+    return `${origin}/?${token === '' ? '' : `token=${encodeURIComponent(token)}&`}dshui_workspace=${encodeURIComponent(workspacePath)}&dshui_theme=${activeColorScheme()}`
+  }
+
+  /**
+   * The origin the panel loads the shared server from: this window's own
+   * loopback proxy when origin isolation is on, the shared server directly
+   * otherwise. Falls back to the shared server when the proxy cannot bind, so
+   * a proxy failure degrades instead of hiding the panel.
+   */
+  async function serverOrigin(port: number): Promise<string> {
+    const direct = `http://127.0.0.1:${port}`
+    if (!isolatedOrigin) return direct
+    try {
+      if (!windowProxy.running) {
+        await windowProxy.start()
+        logger.info(`[dshui] window origin listening at ${String(windowProxy.origin)} for 127.0.0.1:${port}`)
+      }
+    } catch (error) {
+      logger.error('[dshui] window origin failed to start:', error)
+      return direct
+    }
+    return windowProxy.origin ?? direct
+  }
+
+  /**
+   * The boot URL for one scope, with the launch token verified against the
+   * live server first (see `resolveLaunchToken`). Building the URL is what
+   * points the panel at a server generation, so the watchdog's bookkeeping
+   * lives here.
+   */
+  async function scopedUrl(workspacePath: string, port: number): Promise<string> {
+    const token = await resolveLaunchToken(port)
+    const origin = await serverOrigin(port)
+    navigatedGeneration = `${port}:${token}`
+    return makeUrl(workspacePath, origin, token)
   }
 
   /** Point a view's iframe at the server URL for the given scope. */
-  function navigate(webview: vscode.Webview, workspacePath: string, port: number): void {
-    void webview.postMessage({ type: 'navigate', url: makeUrl(workspacePath, port) })
+  async function navigate(webview: vscode.Webview, workspacePath: string, port: number): Promise<void> {
+    void webview.postMessage({ type: 'navigate', url: await scopedUrl(workspacePath, port) })
+  }
+
+  /**
+   * Shared-server watchdog.
+   *
+   * An adopted (child-less) handle cannot observe the process it points at, so
+   * a shared server that dies — self-reaped, crashed, or replaced by another
+   * window's respawn — leaves this window's panel bound to a dead transport:
+   * the page still accepts input and renders its last state, but every
+   * submission is written into a closed socket and silently never reaches the
+   * host (nothing is persisted, nothing is reported). Reloading the VS Code
+   * window works around it, which is exactly the wrong thing to require.
+   *
+   * Each tick therefore (a) drops a dead adopted handle so `startServer`
+   * re-rendezvouses, and (b) re-navigates the panel whenever the server
+   * generation (port plus accepted launch token) differs from the one the page
+   * was pointed at, so every window rebuilds its transport against the live
+   * process on its own.
+   */
+  async function watchSharedServer(): Promise<void> {
+    if (deactivating) return
+    const configPort = vscode.workspace.getConfiguration('dshui').get<number>('server.port') ?? 0
+    // Per-window servers (port 0) are owned children: their exit handler
+    // already drives recovery, and there is no shared process to watch.
+    if (configPort <= 0) return
+    const view = currentView
+    const workspacePath = currentWorkspacePath
+    if (view === null || workspacePath === undefined) return
+    const active = server
+    if (active === null) {
+      // A previous tick dropped a dead handle: re-rendezvous until a server
+      // exists again (the host plugin reaps an unused one, so this cannot
+      // leave a process behind after the last window closes).
+      await startServer(workspacePath).catch((error) => {
+        logger.error('[dshui] shared server re-rendezvous failed:', error)
+      })
+      return
+    }
+    if (active.port === undefined) return
+    const port = active.port
+    if (await probeDshuiServer(port, 1500, 2)) {
+      const token = await resolveLaunchToken(port)
+      const generation = `${port}:${token}`
+      // The first observation after activation only records the generation:
+      // the panel was just navigated, and reloading it again would interrupt
+      // the user for nothing.
+      if (navigatedGeneration === '') {
+        navigatedGeneration = generation
+        return
+      }
+      // Reload only for a different *accepted* token: that is a replacement
+      // server process whose streams this page can no longer reach. A token the
+      // registry has not caught up with resolves to '' and must not become a
+      // reload loop — the page keeps working cookie-authenticated.
+      const previousToken = navigatedGeneration.slice(navigatedGeneration.indexOf(':') + 1)
+      if (token === '' || token === previousToken) {
+        navigatedGeneration = generation
+        return
+      }
+      logger.warn(`[dshui] shared server generation changed on port ${port}; reloading the panel`)
+      await navigate(view.webview, workspacePath, port)
+      return
+    }
+    logger.warn(`[dshui] shared server on port ${port} is gone; re-rendezvousing`)
+    if (active.shared && server === active) {
+      // Adopted handle whose process died: dropping it makes the next
+      // startServer probe/attach/spawn instead of reusing the dead port.
+      server = null
+      serverLaunchToken = ''
+      navigatedGeneration = ''
+    }
+    if (server === null) {
+      await startServer(workspacePath).catch((error) => {
+        logger.error('[dshui] shared server re-rendezvous failed:', error)
+      })
+    }
   }
 
   /**
@@ -788,12 +955,18 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         const ready = runningServer !== null && runningServer.port !== undefined
           && runningServer.cwd === workspacePath
         if (ready) {
-          webviewView.webview.html = panelHtml(makeUrl(workspacePath, runningServer.port))
+          // Boot the iframe straight into the server (no about:blank flash).
+          // The token is verified before the URL is built, so an adopted server
+          // whose process was replaced cannot strip this window's scope.
+          const readyPort = runningServer.port
+          void scopedUrl(workspacePath, readyPort).then((url) => {
+            if (currentView === webviewView) webviewView.webview.html = panelHtml(url)
+          })
           return
         }
         webviewView.webview.html = panelHtml()
         void startServer(workspacePath).then((port) => {
-          if (currentView === webviewView) navigate(webviewView.webview, workspacePath, port)
+          if (currentView === webviewView) void navigate(webviewView.webview, workspacePath, port)
         }).catch((error) => {
           notifyServerFailure(`dshui: failed to start the dsh server: ${String(error)}`, error)
         })
@@ -829,8 +1002,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         return
       }
       const port = await startServer(workspacePath)
-      const url = `http://127.0.0.1:${port}/?dshui_workspace=${encodeURIComponent(workspacePath)}`
-      void vscode.env.openExternal(vscode.Uri.parse(url))
+      // The system browser is an external client: it must not depend on this
+      // window's per-window origin, which dies with the window. The verified
+      // launch token still rides the URL so the browser can exchange it for a
+      // signed cookie; without a token the index answers 401.
+      const token = await resolveLaunchToken(port)
+      void vscode.env.openExternal(vscode.Uri.parse(makeUrl(workspacePath, `http://127.0.0.1:${port}`, token)))
     }),
   )
 
@@ -1036,6 +1213,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         clearTimeout(recoveryResetTimer)
         recoveryResetTimer = null
       }
+      if (serverWatch !== null) {
+        clearInterval(serverWatch)
+        serverWatch = null
+      }
       // 共享后端：窗口关闭时不再由 owner 直接 stop。owner 直接 stop 与
       // 其他窗口的 probe→attach→register 之间存在无法消除的 TOCTOU 竞态，
       // 会误停掉刚 attach 但尚未写进 users 的窗口。这里只摘除自己的
@@ -1061,10 +1242,17 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       }
       void unregisterBridge(dshHome).catch(() => { /* best-effort */ })
       openBridge.dispose()
+      windowProxy.dispose()
       reviewManager.dispose()
       logger.dispose()
     },
   })
+
+  // Shared-server liveness: an adopted handle cannot see its process die, and
+  // a page left on a dead transport keeps accepting messages it can never
+  // deliver (see `watchSharedServer`).
+  serverWatch = setInterval(() => { void watchSharedServer() }, SERVER_WATCH_MS)
+  serverWatch.unref()
 
   // Auto-open the sidebar view at startup when a folder is open (unless disabled).
   const autoOpen = vscode.workspace.getConfiguration('dshui').get<boolean>('autoOpen') ?? true

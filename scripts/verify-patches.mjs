@@ -86,7 +86,7 @@ const CHECKS = [
   },
   {
     file: 'packages/client/connection/src/browser-auth.ts',
-    markers: ["p[0] !== TOKEN_QUERY"],
+    markers: ['function indexLocation(url: URL): string', "'location': indexLocation(url),"],
   },
   {
     file: 'packages/client/ui-conversation/src/client/apply.ts',

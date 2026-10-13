@@ -185,6 +185,7 @@ VS Code 的**输出面板**（View → Output → 下拉选择 **dsh UI**，或�
 | `dshui.server.nodePath` | 空 | 用来启动 dsh CLI 的 Node ≥ 22.19 可执行文件。留空 = 自动探测（`PATH`，再到 Homebrew / nvm / fnm / asdf / Volta / Program Files 等常见位置）；填 `electron` = 强制使用 VS Code 内置 Electron 运行时（仅 dsh ≤ 0.1.5 可用）。改完需运行 **dsh UI: Restart dsh Server** |
 | `dshui.openFilesInVscode` | `true` | 聊天中的文件链接在**当前 VS Code** 中打开（经扩展内桥接，无系统弹窗），而非系统默认编辑器 |
 | `dshui.checkDshUpdates` | `true` | 启动时异步查询 npm 上的最新 dsh 版本，内置版本过旧时通知（24 小时节流，同一新版本仅提示一次；可关闭） |
+| `dshui.windowOrigin` | `true` | 每个窗口经**自己的 loopback origin**（扩展内代理）加载共享服务器：浏览器的每 origin 连接池与 localStorage/IndexedDB 归本窗口独有，窗口之间既不会互相挤占连接、也不会串工作区状态；工作区作用域由代理写入页面，不再依赖可被跳转丢弃的 URL 查询。关闭则所有窗口直接共用 `127.0.0.1:<port>` 这一个 origin |
 
 ### 引用文件与代码片段
 
@@ -266,6 +267,22 @@ host 插件轮询注册表，无存活窗口时自行退出。采纳方即使遇
   （host 插件按 `?dshui_workspace` 解析作用域），因此每个工作区各自记住自己上次打开的会话与视图
   状态，互不串扰；同一工作区的多个窗口之间仍共享（如窗口内重载后恢复）。直接访问服务器根地址
   （无工作区查询参数）时保持原版无隔离行为。
+- **launch token 按实况校验**：窗口缓存的共享服务器 launch token 可能属于已被替换的进程，而 webview
+  的 cookie 仍然有效——带旧 token 的索引请求会走到「已认证 + token 不匹配」的跳转，把
+  `?dshui_workspace`（以及 `dshui_theme`）一并丢掉，面板随之落到服务器自己的工作目录，新建会话就
+  创建在错误工作区。扩展因此在每次导航前用 `GET /?token=…` 逐个探测候选（子进程自带 → 注册表 →
+  上次缓存），只发送在跑服务器接受的 token，都不接受就不带 token 加载索引（cookie 认证不跳转，
+  作用域照常保留）。续租心跳也会在条目被其他窗口按 TTL 清掉后重新登记自己（注册表与桥表），避免
+  仍有窗口在用时共享服务器被误回收——回收换进程正是 token 失效的源头。
+- **每窗口独立 origin**：每个窗口经扩展内的 loopback 代理（`dshui.windowOrigin`，默认开）加载共享服务器，
+  浏览器的**每 origin HTTP 连接池**与 localStorage/IndexedDB 因此归本窗口独有。共用一个 origin 时，
+  整个 VS Code 实例只有 6 个 HTTP/1.1 连接槽：任一窗口占满或泄漏连接后，其它窗口的 `/api` 调用
+  （发消息就是一次 POST）会永远排在浏览器队列里——界面照常能输入，host 却收不到也没有报错。
+  代理还把工作区作用域**写进返回的页面**（覆盖 host 插件注入的 `window.__DSHUI_WORKSPACE__`），
+  作用域不再依赖可能被跳转丢弃的 URL 查询。仍然只有**一个 dsh 进程**：单写者、单份 IM 连接、无端口冲突。
+- **共享服务器存活看门狗**：采纳别人服务器的窗口无法感知那个进程已退出或被替换（句柄仍显示 running），
+  面板就会停在死连接上：能输入、能点发送，消息写进已关闭的流里静默消失。扩展每 15 秒探测一次会合端口，
+  端口消失即丢弃失效句柄并重新会合，服务器换代（launch token 变化）则重新导航面板，让窗口自行重建连接。
 - 共享仅在固定端口（默认）下生效；`dshui.server.port = 0` 时每个窗口各起一个随机端口服务器。
 
 ### 修改回滚
@@ -527,7 +544,7 @@ cd .. && node scripts/verify-patches.mjs   # 逐个标记缺失即说明该文�
 #    - ui-chat/src/client/contract/slots.ts            UserActionOwnerProps 与 conversation.chat.user-actions 槽声明
 #    - packages/client/tsdown.client.ts                workspaceManifest 对 dshui-client-* id 按包目录回退（rc.1 起按包名校验）
 #    - packages/util/native-command/src/path-opener.ts  darwin 分支改桥接/CLI/vscode://file + dshuiOrigin/dshuiLine（行号经桥接 line 参数）
-#    - packages/client/connection/src/browser-auth.ts     token 交换重定向保留 dshui 查询参数（0.1.7 起基址是 ./）
+#    - packages/client/connection/src/browser-auth.ts     索引两条 303 重定向（token 交换 / 已认证但 token 失配）保留 dshui 查询参数
 #    - packages/api/session-controller/src/{index,types}.ts  openWorkspacePath 透传 dshuiOrigin/dshuiLine；verifyDesktopPath 用 dshuiHomePath 展开 ~
 #    - packages/api/settings-controller/src/index.ts         openSettingsDocument(dshuiOrigin, signal)
 #    - packages/client/ui-chat/src/client/apply.ts           客户端附上窗口作用域 dshuiClickOrigin；dshuiOpenPath 决定链接目标拼写（相对 → 会话 cwd，家目录 → 保留 ~）
@@ -564,7 +581,8 @@ npm run compile && npx @vscode/vsce package
     `patch.yml` 的行名与包名不匹配而被 loader 跳过。
 
 - **`patches/dshui-bundles.patch` 的 host 部分**：定位的是 `packages/util/native-command/src/path-opener.ts`
-  的 darwin 打开分支、`packages/client/connection/src/browser-auth.ts` 的 token 交换重定向，以及
+  的 darwin 打开分支、`packages/client/connection/src/browser-auth.ts` 的索引重定向（保留工作区
+  作用域查询参数），以及
   `packages/api/session-controller/src/commands.ts` 里 `session.fork` 建子会话后清空继承队列的那一步，
   并依赖服务器环境变量 `DSHUI_OPEN_ENDPOINT`（扩展启动桥时注入）、`DSHUI_CODE_CLI`（应用内 `code`
   CLI 路径，桥不可用时的回退）与 `DSHUI_BRIDGES_FILE`。dsh 若修改该段代码，补丁会安全失败（`git

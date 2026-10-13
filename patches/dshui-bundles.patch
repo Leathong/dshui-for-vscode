@@ -489,7 +489,7 @@ index 6d8b867eea..69d97d4429 100644
 +  await expect(controller.openSettingsDocument(undefined, abort.signal)).rejects.toMatchObject({ code: 'gateway/cancelled' })
  })
 diff --git a/packages/client/connection/src/browser-auth.ts b/packages/client/connection/src/browser-auth.ts
-index 5691180d96..cc5d997012 100644
+index 5691180d96..4e05bc291d 100644
 --- a/packages/client/connection/src/browser-auth.ts
 +++ b/packages/client/connection/src/browser-auth.ts
 @@ -77,6 +77,18 @@ function requestAuthority(headers: ConnectionTrustRequest['headers']): string |
@@ -511,7 +511,7 @@ index 5691180d96..cc5d997012 100644
  function canonicalSecret(value: unknown): Buffer | undefined {
    if (typeof value !== 'string') return undefined
    const decoded = decodeBase64Url(value)
-@@ -117,9 +129,30 @@ function cookieValue(headerValue: string, name: string): string | undefined {
+@@ -117,15 +129,58 @@ function cookieValue(headerValue: string, name: string): string | undefined {
    return undefined
  }
  
@@ -545,17 +545,40 @@ index 5691180d96..cc5d997012 100644
  }
  
  function signature(secret: Buffer, body: string): Buffer {
-@@ -253,10 +286,16 @@ export class BrowserAuth {
+   return createHmac('sha256', secret).update(body).digest()
+ }
+ 
++/**
++ * The directory-relative redirect target for an authenticated index request,
++ * carrying every query parameter except the consumed launch token.
++ *
++ * dshui patch: upstream answers a bare `./`, which drops the whole query
++ * string. The dshui webview carries its workspace scope and theme there
++ * (`dshui_workspace` / `dshui_theme`), so an index request whose token no
++ * longer matches the running process — a window that kept the previous
++ * process's token while its signed cookie stays valid — silently loaded the
++ * page without a scope, and the panel adopted the server's own working
++ * directory as its workspace. The relative base still preserves a mount point.
++ * @param url - the index request URL.
++ * @returns `./`, plus the preserved query string when the request had one.
++ */
++function indexLocation(url: URL): string {
++  const query = [...url.searchParams]
++    .filter(parameter => parameter[0] !== TOKEN_QUERY)
++    .map(parameter => `${parameter[0]}=${encodeURIComponent(parameter[1])}`)
++    .join('&')
++  return query === '' ? './' : `./?${query}`
++}
++
+ function encodeCookie(payload: BrowserCookiePayload, secret: Buffer): string {
+   const body = encodeBase64Url(Buffer.from(JSON.stringify(payload), 'utf8'))
+   return `v1.${body}.${encodeBase64Url(signature(secret, body))}`
+@@ -253,10 +308,11 @@ export class BrowserAuth {
          }, this.secret)
          res.writeHead(303, {
            'cache-control': 'no-store',
 -          'location': './',
-+          // dshui patch: the bare relative redirect drops every query param,
-+          // which would strip the workspace scope (`dshui_workspace`) and theme
-+          // (`dshui_theme`) from a shared-backend window's URL. Keep every
-+          // non-token query parameter so the scope survives the token exchange,
-+          // while the directory-relative base preserves the mount point.
-+          'location': (q => q === '' ? './' : './?' + q)([...url.searchParams].filter(p => p[0] !== TOKEN_QUERY).map(p => p[0] + '=' + encodeURIComponent(p[1])).join('&')),
++          'location': indexLocation(url),
            'referrer-policy': 'no-referrer',
            'set-cookie': sessionCookie(
              cookieName(authority), value, expiresAt, Math.floor(this.maxAgeMilliseconds / 1000),
@@ -563,14 +586,43 @@ index 5691180d96..cc5d997012 100644
            ),
          })
          res.end()
+@@ -265,7 +321,7 @@ export class BrowserAuth {
+       if (req.method === 'GET' && url.pathname === '/' && this.isAuthenticated(req)) {
+         res.writeHead(303, {
+           'cache-control': 'no-store',
+-          'location': './',
++          'location': indexLocation(url),
+           'referrer-policy': 'no-referrer',
+         })
+         res.end()
 diff --git a/packages/client/connection/tests/browser-auth.host.spec.ts b/packages/client/connection/tests/browser-auth.host.spec.ts
-index c271aa313b..fa149a1dab 100644
+index c271aa313b..ab7d18c1d1 100644
 --- a/packages/client/connection/tests/browser-auth.host.spec.ts
 +++ b/packages/client/connection/tests/browser-auth.host.spec.ts
-@@ -140,6 +140,35 @@ describe('BrowserAuth', () => {
+@@ -140,6 +140,55 @@ describe('BrowserAuth', () => {
      })
    })
  
++  it('keeps non-token query parameters when a stale token falls back to the cookie', async () => {
++    const store = new RecordCredentials()
++    const login = exchange(await createAuth(store))
++    // A restarted process rejects the old token but accepts the persisted
++    // cookie; the dshui webview's workspace scope and theme ride the query
++    // string, so the redirect must not drop them.
++    const restarted = await createAuth(store)
++    const staleUrl = new URL(login.launchUrl)
++    staleUrl.searchParams.set('dshui_workspace', '/Volumes/work/project')
++    staleUrl.searchParams.set('dshui_theme', 'dark')
++    const redirected = response()
++    expect(restarted.authorizeIndex(request(
++      `${staleUrl.pathname}${staleUrl.search}`,
++      '127.0.0.1:3080',
++      { cookie: login.cookie },
++    ), redirected.value)).toBe(false)
++    expect(redirected.state.headers?.['location'])
++      .toBe('./?dshui_workspace=%2FVolumes%2Fwork%2Fproject&dshui_theme=dark')
++  })
++
 +  it('relaxes the session cookie only for a cross-site or embedded navigation', async () => {
 +    const auth = await createAuth(new RecordCredentials())
 +    const launchUrl = new URL(auth.authenticatedUrl('http://127.0.0.1:3080'))

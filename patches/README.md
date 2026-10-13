@@ -77,9 +77,10 @@ RPC；上游 0.1.7 新增的归档/置顶行操作保留并存）、每条用户
   `window: 'hidden' | 'visible'` 变为**必填**，dshui 的 CLI 回退调用补上 `'hidden'`（上游也把 darwin
   分支三处 `open` 调用都改成了显式 `'hidden'`）；漏传是 0.2.1 重基时唯一的编译错误
   （`error TS2554: Expected 4 arguments, but got 3`）。
-- `packages/client/connection/src/browser-auth.ts`：token 交换的 303 重定向保留除 launch token 之外
-  的 `dshui_workspace` / `dshui_theme` 查询参数（0.1.7 起上游改为目录相对的 `./`，dshui 在此基础上
-  保留非 token 查询参数），避免共享后端窗口在 token 交换后丢失工作区作用域。
+- `packages/client/connection/src/browser-auth.ts`：索引的两条 303 重定向（token 交换、以及「cookie
+  已认证但 token 不匹配」）都保留除 launch token 之外的 `dshui_workspace` / `dshui_theme` 查询参数
+  （上游 0.1.7 起改为目录相对的裸 `./`，会把作用域一起丢掉），避免共享后端窗口的 token 失配时静默
+  落到服务器自己的工作目录。
 - `packages/api/session-controller/src/commands.ts`：`session.fork` 建出的子会话在创建后立即
   `inbox.clear()`，丢弃从源会话种子继承的**待处理队列**（`agent/inbox/spliced` 里悬挂的
   next-turn / next-step 插入）。此前 fork 一个「最后一轮已完成、但仍有排队消息」的会话时，子会话会把
