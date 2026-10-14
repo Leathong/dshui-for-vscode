@@ -75,10 +75,10 @@ DSH_SRC ?= .dsh-src
 # DSH_REPO  — 上游仓库
 DSH_REPO ?= https://github.com/deepseek-ai/deepseek-harness.git
 # DSH_BASE  — 锁定基提交（来自 patches/README.md，不能漂移，漂移会导致补丁无法套用）
-# 当前为 dsh 0.2.1-alpha.1 的发布合并提交（tag dsh-v0.2.1-alpha.1）。换基升级后必须同步改这里，
+# 当前为 dsh 0.2.1-alpha.2 的发布合并提交（tag dsh-v0.2.1-alpha.2）。换基升级后必须同步改这里，
 # 否则 dsh-gen-patch 会把「上一版基提交 → 新版」的全部上游差异一并导出（曾导出过 3447 文件
 # / 15 MB 的整版快照），补丁随即不可用。
-DSH_BASE ?= 5badb15009ae1756c3afe0ae0cef1faafc290ccc
+DSH_BASE ?= d743267388641bc76f17c45ce8b4c231aed1d32c
 # DSH_PATCH — dshui 未归档改动（client bundle + host 运行时）
 DSH_PATCH := patches/dshui-bundles.patch
 # DSH_PNPM — 包管理器，需要 pnpm 11.7.0、Node ^22.19 || >=24

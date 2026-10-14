@@ -485,12 +485,12 @@ code --extensionDevelopmentPath="$PWD" <文件夹>
 1. **运行时与 host 源码**：`@deepseek-ai/*` 不再从 npm 下载，而是由 `.dsh-src` 构建产物填充
    （根 `package.json` 只声明一个锚点 `@deepseek-ai/dsh`，闭包是其清单的传递依赖；`preinstall`
    的 `sync-dsh` 先落好源码产物，`npm list`/`npm install` 不再走 registry）。dshui 对 host 的
-   改动经 `patches/dshui-bundles.patch` 固化并烘焙进构建产物（当前 `0.2.1-alpha.1`）。
-2. **客户端 bundle 的源码**：`.dsh-src` 检出（当前对应 `dsh-v0.2.1-alpha.1` 并重套 dshui
+   改动经 `patches/dshui-bundles.patch` 固化并烘焙进构建产物（当前 `0.2.1-alpha.2`）。
+2. **客户端 bundle 的源码**：`.dsh-src` 检出（当前对应 `dsh-v0.2.1-alpha.2` 并重套 dshui
    客户端补丁——自 0.1.2 起上游重构了会话/聊天客户端，补丁需按 `scripts/verify-patches.mjs`
    重新套用到新结构；由于仓库 master 可能落后于 npm 发布，对齐方式是查看各包 `package.json`
    的版本号，并以实际运行测试为准）。
-3. **插件清单的 peerDependencies**：dsh 0.2.1-alpha.1 起，`app-boot` 会读取每个插件行的
+3. **插件清单的 peerDependencies**：dsh 0.2.1 起，`app-boot` 会读取每个插件行的
    `peerDependencies`，凡是 `@deepseek-ai/dsh` / `@deepseek-ai/dsh-*` 的范围不满足当前运行时
    （`semver.satisfies(..., { includePrerelease: true })`）就**直接禁用该行**并在 stderr 打印
    `Plugin <name>@<version> is incompatible with dsh <runtime>: peerDependencies {...}`。升级后必须
@@ -587,8 +587,8 @@ npm run compile && npx @vscode/vsce package
   并依赖服务器环境变量 `DSHUI_OPEN_ENDPOINT`（扩展启动桥时注入）、`DSHUI_CODE_CLI`（应用内 `code`
   CLI 路径，桥不可用时的回退）与 `DSHUI_BRIDGES_FILE`。dsh 若修改该段代码，补丁会安全失败（`git
   apply` 报错），按新源码重写即可；桥接不可用时会自动回退 `vscode://file`。
-- **重导补丁必须带 `--binary`，基提交必须同步换**：补丁的基提交固定为 dsh `0.2.1-alpha.1`
-  （`5badb150…`，见 `patches/README.md` 与 Makefile 的 `DSH_BASE`），导出命令是
+- **重导补丁必须带 `--binary`，基提交必须同步换**：补丁的基提交固定为 dsh `0.2.1-alpha.2`
+  （`d7432673…`，见 `patches/README.md` 与 Makefile 的 `DSH_BASE`），导出命令是
   `git -C .dsh-src diff --binary <基提交> > patches/dshui-bundles.patch`（`make dsh-gen-patch` 已内置）。
   两点都踩过坑：不加 `--binary` 时 `git diff` 对基提交里新增的 PNG/ICO 只写
   `Binary files ... differ` 占位（不含内容），`git apply` 会报 `cannot apply binary patch ... without
@@ -602,9 +602,12 @@ npm run compile && npx @vscode/vsce package
   `make deploy` 完整重装。`make install` 末尾会自动运行 `scripts/clean-profile-links.mjs`，清掉旧版
   link backend 留在 `$DSH_HOME/profiles/node_modules` 里指向上一版扩展的软链（指向旧版的可用软链会
   遮蔽新版包，悬空软链则直接解析失败）；该脚本可随时手动执行（`--dry-run` 只预览），换版后建议再跑。
-- **`patch.yml`**：覆盖的行 id（`ui-workspace` / `ui-conversation`）与插入的
-  `dshui-host-ensure-workspace` 依赖 `web-app` bundle 中的行名与 `workspaceRegistry` / `webServer`
-  服务名；这些若有变化，需同步更新。
+- **`patch.yml`**：覆盖的行 id（`ui-workspace` / `ui-conversation` / `workspace-changes` /
+  `connection`）与插入的 `dshui-host-ensure-workspace` 依赖 `web-app` bundle 中的行名、
+  `connection` 行 `inject` 里的服务名（现为 `webStartup` + `webServer`，前者供 `config` 的
+  `ctx.webStartup.trustedHosts` 读取）以及 `workspaceRegistry` / `webServer` 服务名；这些若有变化，
+  需同步更新。上游改服务名时 `verify-overlay.mjs` 查不出来（它只校验行 id 与 insert 包存在），
+  漏改会让 `connection` 行永久 PENDING，浏览器整个客户端加载失败。
 - **`patch.yml` 的沙箱缝隙必须成对出现**：`bash-sandbox` / `fs-sandbox` 是
   `shell` / `fs` 两个服务的唯一提供者，`dsh-whitelist-sandbox` 行是用白名单子类接手的替换实现。
   只把前者 `disabled: true` 而把后者的 insert 注释掉（或反过来只 insert 不停用），会得到一个
@@ -625,7 +628,7 @@ npm run compile && npx @vscode/vsce package
   但 `peerDependencies` 里的 `@deepseek-ai/dsh-*` 范围是**强制门禁**（见上文升级第 3 点），
   升级 dsh 后必须同步抬高。
 - **升级 dsh 后插件源码要重新对齐**：`plugins/*` 下的插件源码不在本仓库，改完要 `make stage`
-  才能进 `dshui-plugins/`。本次 0.2.1-alpha.1 升级的三件事：
+  才能进 `dshui-plugins/`。每次升级要动三件事：
   1. `dsh-capability-toggle-plugin` 是自带 pnpm `node_modules` 的第三方仓库（其余插件是到本仓库
      `node_modules` / `.dsh-src/packages` 的软链），要把 `node_modules/@deepseek-ai/*`（含
      `cordis`）整体重指到本仓库的 0.2.1 产物再 `make typecheck`，否则类型检查跑的还是上一版 dts；

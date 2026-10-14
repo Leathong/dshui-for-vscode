@@ -741,9 +741,9 @@ var package_default = {
       platform: "web"
     },
     compatibility: {
-      dsh: "0.2.1-alpha.1",
+      dsh: "0.2.1-alpha.2",
       dshReleases: {
-        "0.2.1-alpha.1": "compatible"
+        "0.2.1-alpha.2": "compatible"
       },
       profiles: [
         "web"

@@ -557,13 +557,13 @@ workflow below.
 
 The extension binds three dsh versions together, and all must be aligned on upgrade:
 
-1. **CLI runtime:** `dependencies["@deepseek-ai/dsh"]` in `package.json` (currently `0.2.1-alpha.1`).
-2. **Client bundle source:** the `.dsh-src` checkout (currently `dsh-v0.2.1-alpha.1` with the dshui
+1. **CLI runtime:** `dependencies["@deepseek-ai/dsh"]` in `package.json` (currently `0.2.1-alpha.2`).
+2. **Client bundle source:** the `.dsh-src` checkout (currently `dsh-v0.2.1-alpha.2` with the dshui
    client patch re-applied — since 0.1.2 the session/chat clients were restructured, so re-apply the
    patch to the new structure per `scripts/verify-patches.mjs`; since the repo's master may lag behind
    the npm release, align by checking each package's version in its `package.json` and confirm with
    real runtime tests).
-3. **Plugin manifest `peerDependencies`:** from dsh 0.2.1-alpha.1 on, `app-boot` reads every plugin
+3. **Plugin manifest `peerDependencies`:** from dsh 0.2.1 on, `app-boot` reads every plugin
    row's `peerDependencies` and **disables the row** when any `@deepseek-ai/dsh` / `@deepseek-ai/dsh-*`
    range does not satisfy the running version
    (`semver.satisfies(..., { includePrerelease: true })`), printing
@@ -676,7 +676,7 @@ Other drift-prone spots to check after every upgrade:
   (`git apply` errors) — just rewrite it for the new source; when the bridge is unavailable the opener
   automatically falls back to `vscode://file`.
 - **Re-exporting the patch requires `--binary`, and the base commit must move with it:** the patch is
-  pinned to dsh `0.2.1-alpha.1` (`5badb150…`, see `patches/README.md` and Makefile's `DSH_BASE`) and is
+  pinned to dsh `0.2.1-alpha.2` (`d7432673…`, see `patches/README.md` and Makefile's `DSH_BASE`) and is
   exported with `git -C .dsh-src diff --binary <base commit> > patches/dshui-bundles.patch` (`make
   dsh-gen-patch` already does this). Both halves have bitten us: without `--binary`, `git diff` writes
   only a `Binary files ... differ` placeholder (no content) for the PNG/ICO assets the base snapshot
@@ -692,9 +692,13 @@ Other drift-prone spots to check after every upgrade:
   `$DSH_HOME/profiles/node_modules` pointing at the previous extension (a live link to an old
   version shadows the new package; a dangling one breaks resolution). The script is safe to run by
   hand any time (`--dry-run` previews) and is worth re-running after each version change.
-- **`patch.yml`:** the overridden row ids (`ui-workspace` / `ui-conversation`) and the inserted
-  `dshui-host-ensure-workspace` depend on the row names in the `web-app` bundle and on the
-  `workspaceRegistry` / `webServer` service names; update them in sync if these change.
+- **`patch.yml`:** the overridden row ids (`ui-workspace` / `ui-conversation` / `workspace-changes` /
+  `connection`) and the inserted `dshui-host-ensure-workspace` depend on the row names in the `web-app`
+  bundle, on the service names in the `connection` row's `inject` (currently `webStartup` + `webServer`;
+  the former feeds the `config` expression `ctx.webStartup.trustedHosts`) and on the `workspaceRegistry`
+  / `webServer` service names; update them in sync if these change. A renamed service is invisible to
+  `verify-overlay.mjs` (it only checks row ids and that inserted packages exist), and leaving it stale
+  keeps the `connection` row PENDING forever — the whole browser client then fails to load.
 - **The sandbox seam is a pair:**
   `bash-sandbox` / `fs-sandbox` are the only providers of the `shell` / `fs` services, and the
   `dsh-whitelist-sandbox` row is the replacement that provides both through whitelist-aware

@@ -1449,9 +1449,13 @@ window.__ModuleLoader__.load({
 					};
 				}, "ui-workspace: Workspace navigation policy");
 			}
-			async connectWorkspace(workspaceId) {
+			connectWorkspace(workspaceId) {
+				return this.connectBlank(workspaceId, true);
+			}
+			async connectBlank(workspaceId, reuse) {
 				const workspace = this.workspaces.list.getSnapshot().items.find((item) => item.workspaceId === workspaceId);
 				if (workspace === void 0) throw new Error(`uiWorkspace.connectWorkspace: unknown workspace ${workspaceId}`);
+				if (!reuse) return this.sessions.create({ workspaceId });
 				const inflight = this.connecting.get(workspaceId);
 				if (inflight !== void 0) return inflight;
 				const attempt = this.reuseOrCreateBlank(workspace).finally(() => {
@@ -1484,11 +1488,14 @@ window.__ModuleLoader__.load({
 			openSession(target) {
 				this.replaceMain(target, this.lifetime.signal, "reveal");
 			}
-			async openWorkspace(workspaceId, beforeOpen) {
+			openWorkspace(workspaceId, beforeOpen) {
+				return this.openWorkspaceSession(workspaceId, beforeOpen, true);
+			}
+			async openWorkspaceSession(workspaceId, beforeOpen, reuse) {
 				const navigation = AbortSignal.any([this.ctx.layout.beginNavigation(), this.lifetime.signal]);
 				let sessionId;
 				try {
-					sessionId = await this.connectWorkspace(workspaceId);
+					sessionId = await this.connectBlank(workspaceId, reuse);
 				} catch (error) {
 					if (!navigation.aborted) this.notify({
 						kind: "createFailed",
@@ -1499,11 +1506,12 @@ window.__ModuleLoader__.load({
 				if (navigation.aborted) return;
 				this.replaceMain(sessionId, navigation, "reveal", beforeOpen);
 			}
-			async forkSession(sessionId, onCreated) {
+			async forkSession(sessionId, onCreated, options) {
 				return this.sessions.fork({
 					sessionId,
 					increaseTitle: true,
-					...onCreated === void 0 ? {} : { onCreated }
+					...onCreated === void 0 ? {} : { onCreated },
+					...options?.allowMigration === void 0 ? {} : { allowMigration: options.allowMigration }
 				});
 			}
 			startSession(workspaceId, options) {
@@ -1527,11 +1535,11 @@ window.__ModuleLoader__.load({
 					this.clearMain();
 					return;
 				}
-				this.openWorkspace(target, initializeDraft ? (id) => {
+				(draftOptions === void 0 ? this.openWorkspaceSession(target, void 0, false) : this.openWorkspace(target, initializeDraft ? (id) => {
 					const binding = this.sessions.binding(id);
 					if (binding === void 0) this.draftPreparationFailed();
 					this.prepareDraft(binding, draftOptions);
-				} : void 0).catch((reason) => {
+				} : void 0)).catch((reason) => {
 					console.warn("new session failed:", reason);
 				});
 			}
@@ -3934,7 +3942,7 @@ window.__ModuleLoader__.load({
 								side: "right",
 								onPick: (workspaceId) => {
 									closeAddWorkspace();
-									startSession(workspaceId);
+									startSession(workspaceId, { clearPreviousDraft: false });
 								},
 								onClose: () => {
 									closeAddWorkspace();
@@ -4563,23 +4571,31 @@ window.__ModuleLoader__.load({
 		*/
 		/**
 		* Hold for the notices that take longer to read than a one-line warning: the
-		* actionable archived notice (two buttons to react to) and a refused Session
-		* creation, which quotes the Host's reason.
+		* archive and fork recovery actions, and a refused Session creation quoting the Host's reason.
 		*/
 		const LONG_TOAST_HOLD_MS = 6e3;
 		/**
-		* Render the current notice: the archived and stopped-and-archived notices
-		* with their undo action — plus the show-archived action while archived rows
-		* are hidden — on a 6 s hold, a refused Session creation with the Host's
-		* reason on the same hold, or a plain warning for a failed pin, an archived
-		* row that was clicked, or default Workspace creation.
-		* @param props - the notice hook, the shared viewing store, the notice dismissal, the two archived-notice actions, and the locale seat.
+		* Render an operation notice, retaining recovery actions for six seconds.
+		* @param props - notice and viewing sources, dismissal and recovery callbacks, and localized copy.
 		* @returns the notice on display, or null.
 		*/
-		function RowActionToast({ useToast, useStore, dismissToast, undoArchive, showArchived, t }) {
+		function RowActionToast({ useToast, useStore, dismissToast, undoArchive, showArchived, openForkSource, t }) {
 			const toast = useToast((current) => current);
 			const archivedRowsVisible = useStore((state) => (state.archivedFilter ?? "default") !== "default");
 			if (toast === null) return null;
+			if (toast.kind === "forkRequiresOpen") return (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Toast, {
+				text: t("toast.forkRequiresOpen"),
+				icon: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconWarningOutlineRegular, {}),
+				holdMs: LONG_TOAST_HOLD_MS,
+				actions: [{
+					label: t("toast.openForkSource"),
+					onClick: () => {
+						dismissToast();
+						openForkSource(toast.sessionId);
+					}
+				}],
+				onDone: dismissToast
+			}, `toast-${String(toast.seq)}`);
 			if (toast.kind === "archived" || toast.kind === "stoppedAndArchived") {
 				const { sessionId } = toast;
 				return (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Toast, {
@@ -4720,6 +4736,8 @@ window.__ModuleLoader__.load({
 			"toast.pinFailed": "置顶失败，请稍后重试",
 			"toast.unpinFailed": "取消置顶失败，请稍后重试",
 			"toast.createFailed": "新建会话失败：{message}",
+			"toast.forkRequiresOpen": "请先打开原会话完成迁移，再创建分支",
+			"toast.openForkSource": "打开原会话",
 			"sessions.count.one": "{n} 个会话",
 			"sessions.count.other": "{n} 个会话",
 			"actions.workspace.aria": "工作区“{name}”的操作",
@@ -4839,6 +4857,8 @@ window.__ModuleLoader__.load({
 			"toast.pinFailed": "Pin failed. Try again later.",
 			"toast.unpinFailed": "Unpin failed. Try again later.",
 			"toast.createFailed": "New session failed: {message}",
+			"toast.forkRequiresOpen": "Open the original session to complete migration before creating a branch.",
+			"toast.openForkSource": "Open original session",
 			"sessions.count.one": "{n} session",
 			"sessions.count.other": "{n} sessions",
 			"actions.workspace.aria": "Workspace actions for {name}",
@@ -5016,7 +5036,12 @@ window.__ModuleLoader__.load({
 						parent_session_id: sessionId,
 						click_position: "sidebar"
 					});
-				}).catch(() => {});
+				}, { allowMigration: false }).catch((error) => {
+					if (error instanceof Error && error.name === "SessionForkError" && error.rpcError.code === "session/migration-required") notify({
+						kind: "forkRequiresOpen",
+						sessionId
+					});
+				});
 			} });
 			const renameInjected = () => ({ requestSessionRename });
 			const renameDialogInjected = () => ({
@@ -5032,6 +5057,13 @@ window.__ModuleLoader__.load({
 				undoArchive: unarchiveSession,
 				showArchived: () => {
 					viewInstance.actions.setArchivedFilter("show");
+				},
+				openForkSource: (sessionId) => {
+					if (workspaces.list.getSnapshot().archivedSessionIds.includes(sessionId)) {
+						notify({ kind: "archivedNotOpenable" });
+						return;
+					}
+					openSession(sessionId);
 				}
 			});
 			const deletedSessions = (0, _deepseek_ai_dsh_client_store.createSnapshotStore)(/* @__PURE__ */ new Set());
@@ -5052,8 +5084,8 @@ window.__ModuleLoader__.load({
 			};
 			const deleteInjected = () => ({ deleteSession });
 			const browserInjected = () => ({
-				startSession: (workspaceId) => {
-					uiWorkspace.startSession(workspaceId);
+				startSession: (workspaceId, options) => {
+					uiWorkspace.startSession(workspaceId, options);
 				},
 				open: openSession,
 				searchSessions,

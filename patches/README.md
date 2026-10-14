@@ -3,7 +3,7 @@
 > 中文 · [English](README.en.md)
 
 `dshui-bundles.patch` 是对 [deepseek-harness](https://github.com/deepseek-ai/deepseek-harness) 源码的
-dshui 改动（53 个文件、约 170 KB，含客户端 bundle + host 运行时两大部分，基提交为 dsh `0.2.1-alpha.1`）。
+dshui 改动（53 个文件、约 170 KB，含客户端 bundle + host 运行时两大部分，基提交为 dsh `0.2.1-alpha.2`）。
 客户端与 host 必须**对齐**到同一基提交并一起套用，因此合并为单个补丁——套一半都是不完整的。
 
 ## 客户端 bundle（浏览器 SPA）
@@ -124,16 +124,16 @@ RPC；上游 0.1.7 新增的归档/置顶行操作保留并存）、每条用户
 
 ## 应用（必须锁定基提交）
 
-补丁针对的基提交（**固定，不能漂移**）——dsh `0.2.1-alpha.1` 的发布合并提交（tag `dsh-v0.2.1-alpha.1`）：
+补丁针对的基提交（**固定，不能漂移**）——dsh `0.2.1-alpha.2` 的发布合并提交（tag `dsh-v0.2.1-alpha.2`）：
 
 ```
-5badb15009ae1756c3afe0ae0cef1faafc290ccc
+d743267388641bc76f17c45ce8b4c231aed1d32c
 ```
 
 ```sh
 git clone https://github.com/deepseek-ai/deepseek-harness.git .dsh-src
 cd .dsh-src
-git fetch origin 5badb15009ae1756c3afe0ae0cef1faafc290ccc && git checkout FETCH_HEAD
+git fetch origin d743267388641bc76f17c45ce8b4c231aed1d32c && git checkout FETCH_HEAD
 git apply --3way ../patches/dshui-bundles.patch     # 基提交不匹配会安全失败
 pnpm install                                        # 需要 pnpm 11.7.0、Node ^22.19 || >=24
 pnpm run clean                                      # 升级换基时必须清掉上一版的 lib/ 与 tsbuildinfo
@@ -148,9 +148,10 @@ npm run compile
 ```
 
 > 换基（上游版本跃迁）时用 `git apply --3way`：三方合并会把真正冲突的 hunk 标出来，
-> 只有上游同时改过的少数文件需要手工对齐。0.1.7-rc.2 → 0.2.1-alpha.1 那次只有 3 处冲突
-> （`ui-conversation/src/client/apply.ts`、`ui-chat/.../MessageItem.tsx`、
-> `util/native-command/src/path-opener.ts`），其余 50 个文件干净套用。
+> 只有上游同时改过的少数文件需要手工对齐。0.2.1-alpha.1 → 0.2.1-alpha.2 那次有 5 处冲突
+> （`connection/src/browser-auth.ts`、`connection/tests/browser-auth.host.spec.ts`、
+> `ui-chat/src/client/apply.ts`、`ui-chat/.../register-node-renderers.ts`、
+> `extensions/cordis-client-runner/src/client/slot-catalog.ts`），其余 48 个文件干净套用。
 
 ### 重新导出补丁
 
@@ -181,31 +182,33 @@ git -C .dsh-src diff --binary <基提交> > patches/dshui-bundles.patch
 一节的清单逐个重套（改动都很小，按文件内注释即可）。dsh 是 MIT 协议，本补丁与其产物可自由
 修改/分发，保留上游版权声明即可。
 
-## 0.1.7-rc.2 → 0.2.1-alpha.1 重基记录
+## 0.2.1-alpha.1 → 0.2.1-alpha.2 重基记录
 
-上游在两个版本之间改了 4959 个文件（+101k/-113k 行），但与本补丁相交的只有 24 个文件、约 450 行。
-三方合并只冲突 3 处，其余 50 个文件干净套用：
+上游在两个版本之间改了 3226 个文件（+115k/-28k 行），其中与本补丁相交的有 19 个文件。
+三方合并冲突 5 处，其余 47 个文件干净套用：
 
 | 文件 | 上游改动 | 处理 |
 |---|---|---|
-| `packages/client/ui-conversation/src/client/apply.ts` | `from.snapshot.draft` → `from.draftSnapshot`（对象），判空写作 `draft.text !== ''`；`concreteConversation` 恢复为非可选返回 | 保留 dshui 的显式 `=== undefined` 判空 + 抛错（dshui 把它改成了 `ConversationController \| undefined`），判空表达式改用上游的 `draft.text` |
-| `packages/client/ui-chat/src/client/chat/MessageItem.tsx` | 新增 `TextShimmer` 导入 | 合并两侧：既保留 dshui 的 `import type { PropsRenderSlots }`，也保留上游的 `TextShimmer` |
-| `packages/util/native-command/src/path-opener.ts` | darwin 分支三处 `open` 调用补上显式 `'hidden'`；`runNativeCommand` 的 `window` 参数变为必填 | dshui 的宿主分支同样传 `'hidden'`；`dshuiOpenViaCli` 补上第 4 个参数 |
+| `packages/client/connection/src/browser-auth.ts` | 会话 cookie 新增 TLS 维度：`authorizeIndex(req, res, secure)`、`isAuthenticated(req, secure)`、`requestAuthority` 改名 `requestAudience(headers, secure)`，`sessionCookie` 末位参数由 dshui 的 `crossSite` 变为上游的 `secure` | 合并两侧：`sessionCookie(..., crossSite, secure)` 同时接收两个布尔量；`SameSite=None` 只在跨站/内嵌导航出现并恒定附 `Secure`，TLS 监听在顶层导航上另加 `Secure` |
+| `packages/client/connection/tests/browser-auth.host.spec.ts` | 新增两个 TLS 用例（443/80 区分、开启 TLS 后拒绝 HTTP cookie 重放） | 与 dshui 的两个用例（保留查询参数、跨站放宽 cookie）并存 |
+| `packages/client/ui-chat/src/client/apply.ts` | `CHAT_NODE_INJECT` 拆出 `CHAT_FLOW_INJECT`（flow 视口可见性钩子），前者改为导出并转发 `useGroupAction` | 保留 dshui 的 `dshuiClickOrigin` / `dshuiOpenPath` 辅助函数，接上上游的新结构与导出 |
+| `packages/client/ui-chat/src/client/chat/register-node-renderers.ts` | 新增 `conversation.chat.reasoning.content` 工厂与 `reasoning.body` 注册 | 与 dshui 的 user 渲染器（带 `conversation.chat.user-actions` 子槽）并存 |
+| `packages/extensions/cordis-client-runner/src/client/slot-catalog.ts` | 生成物整体重排（`source` 行号变化） | 取上游版本，套补丁后由 `pnpm run gen-client-catalog` 重新生成 |
 
-其余需要留意但不冲突的变更：`packages/client/ui-chat/tests/chat-view.client.spec.tsx` 被上游大改
-（100+/46-），`slot-catalog.ts` 由 `pnpm run gen-client-catalog` 重新生成（内容与补丁里的一致）。
+其余需要留意但不冲突的变更：`ui-chat/tests/chat-view.client.spec.tsx`、`ui-workspace/tests/*` 被上游改写，
+dshui 的少量测试调整已自动合并。
 
 ### 覆盖层下必然为红的上游用例（不是回归）
 
-`pnpm run test:gui`（`vitest run packages/client packages/host`）在套用本补丁后固定有 4 个文件失败。
-它们都是**覆盖层有意改变上游行为**的必然结果，重基时不要当成回归去追：
+`pnpm run test:gui`（`vitest run packages/client packages/host`）在套用本补丁后固定有 3 个文件（3 个用例）
+失败，其余 607 个文件 / 10077 个用例通过。它们都是**覆盖层有意改变上游行为**的必然结果，重基时不要当成
+回归去追：
 
 | 用例 | 原因 |
 |---|---|
 | `packages/client/ui-tool/tests/toolview-slot.client.spec.tsx` | 上游 0.2.x 把文件打开改成产品内右侧预览（断言 `sidebarRight.openResource('dsh-resource://file/session/…')` 被调用且 `openWorkspacePath` **不**被调用），而 dshui 的 `ui-chat/apply.ts` 把 `openFile` 改成走 `remote.session.openWorkspacePath`，交给扩展宿主在 VS Code 编辑器里打开——这正是本扩展的存在意义 |
 | `packages/client/ui-tool/tests/chat-ptc-subcalls.client.spec.tsx` | 同上，另一条 file-path 点击路径 |
 | `packages/client/ui-theme/tests/radius-styles.client.spec.ts` | dshui 在 `ui-conversation/src/client/skeleton/HeroShell.module.css` 的 `.workspaceStatic` 用了 `border-radius: 16px`，不在 `ui-theme/tests/expected/radius-exceptions.expected.json` 的例外表里。想消掉这个红就把该值换成 `--dsw-radius-*` token，或把例外加进那份 expected JSON |
-| `packages/client/ui-trajectory/tests/client-bundle.client.spec.ts` | **与本补丁无关**：在未打补丁的基提交上同样失败（`slots.entries('conversation.view')` 为空），是上游在 0.2.1-alpha.1 上的既有问题 |
 
 另外两个环境陷阱（本地跑门禁时踩过）：
 

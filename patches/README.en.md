@@ -4,7 +4,7 @@
 
 `dshui-bundles.patch` contains the dshui modifications to the source of
 [deepseek-harness](https://github.com/deepseek-ai/deepseek-harness) (53 files, ~170 KB: the client
-bundles and the host runtime, based on dsh `0.2.1-alpha.1`). The client and the host must be **aligned**
+bundles and the host runtime, based on dsh `0.2.1-alpha.2`). The client and the host must be **aligned**
 to the same base commit and applied together, so they are merged into a single patch — applying only
 half is incomplete.
 
@@ -142,17 +142,17 @@ in `node_modules/@deepseek-ai/*`; this patch reproduces them from source.
 
 ## Applying (the base commit is pinned)
 
-The patch targets this base commit (**pinned; it must not drift**) — the dsh `0.2.1-alpha.1` release
-merge (tag `dsh-v0.2.1-alpha.1`):
+The patch targets this base commit (**pinned; it must not drift**) — the dsh `0.2.1-alpha.2` release
+merge (tag `dsh-v0.2.1-alpha.2`):
 
 ```
-5badb15009ae1756c3afe0ae0cef1faafc290ccc
+d743267388641bc76f17c45ce8b4c231aed1d32c
 ```
 
 ```sh
 git clone https://github.com/deepseek-ai/deepseek-harness.git .dsh-src
 cd .dsh-src
-git fetch origin 5badb15009ae1756c3afe0ae0cef1faafc290ccc && git checkout FETCH_HEAD
+git fetch origin d743267388641bc76f17c45ce8b4c231aed1d32c && git checkout FETCH_HEAD
 git apply --3way ../patches/dshui-bundles.patch     # fails safely if the base commit mismatches
 pnpm install                                        # requires pnpm 11.7.0, Node ^22.19 || >=24
 pnpm run clean                                      # REQUIRED on a rebase: drop the previous
@@ -169,9 +169,10 @@ npm run compile
 
 > Use `git apply --3way` when moving to a new base: the three-way merge marks only the genuinely
 > conflicting hunks, so just the few files upstream also touched need hand alignment. The
-> 0.1.7-rc.2 → 0.2.1-alpha.1 move conflicted in 3 places
-> (`ui-conversation/src/client/apply.ts`, `ui-chat/.../MessageItem.tsx`,
-> `util/native-command/src/path-opener.ts`); the other 50 files applied cleanly.
+> 0.2.1-alpha.1 → 0.2.1-alpha.2 move conflicted in 5 places
+> (`connection/src/browser-auth.ts`, `connection/tests/browser-auth.host.spec.ts`,
+> `ui-chat/src/client/apply.ts`, `ui-chat/.../register-node-renderers.ts`,
+> `extensions/cordis-client-runner/src/client/slot-catalog.ts`); the other 48 files applied cleanly.
 
 ### Re-exporting the patch
 
@@ -206,34 +207,35 @@ main [README, section "Upgrading with dsh Releases"](../README.en.md#upgrading-w
 changes are small; follow the comments in each file). dsh is MIT-licensed, so this patch and its
 artifacts may be freely modified and redistributed as long as the upstream copyright notice is kept.
 
-## Rebase record: 0.1.7-rc.2 → 0.2.1-alpha.1
+## Rebase record: 0.2.1-alpha.1 → 0.2.1-alpha.2
 
-Upstream changed 4959 files between the two bases (+101k/-113k lines), but only 24 of them intersect
-this patch (~450 lines). The three-way merge conflicted in 3 places; the other 50 files applied
-cleanly:
+Upstream changed 3226 files between the two bases (+115k/-28k lines), and 19 of them intersect this
+patch. The three-way merge conflicted in 5 places; the other 47 files applied cleanly:
 
 | File | Upstream change | Resolution |
 |---|---|---|
-| `packages/client/ui-conversation/src/client/apply.ts` | `from.snapshot.draft` → `from.draftSnapshot` (an object), compared as `draft.text !== ''`; `concreteConversation` back to a non-optional return | Keep dshui's explicit `=== undefined` guard and throw (dshui widened the return to `ConversationController \| undefined`) and take upstream's `draft.text` for the empty check |
-| `packages/client/ui-chat/src/client/chat/MessageItem.tsx` | new `TextShimmer` import | Merge both sides: dshui's `import type { PropsRenderSlots }` plus upstream's `TextShimmer` |
-| `packages/util/native-command/src/path-opener.ts` | three darwin `open` calls now pass an explicit `'hidden'`; `runNativeCommand`'s `window` parameter became required | Pass `'hidden'` in dshui's hosted branch too; add the 4th argument to `dshuiOpenViaCli` |
+| `packages/client/connection/src/browser-auth.ts` | the session cookie gained a TLS dimension: `authorizeIndex(req, res, secure)`, `isAuthenticated(req, secure)`, `requestAuthority` renamed to `requestAudience(headers, secure)`, and `sessionCookie`'s last parameter became upstream's `secure` instead of dshui's `crossSite` | Merge both: `sessionCookie(..., crossSite, secure)` takes both booleans; `SameSite=None` appears only for a cross-site/embedded navigation and always carries `Secure`, while a TLS listener adds `Secure` to top-level navigations too |
+| `packages/client/connection/tests/browser-auth.host.spec.ts` | two new TLS cases (port 443 distinct from 80, HTTP cookie replay rejected after enabling TLS) | Kept alongside dshui's two cases (preserved query parameters, relaxed cookie for cross-site) |
+| `packages/client/ui-chat/src/client/apply.ts` | `CHAT_NODE_INJECT` split into `CHAT_FLOW_INJECT` (the flow viewport hooks) and an exported `CHAT_NODE_INJECT` that forwards `useGroupAction` | Kept dshui's `dshuiClickOrigin` / `dshuiOpenPath` helpers and adopted upstream's new structure and exports |
+| `packages/client/ui-chat/src/client/chat/register-node-renderers.ts` | new `conversation.chat.reasoning.content` factory and `reasoning.body` registration | Kept alongside dshui's user renderer (which declares the `conversation.chat.user-actions` child slot) |
+| `packages/extensions/cordis-client-runner/src/client/slot-catalog.ts` | the generated file was reshuffled (`source` line numbers moved) | Took upstream's copy and let `pnpm run gen-client-catalog` regenerate it after the patch |
 
 Other changes worth noting though they did not conflict: upstream rewrote
-`packages/client/ui-chat/tests/chat-view.client.spec.tsx` (100+/46-), and `slot-catalog.ts` is
-regenerated by `pnpm run gen-client-catalog` (byte-identical to the patched file).
+`ui-chat/tests/chat-view.client.spec.tsx` and `ui-workspace/tests/*`; dshui's small test adjustments
+merged automatically.
 
 ### Upstream specs that are always red under the overlay (not regressions)
 
-`pnpm run test:gui` (`vitest run packages/client packages/host`) leaves 4 failing files once this patch
-is applied. Every one of them is the necessary consequence of the overlay deliberately changing upstream
-behavior — do not chase them as rebase regressions:
+`pnpm run test:gui` (`vitest run packages/client packages/host`) leaves 3 failing files (3 cases) once
+this patch is applied; the other 607 files / 10077 cases pass. Every one of them is the necessary
+consequence of the overlay deliberately changing upstream behavior — do not chase them as rebase
+regressions:
 
 | Spec | Cause |
 |---|---|
 | `packages/client/ui-tool/tests/toolview-slot.client.spec.tsx` | Upstream 0.2.x opens files in the in-product right Sidebar (it asserts `sidebarRight.openResource('dsh-resource://file/session/…')` is called and `openWorkspacePath` is **not**), while dshui's `ui-chat/apply.ts` routes `openFile` through `remote.session.openWorkspacePath` so the hosting extension opens the file in the VS Code editor — the whole point of this extension |
 | `packages/client/ui-tool/tests/chat-ptc-subcalls.client.spec.tsx` | Same, along a second file-path click route |
 | `packages/client/ui-theme/tests/radius-styles.client.spec.ts` | dshui's `ui-conversation/src/client/skeleton/HeroShell.module.css` sets `.workspaceStatic { border-radius: 16px }`, which is absent from `ui-theme/tests/expected/radius-exceptions.expected.json`. To clear it, switch the value to a `--dsw-radius-*` token or add the exception to that expected file |
-| `packages/client/ui-trajectory/tests/client-bundle.client.spec.ts` | **Unrelated to this patch**: it fails the same way on the unpatched base commit (`slots.entries('conversation.view')` is empty), an upstream issue at 0.2.1-alpha.1 |
 
 Two environment traps met while running the gates locally:
 

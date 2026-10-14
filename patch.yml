@@ -65,12 +65,13 @@
 
 # The shared /api transport registers its channels on the connection row's
 # fiber (`ctx.connection.rpc.handle` mounts the route via the fiber's
-# webServer), but the stock row injects only webRuntime — a consumer mounting
-# a channel (dsh-rollback-plugin) would fail at boot. Inject the
-# server too; the loader mixes row inject with the module's own inject.
+# webServer), but the stock row injects only webStartup — a consumer mounting
+# a channel (dsh-rollback-plugin) would fail at boot. Inject the server too;
+# the loader mixes row inject with the module's own inject. The row's config
+# also reads `ctx.webStartup.trustedHosts`, so that service must stay listed.
 - id: connection
   name: '@deepseek-ai/dsh-client-connection'
-  inject: [webRuntime, webServer]
+  inject: [webStartup, webServer]
 
 - insert:
     - id: ui-workspace-dshui
