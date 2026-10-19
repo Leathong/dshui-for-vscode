@@ -3,7 +3,7 @@
 > 中文 · [English](README.en.md)
 
 `dshui-bundles.patch` 是对 [deepseek-harness](https://github.com/deepseek-ai/deepseek-harness) 源码的
-dshui 改动（53 个文件、约 170 KB，含客户端 bundle + host 运行时两大部分，基提交为 dsh `0.2.1-alpha.2`）。
+dshui 改动（59 个文件、约 195 KB，含客户端 bundle + host 运行时两大部分，基提交为 dsh `0.2.1-rc.2`）。
 客户端与 host 必须**对齐**到同一基提交并一起套用，因此合并为单个补丁——套一半都是不完整的。
 
 ## 客户端 bundle（浏览器 SPA）
@@ -15,7 +15,8 @@ dshui 改动（53 个文件、约 170 KB，含客户端 bundle + host 运行时�
   （dshui 的 deleted-sessions snapshot store + `deleteSession`：经 webview 外壳请求扩展宿主
   删除会话日志，并把 id 记入本地隐藏集）、`session-actions/DeleteSession.tsx`（0.1.7 起上游把会话
   行操作改为 slot 目录：本文件把「删除会话」注册进 `sidebar.workspaces.session.menu.item`（order
-  450）与 `sidebar.workspaces.session.row.action`（order 300），与上游的 archive/pin 并存）、
+  460，排在 rc.2 新增的「复制 Session ID」450 之后）与 `sidebar.workspaces.session.row.action`（order 300），
+  与上游的 archive/pin 并存）、
   `locales.ts`（新增 `menu.deleteSession` / `actions.delete`）、
   `tsdown.config.ts`（bundle id 改为 `dshui-client-ui-workspace`）；
 - `ui-conversation`：`apply.ts`（共享后端第二个窗口再入会话时 `conversation` 服务可能读到
@@ -29,25 +30,28 @@ dshui 改动（53 个文件、约 170 KB，含客户端 bundle + host 运行时�
   `HeroShell.module.css`（`.workspaceStatic`）、`tsdown.config.ts`（bundle id 改为
   `dshui-client-ui-conversation`）；
 - `ui-chat`：`chat/MessageItem.tsx`（用户消息渲染器拆成 `UserMessageNodeView` 与
-  `SteeringMessageNodeView`；用户消息内嵌一个锚定到其 Turn 的
-  `conversation.chat.user-actions` 操作条，steering 消息不含；并在上游对 `projectUserText` 的
-  引用 chip 投影之上**保留 markdown 链接投影**：`[label](destination)` 中白名单
-  http/https/mailto 渲染为外链锚点，`new URL` 无法解析的目标渲染为经 `references.openFile` →
-  `apply.ts` 的 `dshuiOpenPath` 解析打开的文件按钮——工作区相对目标按会话 cwd 拼接，`~` 家目录目标
-  （含被 `./`/`../` 前缀包裹的写法）保留 `~` 拼写交给 Host 展开，其余绝对 URL 保持字面；目标的
-  `#L10` 锚点 / `:10` 后缀（含 `-L20`、`–` 区间写法，取首行）由 `filePathAndLine` 剥离，作为打开
-  手势的 `line` 选项传给 `openFile`）、
-  `chat/MessageItem.module.css`
-  （`.projectedText` 内联流动与 `.link` 链接样式）、`chat/register-node-renderers.ts`
-  （为 `user` 注册 `UserMessageNodeView`（带 user-actions 子槽）、为 `steering` 注册
-  `SteeringMessageNodeView`）、`contract/slots.ts`（`UserActionOwnerProps` 与
-  `conversation.chat.user-actions` 槽声明）、`chat/register-node-renderers.ts` 与
-  `tests/chat-branch-tails.client.spec.tsx` 的少量配套改动；
+  `SteeringMessageNodeView`；用户消息在 IconActions 行内渲染锚定到其 Turn 的
+  `conversation.chat.user-actions` 操作条，steering 消息不含。rc.2 起上游把用户消息正文改成
+  工厂槽（`conversation.chat.user.content`）→ 纯文本槽（`conversation.user.text` →
+  `conversation.user.text.node`）两层结构，链接投影因此改挂到纯文本层）——
+  `chat/user-link-rule.ts`（`link` 规则：`[label](destination)` 中白名单 http/https/mailto 交渲染器
+  出外链，`new URL` 无法解析的目标解析成文件按钮；`#L10` / `:10` 后缀（含 `-L20`、`–` 区间写法，
+  取首行）由 `filePathAndLine` 剥离成打开手势的 `line`；其余绝对 URL 不认领，保持字面）、
+  `chat/UserLink.tsx`（外链用锚点，文件用按钮并经注入的 `openFile` 打开）、
+  `chat/register-user-links.ts`（把规则注册到 `uiConversation.userText`，把 `link` 渲染器注册进
+  `conversation.user.text.node`；`openFile` 走 `remote.session.openWorkspacePath`，带
+  `dshuiOrigin` / `dshuiLine`）、`dshui-open.ts`（`dshuiClickOrigin` / `dshuiOpenPath`，与
+  `apply.ts` 的 ChatView `openFile` 共用）、`apply.ts`（`openFile` 改为经 Host 在 VS Code 打开，
+  取代上游的右侧预览 `dsh-resource://` 地址）、`chat/MessageItem.module.css`（`.link` 链接样式）、
+  `chat/register-node-renderers.ts`（`user` 注册声明 `conversation.chat.user-actions` 子槽）、
+  `contract/slots.ts`（`UserActionOwnerProps` 与 `conversation.chat.user-actions` 槽声明）、
+  `tests/user-link.client.spec.tsx`（规则 + 渲染器 + 目标分类的用例）与其余测试的少量配套改动；
 - `packages/extensions/cordis-client-runner/src/client/slot-catalog.ts`：由
   `pnpm run gen-client-catalog` 重新生成，登记 `conversation.chat.user-actions` 槽的目录条目
   （供聊天界面「槽目录」文档展示）。
-- 构建预设：`packages/client/tsdown.client.ts`（`workspaceManifest` 对 `dshui-client-*` bundle id
-  按包目录回退——rc.1 起 tsdown 按包名校验 bundle id，而 dshui id 是 profile 行名）。
+- 构建预设：`packages/client/tsdown.client.ts`（rc.2 起 `clientBundle(packageDir, …)` 从包目录读
+  `package.json` 的 name 作为 bundle id；dshui 的 profile 行名不是包名，因此新增 `pluginId` 选项，
+  两个 `tsdown.config.ts` 用它把 id 钉回 `dshui-client-*`）。
 
 效果：侧边栏只列出当前工作区会话、输入框始终贴底（无居中 hero）、会话菜单提供「删除会话」
 （由扩展宿主用 VS Code 文件 API 删除 `$DSH_HOME/sessions/...` 下的会话日志，不走 dsh 的归档
@@ -80,7 +84,9 @@ RPC；上游 0.1.7 新增的归档/置顶行操作保留并存）、每条用户
 - `packages/client/connection/src/browser-auth.ts`：索引的两条 303 重定向（token 交换、以及「cookie
   已认证但 token 不匹配」）都保留除 launch token 之外的 `dshui_workspace` / `dshui_theme` 查询参数
   （上游 0.1.7 起改为目录相对的裸 `./`，会把作用域一起丢掉），避免共享后端窗口的 token 失配时静默
-  落到服务器自己的工作目录。
+  落到服务器自己的工作目录。rc.2 新增 `/connect` 的 API operator cookie 交换，该调用点同样经过 dshui
+  的 `sessionCookie(…, crossSite, secure)`：内嵌 iframe 里连自身 fetch 也是跨站上下文，漏掉 `crossSite`
+  会让 cookie 被浏览器丢弃。
 - `packages/api/session-controller/src/commands.ts`：`session.fork` 建出的子会话在创建后立即
   `inbox.clear()`，丢弃从源会话种子继承的**待处理队列**（`agent/inbox/spliced` 里悬挂的
   next-turn / next-step 插入）。此前 fork 一个「最后一轮已完成、但仍有排队消息」的会话时，子会话会把
@@ -124,16 +130,16 @@ RPC；上游 0.1.7 新增的归档/置顶行操作保留并存）、每条用户
 
 ## 应用（必须锁定基提交）
 
-补丁针对的基提交（**固定，不能漂移**）——dsh `0.2.1-alpha.2` 的发布合并提交（tag `dsh-v0.2.1-alpha.2`）：
+补丁针对的基提交（**固定，不能漂移**）——dsh `0.2.1-rc.2` 的发布合并提交（tag `dsh-v0.2.1-rc.2`）：
 
 ```
-d743267388641bc76f17c45ce8b4c231aed1d32c
+687f282e8625c6b8d11ff58211a90524be2e4317
 ```
 
 ```sh
 git clone https://github.com/deepseek-ai/deepseek-harness.git .dsh-src
 cd .dsh-src
-git fetch origin d743267388641bc76f17c45ce8b4c231aed1d32c && git checkout FETCH_HEAD
+git fetch origin 687f282e8625c6b8d11ff58211a90524be2e4317 && git checkout FETCH_HEAD
 git apply --3way ../patches/dshui-bundles.patch     # 基提交不匹配会安全失败
 pnpm install                                        # 需要 pnpm 11.7.0、Node ^22.19 || >=24
 pnpm run clean                                      # 升级换基时必须清掉上一版的 lib/ 与 tsbuildinfo
@@ -148,10 +154,12 @@ npm run compile
 ```
 
 > 换基（上游版本跃迁）时用 `git apply --3way`：三方合并会把真正冲突的 hunk 标出来，
-> 只有上游同时改过的少数文件需要手工对齐。0.2.1-alpha.1 → 0.2.1-alpha.2 那次有 5 处冲突
-> （`connection/src/browser-auth.ts`、`connection/tests/browser-auth.host.spec.ts`、
-> `ui-chat/src/client/apply.ts`、`ui-chat/.../register-node-renderers.ts`、
-> `extensions/cordis-client-runner/src/client/slot-catalog.ts`），其余 48 个文件干净套用。
+> 只有上游同时改过的少数文件需要手工对齐。0.2.1-alpha.2 → 0.2.1-rc.2 那次有 12 处冲突
+> （`connection/src/browser-auth.ts`、`client/tsdown.client.ts`、`ui-chat/.../MessageItem.tsx`、
+> `ui-chat/tests/{chat-branch-tails,chat-view}.client.spec.tsx`、`ui-conversation/tsdown.config.ts`、
+> `ui-workspace/src/client/{index.ts,rows/WorkspaceBrowser.tsx}`、`ui-workspace/tsdown.config.ts`、
+> `ui-workspace/tests/{apply,rename-assembly}.client.spec.*`、
+> `extensions/cordis-client-runner/src/client/slot-catalog.ts`），其余 46 个文件干净套用。
 
 ### 重新导出补丁
 
@@ -167,7 +175,7 @@ git -C .dsh-src diff --binary <基提交> > patches/dshui-bundles.patch
   目前全是文本，但只要基提交里含二进制新增就会踩中，所以一律带 `--binary`。
 - **基提交必须跟着换**：`DSH_BASE`（Makefile）与本文档的 SHA 必须等于导出时用的那个提交。用旧基提交
   导出的补丁会把「旧基提交 → 新版」的全部上游差异一起装进去（rc.1 基提交导出时是 3447 文件 / 15.2 MB），
-  补丁随即变得不可用；正常应稳定在 53 个文件 / 约 170 KB。
+  补丁随即变得不可用；正常应稳定在 59 个文件 / 约 195 KB。
 - **导出别用 `cd` 写法**：`make dsh-gen-patch` 用 `git -C $(DSH_SRC)` 加绝对输出路径。此前写成
   花括号组内 `cd $(DSH_SRC) && git diff … > "../patches/…"`，一旦 `cd` 失败，重定向会先把 patch
   截断成空文件再报错——补丁静默损毁。
@@ -182,26 +190,31 @@ git -C .dsh-src diff --binary <基提交> > patches/dshui-bundles.patch
 一节的清单逐个重套（改动都很小，按文件内注释即可）。dsh 是 MIT 协议，本补丁与其产物可自由
 修改/分发，保留上游版权声明即可。
 
-## 0.2.1-alpha.1 → 0.2.1-alpha.2 重基记录
+## 0.2.1-alpha.2 → 0.2.1-rc.2 重基记录
 
-上游在两个版本之间改了 3226 个文件（+115k/-28k 行），其中与本补丁相交的有 19 个文件。
-三方合并冲突 5 处，其余 47 个文件干净套用：
+上游在两个版本之间改了 3698 个文件（+150k/-19k 行），其中与本补丁相交的有 31 个文件。
+三方合并冲突 12 处，其余 47 个文件干净套用：
 
 | 文件 | 上游改动 | 处理 |
 |---|---|---|
-| `packages/client/connection/src/browser-auth.ts` | 会话 cookie 新增 TLS 维度：`authorizeIndex(req, res, secure)`、`isAuthenticated(req, secure)`、`requestAuthority` 改名 `requestAudience(headers, secure)`，`sessionCookie` 末位参数由 dshui 的 `crossSite` 变为上游的 `secure` | 合并两侧：`sessionCookie(..., crossSite, secure)` 同时接收两个布尔量；`SameSite=None` 只在跨站/内嵌导航出现并恒定附 `Secure`，TLS 监听在顶层导航上另加 `Secure` |
-| `packages/client/connection/tests/browser-auth.host.spec.ts` | 新增两个 TLS 用例（443/80 区分、开启 TLS 后拒绝 HTTP cookie 重放） | 与 dshui 的两个用例（保留查询参数、跨站放宽 cookie）并存 |
-| `packages/client/ui-chat/src/client/apply.ts` | `CHAT_NODE_INJECT` 拆出 `CHAT_FLOW_INJECT`（flow 视口可见性钩子），前者改为导出并转发 `useGroupAction` | 保留 dshui 的 `dshuiClickOrigin` / `dshuiOpenPath` 辅助函数，接上上游的新结构与导出 |
-| `packages/client/ui-chat/src/client/chat/register-node-renderers.ts` | 新增 `conversation.chat.reasoning.content` 工厂与 `reasoning.body` 注册 | 与 dshui 的 user 渲染器（带 `conversation.chat.user-actions` 子槽）并存 |
-| `packages/extensions/cordis-client-runner/src/client/slot-catalog.ts` | 生成物整体重排（`source` 行号变化） | 取上游版本，套补丁后由 `pnpm run gen-client-catalog` 重新生成 |
+| `client/tsdown.client.ts` | `clientBundle(id, …)` 改为 `clientBundle(packageDir, …)`，bundle id 由包目录的 `package.json` name 决定 | 取上游实现，新增 `pluginId` 选项覆盖 id；dshui 的两个 `tsdown.config.ts` 改为 `clientBundle(import.meta.dirname, …, { pluginId: 'dshui-client-…' })` |
+| `ui-chat/src/client/chat/MessageItem.tsx` | 用户消息正文抽成工厂槽 `conversation.chat.user.content`，正文文本再走 `conversation.user.text` → `conversation.user.text.node` 规则/节点链；`UserStyleBubble` 不再自带附件与链接投影 | 取上游结构：dshui 只保留 user-actions 子槽（`UserMessageNodeView` 与 `SteeringMessageNodeView` 重新拆开，steering 不声明子槽）；链接投影改成 `link` 规则 + `UserLink` 渲染器（见上文） |
+| `ui-chat/tests/chat-branch-tails.client.spec.tsx`、`chat-view.client.spec.tsx` | 测试改用 `createUserContentFixture`，`AssistantMarkdownProps` / `renderMessageImages` 移除，steering 也复用 `UserMessageNodeView` | 并入 dshui 的 `renderUserActionsSlot` 桩；harness 的 `user` 分支显式传该桩，steering 分支用 `SteeringMessageNodeView` |
+| `connection/src/browser-auth.ts` | 新增 `/connect` 的 API operator cookie 交换（`BrowserCookiePayload` / `ApiCookiePayload`），`sessionCookie` 末位仍只有 `secure` | `sessionCookie(…, crossSite, secure)` 保留 dshui 的跨站维度，`/connect` 调用点补 `crossSiteNavigation(req.headers)`；`encodeCookie` 保持上游的 `CookiePayload` 联合 |
+| `ui-workspace/src/client/index.ts` | 会话菜单新增「复制 Session ID」（order 450）；`WorkspaceBrowserInjected` 去掉 `dismissForkError` | dshui 的「删除会话」改到 order 460（仍在插件条目 500 之前），`hooks` 里并入 `deletedSessions` |
+| `ui-workspace/src/client/rows/WorkspaceBrowser.tsx` | 上游删掉 `dismissForkError` 注入 | 只保留 dshui 的 `useDeletedSessions` |
+| `ui-workspace/tests/apply.client.spec.ts`、`rename-assembly.client.spec.tsx` | 菜单条目数量与文案随「复制 Session ID」变化 | 菜单 6 项（含 dshui 删除）、行操作 3 项；文案断言追加 `复制 Session ID` |
+| `ui-conversation/tsdown.config.ts`、`ui-workspace/tsdown.config.ts` | 同上：配置改为传包目录 | 带 `pluginId` 传 `import.meta.dirname` |
+| `extensions/cordis-client-runner/src/client/slot-catalog.ts` | 生成物整体重排 | 取上游版本，套补丁后由 `pnpm run gen-client-catalog` 重新生成 |
 
-其余需要留意但不冲突的变更：`ui-chat/tests/chat-view.client.spec.tsx`、`ui-workspace/tests/*` 被上游改写，
-dshui 的少量测试调整已自动合并。
+其余需要留意但不冲突的变更：`ui-tool/tests/chat-ptc-subcalls.client.spec.tsx` 的 `uiConversation`
+桩要补 `userText`（dshui 的 Chat apply 会往上注册链接规则），否则整个 bench 抛错；rc.2 的
+`/connect`、TLS cookie 维度与 `conversation.user.text` 规则链是本轮唯一的结构性上游改动。
 
 ### 覆盖层下必然为红的上游用例（不是回归）
 
 `pnpm run test:gui`（`vitest run packages/client packages/host`）在套用本补丁后固定有 3 个文件（3 个用例）
-失败，其余 607 个文件 / 10077 个用例通过。它们都是**覆盖层有意改变上游行为**的必然结果，重基时不要当成
+失败，其余 640 个文件 / 10784 个用例通过（另 1 个跳过）。它们都是**覆盖层有意改变上游行为**的必然结果，重基时不要当成
 回归去追：
 
 | 用例 | 原因 |

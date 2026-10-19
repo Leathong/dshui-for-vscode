@@ -485,8 +485,8 @@ code --extensionDevelopmentPath="$PWD" <文件夹>
 1. **运行时与 host 源码**：`@deepseek-ai/*` 不再从 npm 下载，而是由 `.dsh-src` 构建产物填充
    （根 `package.json` 只声明一个锚点 `@deepseek-ai/dsh`，闭包是其清单的传递依赖；`preinstall`
    的 `sync-dsh` 先落好源码产物，`npm list`/`npm install` 不再走 registry）。dshui 对 host 的
-   改动经 `patches/dshui-bundles.patch` 固化并烘焙进构建产物（当前 `0.2.1-alpha.2`）。
-2. **客户端 bundle 的源码**：`.dsh-src` 检出（当前对应 `dsh-v0.2.1-alpha.2` 并重套 dshui
+   改动经 `patches/dshui-bundles.patch` 固化并烘焙进构建产物（当前 `0.2.1-rc.2`）。
+2. **客户端 bundle 的源码**：`.dsh-src` 检出（当前对应 `dsh-v0.2.1-rc.2` 并重套 dshui
    客户端补丁——自 0.1.2 起上游重构了会话/聊天客户端，补丁需按 `scripts/verify-patches.mjs`
    重新套用到新结构；由于仓库 master 可能落后于 npm 发布，对齐方式是查看各包 `package.json`
    的版本号，并以实际运行测试为准）。
@@ -529,20 +529,24 @@ cd .. && node scripts/verify-patches.mjs   # 逐个标记缺失即说明该文�
 #    - ui-workspace/src/client/index.ts                deleted-sessions store + deleteSession：postMessage 请扩展宿主删除日志文件
 #    - ui-workspace/src/client/session-actions/DeleteSession.tsx  0.1.7 起会话行操作是 slot 条目：注册「删除会话」
 #    - ui-workspace/src/client/locales.ts              新增 menu.deleteSession / actions.delete
-#    - ui-workspace/tsdown.config.ts                   bundle id 改为 dshui-client-ui-workspace
+#    - ui-workspace/tsdown.config.ts                   pluginId: 'dshui-client-ui-workspace'
 #    - ui-conversation/src/client/skeleton/dshui-scope.ts          SCOPE 常量（DSHUI_SCOPE）
 #    - ui-conversation/src/client/skeleton/ConversationMainPanel.tsx  data-dshui-scope 根标记
 #    - ui-conversation/src/client/skeleton/ConversationContent.tsx    静态 chip、hero 隐藏、scope 下输入框恒不 inert
 #    - ui-conversation/src/client/skeleton/EmptyHero.tsx              WorkspaceChip 的 staticChip prop
 #    - ui-conversation/src/client/skeleton/ConversationRoot.module.css  scoped hero 贴底
 #    - ui-conversation/src/client/skeleton/HeroShell.module.css       .workspaceStatic
-#    - ui-conversation/tsdown.config.ts                bundle id 改为 dshui-client-ui-conversation
+#    - ui-conversation/tsdown.config.ts                pluginId: 'dshui-client-ui-conversation'
 #    - ui-conversation/src/client/apply.ts             concreteConversation 返回 ConversationController|undefined；
 #                                                      selectWorkspace 处显式判空抛错，composer 注入在服务未就绪时降级为「无态」姿态（不占死槽位）
-#    - ui-chat/src/client/chat/MessageItem.tsx         UserMessageNodeView / SteeringMessageNodeView 拆分与 user-actions 子槽、markdown 链接投影（含 #L10/:10 行号）
+#    - ui-chat/src/client/chat/MessageItem.tsx         UserMessageNodeView / SteeringMessageNodeView 拆分与 user-actions 子槽（正文与附件走上游的工厂槽）
+#    - ui-chat/src/client/chat/user-link-rule.ts       link 规则：认领 [label](dest)，含 #L10/:10 行号解析
+#    - ui-chat/src/client/chat/UserLink.tsx            外链锚点 / 文件按钮（经注入的 openFile）
+#    - ui-chat/src/client/chat/register-user-links.ts  注册规则与 conversation.user.text.node 的 link 渲染器
+#    - ui-chat/src/client/dshui-open.ts                dshuiClickOrigin / dshuiOpenPath（apply.ts 与链接渲染器共用）
 #    - ui-chat/src/client/chat/register-node-renderers.ts  user 带 user-actions 子槽、steering 用无槽渲染器
 #    - ui-chat/src/client/contract/slots.ts            UserActionOwnerProps 与 conversation.chat.user-actions 槽声明
-#    - packages/client/tsdown.client.ts                workspaceManifest 对 dshui-client-* id 按包目录回退（rc.1 起按包名校验）
+#    - packages/client/tsdown.client.ts                clientBundle 增加 pluginId 选项（rc.2 起 bundle id 取自包目录的包名）
 #    - packages/util/native-command/src/path-opener.ts  darwin 分支改桥接/CLI/vscode://file + dshuiOrigin/dshuiLine（行号经桥接 line 参数）
 #    - packages/client/connection/src/browser-auth.ts     索引两条 303 重定向（token 交换 / 已认证但 token 失配）保留 dshui 查询参数
 #    - packages/api/session-controller/src/{index,types}.ts  openWorkspacePath 透传 dshuiOrigin/dshuiLine；verifyDesktopPath 用 dshuiHomePath 展开 ~
@@ -587,13 +591,13 @@ npm run compile && npx @vscode/vsce package
   并依赖服务器环境变量 `DSHUI_OPEN_ENDPOINT`（扩展启动桥时注入）、`DSHUI_CODE_CLI`（应用内 `code`
   CLI 路径，桥不可用时的回退）与 `DSHUI_BRIDGES_FILE`。dsh 若修改该段代码，补丁会安全失败（`git
   apply` 报错），按新源码重写即可；桥接不可用时会自动回退 `vscode://file`。
-- **重导补丁必须带 `--binary`，基提交必须同步换**：补丁的基提交固定为 dsh `0.2.1-alpha.2`
-  （`d7432673…`，见 `patches/README.md` 与 Makefile 的 `DSH_BASE`），导出命令是
+- **重导补丁必须带 `--binary`，基提交必须同步换**：补丁的基提交固定为 dsh `0.2.1-rc.2`
+  （`687f282e…`，见 `patches/README.md` 与 Makefile 的 `DSH_BASE`），导出命令是
   `git -C .dsh-src diff --binary <基提交> > patches/dshui-bundles.patch`（`make dsh-gen-patch` 已内置）。
   两点都踩过坑：不加 `--binary` 时 `git diff` 对基提交里新增的 PNG/ICO 只写
   `Binary files ... differ` 占位（不含内容），`git apply` 会报 `cannot apply binary patch ... without
   full index line` 并**整体拒绝**补丁；不改 `DSH_BASE` 而用旧基提交导出，会把整版上游差异一起装进
-  补丁（rc.1 基提交那次导出成 3447 文件 / 15.2 MB，而正常是 53 文件 / 约 170 KB）。
+  补丁（rc.1 基提交那次导出成 3447 文件 / 15.2 MB，而正常是 59 文件 / 约 195 KB）。
 - **`scripts/sync-dsh.mjs`**：拷贝 `@deepseek-ai/dsh` 运行时闭包含的包；若某包在 `.dsh-src`
   未构建出 `lib/`，脚本会告警列名，此时不要打包发布。
 - **升级 dsh 版本后不能只用 `make sync`**：`make sync` 只覆盖 `out/`、`dshui-plugins/`、`patch.yml`、

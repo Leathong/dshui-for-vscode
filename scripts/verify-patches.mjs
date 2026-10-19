@@ -22,7 +22,7 @@ const src = path.join(root, '.dsh-src')
 const CHECKS = [
   {
     file: 'packages/client/tsdown.client.ts',
-    markers: ["id.startsWith('dshui-client-')"],
+    markers: ['readonly pluginId?: string', 'const id = pluginId ?? manifest.name'],
   },
   {
     file: 'packages/client/ui-workspace/src/client/tree.ts',
@@ -50,7 +50,7 @@ const CHECKS = [
   },
   {
     file: 'packages/client/ui-workspace/tsdown.config.ts',
-    markers: ["clientBundle('dshui-client-ui-workspace'"],
+    markers: ["pluginId: 'dshui-client-ui-workspace'"],
   },
   {
     file: 'packages/client/ui-conversation/src/client/skeleton/dshui-scope.ts',
@@ -78,7 +78,7 @@ const CHECKS = [
   },
   {
     file: 'packages/client/ui-conversation/tsdown.config.ts',
-    markers: ["clientBundle('dshui-client-ui-conversation'"],
+    markers: ["pluginId: 'dshui-client-ui-conversation'"],
   },
   {
     file: 'packages/util/native-command/src/path-opener.ts',
@@ -94,11 +94,27 @@ const CHECKS = [
   },
   {
     file: 'packages/client/ui-chat/src/client/chat/MessageItem.tsx',
-    markers: ['userLinkDestination', 'projectUserTextWithLinks', 'filePathAndLine', "renderSlot('conversation.chat.user-actions'"],
+    markers: ['UserStyleNodeView', 'SteeringMessageNodeView', "renderSlot('conversation.chat.user-actions'"],
+  },
+  {
+    file: 'packages/client/ui-chat/src/client/chat/user-link-rule.ts',
+    markers: ['export const markdownLinkRule', 'export function filePathAndLine', 'export function userLinkDestination'],
+  },
+  {
+    file: 'packages/client/ui-chat/src/client/chat/UserLink.tsx',
+    markers: ['export function UserLink', 'openFile(destination.path, destination.line)'],
+  },
+  {
+    file: 'packages/client/ui-chat/src/client/chat/register-user-links.ts',
+    markers: ['export function registerUserLinks', "ctx.uiConversation.userText.register(markdownLinkRule)", "name: 'conversation.user.text.node'"],
+  },
+  {
+    file: 'packages/client/ui-chat/src/client/dshui-open.ts',
+    markers: ['export function dshuiClickOrigin', 'export function dshuiOpenPath'],
   },
   {
     file: 'packages/client/ui-chat/src/client/chat/MessageItem.module.css',
-    markers: ['.projectedText', '.link {'],
+    markers: ['.link {', '.link:hover'],
   },
   {
     file: 'packages/client/ui-chat/src/client/chat/ChatView.tsx',

@@ -1,8 +1,8 @@
 diff --git a/packages/api/session-controller/src/commands.ts b/packages/api/session-controller/src/commands.ts
-index 7e900b92ae..785937a92d 100644
+index 8dd38573c8..65f4376e7a 100644
 --- a/packages/api/session-controller/src/commands.ts
 +++ b/packages/api/session-controller/src/commands.ts
-@@ -267,7 +267,7 @@ export class SessionCommandController {
+@@ -273,7 +273,7 @@ export class SessionCommandController {
      const composition = await this.agents.composeAgent(this.agents.presetForObservation(source))
      try {
        const { provider, model } = this.ctx.agentDefaultModel.currentSelection()
@@ -11,7 +11,7 @@ index 7e900b92ae..785937a92d 100644
          sessionId: childId,
          seed,
          inheritedEventCount: SessionLogOffset(boundary + 1),
-@@ -282,6 +282,12 @@ export class SessionCommandController {
+@@ -288,6 +288,12 @@ export class SessionCommandController {
          agentOptions: { provider, model },
          setup: composition.setup,
        })
@@ -25,7 +25,7 @@ index 7e900b92ae..785937a92d 100644
        throw new RemoteError(
          'gateway/internal',
 diff --git a/packages/api/session-controller/src/index.ts b/packages/api/session-controller/src/index.ts
-index 0ba5bf8ff0..15a474d10c 100644
+index 2362bce21c..868a12d825 100644
 --- a/packages/api/session-controller/src/index.ts
 +++ b/packages/api/session-controller/src/index.ts
 @@ -1,14 +1,15 @@
@@ -40,14 +40,14 @@ index 0ba5bf8ff0..15a474d10c 100644
  import type {} from '@deepseek-ai/dsh-fs'
  import { Context } from '@deepseek-ai/cordis'
  import z from '@deepseek-ai/schemastery'
- import { errorChain, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
+ import { errorChain, ReasoningEffortId, type MessageSource } from '@deepseek-ai/dsh-llm'
  import type {} from '@deepseek-ai/dsh-client-file-upload'
 -import { canOpenNativePath, nativeFileManager, nativeFileApplications, openNativeFileApplication, openNativeAssociatedPath, revealNativePath } from '@deepseek-ai/dsh-native-command'
 +import { canOpenNativePath, nativeFileManager, nativeFileApplications, openNativeFileApplication, openNativeAssociatedPath, revealNativePath, type PathOpenerInternals } from '@deepseek-ai/dsh-native-command'
  import type { SessionId } from '@deepseek-ai/dsh-session'
  import type { SessionInspection } from '@deepseek-ai/dsh-session-persistence'
  import type {} from '@deepseek-ai/dsh-session-projection-cache'
-@@ -101,6 +102,41 @@ export interface SessionControllerInternals {
+@@ -115,6 +116,41 @@ export interface SessionControllerInternals {
    readonly canOpenPath?: () => boolean
  }
  
@@ -89,7 +89,7 @@ index 0ba5bf8ff0..15a474d10c 100644
  /** Host service backing the generated `ctx.remote.session` namespace. */
  export class SessionController extends TypertRemoteService {
    static inject = [
-@@ -127,7 +163,7 @@ export class SessionController extends TypertRemoteService {
+@@ -142,7 +178,7 @@ export class SessionController extends TypertRemoteService {
    private readonly controlState: SessionControlController
    private readonly history: SessionHistoryController
    private readonly listState: ApiSessionList
@@ -98,7 +98,7 @@ index 0ba5bf8ff0..15a474d10c 100644
    private readonly fileApplications: typeof nativeFileApplications
    private readonly openFileApplication: typeof openNativeFileApplication
    private readonly revealPath: (path: string, signal: AbortSignal) => Promise<void>
-@@ -351,9 +387,19 @@ export class SessionController extends TypertRemoteService {
+@@ -371,9 +407,19 @@ export class SessionController extends TypertRemoteService {
    ): Promise<SessionOpenWorkspacePathValue> {
      try {
        const path = await this.verifyDesktopPath(request.path, signal)
@@ -119,7 +119,7 @@ index 0ba5bf8ff0..15a474d10c 100644
        return { opened: true }
      } catch (error: unknown) {
        if (signal.aborted) throw new RemoteError('gateway/cancelled', 'path open was aborted', {})
-@@ -392,10 +438,17 @@ export class SessionController extends TypertRemoteService {
+@@ -412,10 +458,17 @@ export class SessionController extends TypertRemoteService {
    private async verifyDesktopPath(path: string, signal: AbortSignal): Promise<string> {
      if (path.length === 0) throw new RemoteError('gateway/bad-request', 'A non-empty file path is required', {})
      signal.throwIfAborted()
@@ -140,10 +140,10 @@ index 0ba5bf8ff0..15a474d10c 100644
      }
      signal.throwIfAborted()
 diff --git a/packages/api/session-controller/src/types.ts b/packages/api/session-controller/src/types.ts
-index 3455db1b9f..40ed11c37b 100644
+index c0b2b9a573..47ce9f6cb5 100644
 --- a/packages/api/session-controller/src/types.ts
 +++ b/packages/api/session-controller/src/types.ts
-@@ -392,6 +392,19 @@ export interface SessionOpenWorkspacePathRequest {
+@@ -398,6 +398,19 @@ export interface SessionOpenWorkspacePathRequest {
    readonly application?: string
    /** Path after best-effort Session workspace resolution, in Host filesystem syntax. */
    readonly path: string
@@ -164,7 +164,7 @@ index 3455db1b9f..40ed11c37b 100644
  
  /** Confirmation that the Host handed a workspace path to its native opener. */
 diff --git a/packages/api/session-controller/tests/commands-create-fork.host.spec.ts b/packages/api/session-controller/tests/commands-create-fork.host.spec.ts
-index 87bdc5a399..f9961c98ca 100644
+index f43ce3f116..cafea22254 100644
 --- a/packages/api/session-controller/tests/commands-create-fork.host.spec.ts
 +++ b/packages/api/session-controller/tests/commands-create-fork.host.spec.ts
 @@ -4,6 +4,7 @@ import type { Agent, AgentHandle, CreateAgentOptions } from '@deepseek-ai/dsh-ag
@@ -173,9 +173,9 @@ index 87bdc5a399..f9961c98ca 100644
  import SessionStore, { SessionId } from '@deepseek-ai/dsh-session'
 +import { createInboxStub } from '@deepseek-ai/dsh-agent-loop-testkit'
  import { RemoteError } from '@deepseek-ai/dsh-typert-protocol'
+ import TypertRegistry from '@deepseek-ai/dsh-typert-registry'
  import type { Workspace, WorkspaceId } from '@deepseek-ai/dsh-workspace'
- import { describe, expect, it, vi } from 'vitest'
-@@ -174,7 +175,7 @@ function completedSession(
+@@ -176,7 +177,7 @@ function completedSession(
  
  function resolvedHandle(ctx: Context, sessionId: SessionId): AgentHandle {
    return {
@@ -489,10 +489,10 @@ index 6d8b867eea..69d97d4429 100644
 +  await expect(controller.openSettingsDocument(undefined, abort.signal)).rejects.toMatchObject({ code: 'gateway/cancelled' })
  })
 diff --git a/packages/client/connection/src/browser-auth.ts b/packages/client/connection/src/browser-auth.ts
-index 6b01531da6..5502971c17 100644
+index 5c8594df6f..a53edc481e 100644
 --- a/packages/client/connection/src/browser-auth.ts
 +++ b/packages/client/connection/src/browser-auth.ts
-@@ -78,6 +78,18 @@ function requestAudience(headers: ConnectionTrustRequest['headers'], secure: boo
+@@ -87,6 +87,18 @@ function requestAudience(headers: ConnectionTrustRequest['headers'], secure: boo
    }
  }
  
@@ -511,7 +511,7 @@ index 6b01531da6..5502971c17 100644
  function canonicalSecret(value: unknown): Buffer | undefined {
    if (typeof value !== 'string') return undefined
    const decoded = decodeBase64Url(value)
-@@ -118,22 +130,66 @@ function cookieValue(headerValue: string, name: string): string | undefined {
+@@ -127,22 +139,66 @@ function cookieValue(headerValue: string, name: string): string | undefined {
    return undefined
  }
  
@@ -578,10 +578,10 @@ index 6b01531da6..5502971c17 100644
 +  return query === '' ? './' : `./?${query}`
 +}
 +
- function encodeCookie(payload: BrowserCookiePayload, secret: Buffer): string {
+ function encodeCookie(payload: CookiePayload, secret: Buffer): string {
    const body = encodeBase64Url(Buffer.from(JSON.stringify(payload), 'utf8'))
-   return `v1.${body}.${encodeBase64Url(signature(secret, body))}`
-@@ -265,10 +321,11 @@ export class BrowserAuth {
+   return `v${payload.version}.${body}.${encodeBase64Url(signature(secret, body))}`
+@@ -278,10 +334,11 @@ export class BrowserAuth {
          }, this.secret)
          res.writeHead(303, {
            'cache-control': 'no-store',
@@ -595,7 +595,7 @@ index 6b01531da6..5502971c17 100644
            ),
          })
          res.end()
-@@ -277,7 +334,7 @@ export class BrowserAuth {
+@@ -290,7 +347,7 @@ export class BrowserAuth {
        if (req.method === 'GET' && url.pathname === '/' && this.isAuthenticated(req, secure)) {
          res.writeHead(303, {
            'cache-control': 'no-store',
@@ -604,11 +604,21 @@ index 6b01531da6..5502971c17 100644
            'referrer-policy': 'no-referrer',
          })
          res.end()
+@@ -341,7 +398,8 @@ export class BrowserAuth {
+       'location': './api/remote.mux',
+       'referrer-policy': 'no-referrer',
+       'set-cookie': sessionCookie(
+-        cookieName(authority), value, expiresAt, Math.floor(this.maxAgeMilliseconds / 1000), secure,
++        cookieName(authority), value, expiresAt, Math.floor(this.maxAgeMilliseconds / 1000),
++        crossSiteNavigation(req.headers), secure,
+       ),
+     })
+     res.end()
 diff --git a/packages/client/connection/tests/browser-auth.host.spec.ts b/packages/client/connection/tests/browser-auth.host.spec.ts
-index f108023c69..1b13d4ba93 100644
+index 7af762a1cd..4ed6d67c94 100644
 --- a/packages/client/connection/tests/browser-auth.host.spec.ts
 +++ b/packages/client/connection/tests/browser-auth.host.spec.ts
-@@ -169,6 +169,55 @@ describe('BrowserAuth', () => {
+@@ -237,6 +237,55 @@ describe('BrowserAuth', () => {
      expect(restarted.isAuthenticated(request('/', authority, { cookie: `${tlsName}=${plainValue}` }), true)).toBe(false)
    })
  
@@ -665,90 +675,79 @@ index f108023c69..1b13d4ba93 100644
      const auth = await createAuth(new RecordCredentials())
      const mounted = new URL(auth.authenticatedUrl('https://gateway.example/tools/dsh/'))
 diff --git a/packages/client/tsdown.client.ts b/packages/client/tsdown.client.ts
-index 2e8c06b18e..dc489cd107 100644
+index 90b26c196e..c481ecc2cc 100644
 --- a/packages/client/tsdown.client.ts
 +++ b/packages/client/tsdown.client.ts
-@@ -365,6 +365,20 @@ function workspaceManifest(id: string): WorkspaceManifest {
-     manifestCache.set(id, manifest)
-     return manifest
-   }
-+  // dshui overlay: dshui bundle ids name the profile rows (dshui-client-*),
-+  // not the workspace package. The row name derives from the package
-+  // directory, so locate the manifest by that directory.
-+  if (id.startsWith('dshui-client-')) {
-+    const dir = `packages/client/${id.slice('dshui-client-'.length)}`
-+    const manifestPath = `${dir}/package.json`
-+    if (existsSync(resolvePath(REPOSITORY_ROOT, manifestPath))) {
-+      const manifest = JSON.parse(
-+        readFileSync(resolvePath(REPOSITORY_ROOT, manifestPath), 'utf8'),
-+      ) as WorkspaceManifest
-+      manifestCache.set(id, manifest)
-+      return manifest
-+    }
-+  }
-   throw new Error(`tsdown: no packages/*/*/package.json declares the name ${id}`)
+@@ -122,7 +122,13 @@ export function clientBundle(
+   return ({ env }) => {
+     const face = buildFace(env?.DSH_BUILD_FACE)
+     const clientEntry = face === undefined ? 'src/client/index.ts' : 'lib/types/client/index.js'
+-    const client = clientConfig(manifest, clientEntry, options.clientBanner, options.dualClient === true)
++    const client = clientConfig(
++      manifest,
++      clientEntry,
++      options.clientBanner,
++      options.dualClient === true,
++      options.pluginId,
++    )
+     const node = [lib, ...(options.companions ?? [])]
+     const clientFaces = options.dualClient === true
+       ? [nodeClientConfig(manifest, clientEntry), client]
+@@ -223,6 +229,13 @@ interface ClientBundleOptions {
+   readonly lib?: UserConfig
+   /** Optional legal or attribution text selected by emitted client filename. */
+   readonly clientBanner?: (fileName: string) => string | undefined
++  /**
++   * dshui overlay: override the client plugin id stamped into the
++   * `__ModuleLoader__.load` handoff and the injected style tags. Defaults to
++   * the package's own `package.json` name; dshui passes its profile row name
++   * (`dshui-client-*`) so the overlay rows stay distinct from the stock ones.
++   */
++  readonly pluginId?: string
  }
  
+ type BuildFace = 'host' | 'client' | undefined
+@@ -501,8 +514,9 @@ function clientConfig(
+   entry: string,
+   clientBanner?: (fileName: string) => string | undefined,
+   dualClient = false,
++  pluginId?: string,
+ ): UserConfig {
+-  const id = manifest.name
++  const id = pluginId ?? manifest.name
+   let requested: ReadonlySet<string> | undefined
+   const isRequested = (specifier: string): boolean => (requested ??= clientExternals(manifest)).has(specifier)
+   const isolation = clientInputIsolation(id)
 diff --git a/packages/client/ui-chat/src/client/apply.ts b/packages/client/ui-chat/src/client/apply.ts
-index eabd566256..d7eb25a08a 100644
+index 8aa63aa1f7..655de3acb5 100644
 --- a/packages/client/ui-chat/src/client/apply.ts
 +++ b/packages/client/ui-chat/src/client/apply.ts
-@@ -12,7 +12,7 @@ import type {} from '@deepseek-ai/dsh-client-ui-sidebar-browser/client'
+@@ -12,7 +12,6 @@ import type {} from '@deepseek-ai/dsh-client-ui-sidebar-browser/client'
  import type {} from '@deepseek-ai/dsh-client-ui-input-trigger/client'
  // The `file` entry of `SidebarRightResourceParamsMap`, which types `{ params: { line } }` below.
  import type {} from '@deepseek-ai/dsh-client-ui-sidebar-documentpreview/client'
 -import { fileAddressFor } from '@deepseek-ai/dsh-util-workspace-path'
-+import { resolveWorkspacePath } from '@deepseek-ai/dsh-util-workspace-path'
  // Type-only service and declaration merges used by the apply world.
  import type {} from '@deepseek-ai/dsh-client-locale/client'
  import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
-@@ -47,6 +47,45 @@ import { useTurnDataValue } from './chat/use-turn-data.ts'
+@@ -47,6 +46,8 @@ import { PerformanceUsagePolicy } from './performance-usage.ts'
+ import { useTurnDataValue } from './chat/use-turn-data.ts'
  import { bindDisclosure } from './chat/use-disclosure.ts'
  import { useFlowHidden, useMotionHidden } from './chat/flow-motion.ts'
++import { registerUserLinks } from './chat/register-user-links.ts'
++import { dshuiClickOrigin, dshuiOpenPath } from './dshui-open.ts'
  
-+/**
-+ * dshui patch: the VS Code workspace of the window the open click happens in,
-+ * published by the dshui host plugin as `window.__DSHUI_WORKSPACE__` (with a
-+ * fallback to the boot URL's `dshui_workspace` query parameter). Attached to
-+ * `openWorkspacePath` as `dshuiOrigin` so the Host opens the file in this
-+ * window even when the path's longest-prefix owner is another window.
-+ * @returns the scope path, or undefined when neither source is set.
-+ */
-+function dshuiClickOrigin(): string | undefined {
-+  if (typeof window === 'undefined') return undefined
-+  const global = (window as typeof window & { __DSHUI_WORKSPACE__?: unknown }).__DSHUI_WORKSPACE__
-+  if (typeof global === 'string' && global !== '') return global
-+  const param = new URLSearchParams(window.location.search).get('dshui_workspace')
-+  if (param === null || param === '') return undefined
-+  try {
-+    const decoded = decodeURIComponent(param)
-+    return decoded === '' ? undefined : decoded
-+  } catch {
-+    return param
-+  }
-+}
-+
-+/**
-+ * dshui patch: the Host-facing spelling of one file-link destination. A
-+ * destination that names the account home (`~`, `~/…`, `~\…`) is not
-+ * workspace-relative: leading `./` and `../` segments cannot rise above that
-+ * anchor, so they are dropped, and the `~` spelling travels to the Host, the
-+ * only side that knows the home directory. Joining such a destination onto the
-+ * Session cwd instead produces a literal `~` directory under the workspace.
-+ * @param cwd - Session workspace root, when the Session is known.
-+ * @param path - the link destination, before Host resolution.
-+ * @returns the path to send with `openWorkspacePath`.
-+ */
-+function dshuiOpenPath(cwd: string | undefined, path: string): string {
-+  const anchored = path.replace(/^(?:\.{1,2}[/\\])+/, '')
-+  if (anchored === '~' || anchored.startsWith('~/') || anchored.startsWith('~\\')) return anchored
-+  return resolveWorkspacePath(cwd, path)
-+}
-+
  /** Bind group and header visibility to the viewport of one flow render. */
  export const CHAT_FLOW_INJECT: ChatFlowInjected = {
-   hooks: {
-@@ -239,24 +278,28 @@ export function apply(ctx: Context): void {
+@@ -170,6 +171,7 @@ export function apply(ctx: Context): void {
+   ctx.effect(() => () => { transcriptView.dispose(); performancePolicy.dispose() })
+   const performanceUsage = performancePolicy.mode
+   registerChatNodeRenderers(ctx, performanceUsage, presentation)
++  registerUserLinks(ctx)
+   ctx.slots.registerFactory({
+     name: 'conversation.chat.user.content', scope: 'session', locale: NS,
+     children: { 'conversation.chat.user.images': { kind: 'single', scope: 'session' } },
+@@ -243,24 +245,28 @@ export function apply(ctx: Context): void {
          return {
            ...nodeSources(binding),
            fileMentions: (owner: TurnTailOwnerProps) => ctx.get('chatFileMentions')?.forClosing(owner, sessionId),
@@ -791,24 +790,16 @@ index eabd566256..d7eb25a08a 100644
 +            })
 +            if (!result.ok) throw new Error(`path open failed: ${result.error.message}`)
            },
-           openSkill: (name) => {
-             const scope = ctx.sessions.scope(sessionId)
+           openExternalLink: (url) => {
+             if (linkOpening.getSnapshot() === 'sidebar' && ctx.get('sidebarRightTabs')?.get('browser') !== undefined) {
 diff --git a/packages/client/ui-chat/src/client/chat/MessageItem.module.css b/packages/client/ui-chat/src/client/chat/MessageItem.module.css
-index 5d19483335..72067d8da7 100644
+index 3bacafab47..05c1065baa 100644
 --- a/packages/client/ui-chat/src/client/chat/MessageItem.module.css
 +++ b/packages/client/ui-chat/src/client/chat/MessageItem.module.css
-@@ -362,3 +362,31 @@
+@@ -362,3 +362,23 @@
    font-size: 12px;
    line-height: 15px;
  }
-+
-+/* dshui overlay: decorated user-text projection (runs + chips + markdown
-+   links) flows inline in one pre-wrap span — block MessageText boxes would
-+   stack every segment. */
-+.projectedText {
-+  white-space: pre-wrap;
-+  word-break: break-word;
-+}
 +
 +/* dshui overlay: markdown link in a user bubble, same link language as
 +   assistant markdown — business-primary blue at rest, underline on
@@ -830,149 +821,62 @@ index 5d19483335..72067d8da7 100644
 +  text-decoration: underline;
 +}
 diff --git a/packages/client/ui-chat/src/client/chat/MessageItem.tsx b/packages/client/ui-chat/src/client/chat/MessageItem.tsx
-index 9005150af0..9b1dfbdf18 100644
+index 0d2f4c22fd..b594a9b3cd 100644
 --- a/packages/client/ui-chat/src/client/chat/MessageItem.tsx
 +++ b/packages/client/ui-chat/src/client/chat/MessageItem.tsx
-@@ -2,6 +2,7 @@ import { Fragment, memo, useEffect, useMemo, useState } from 'react'
+@@ -1,7 +1,7 @@
+ import { memo, useEffect, useMemo, useState } from 'react'
  import type { ReactNode } from 'react'
  import type { PendingSubmission } from '@deepseek-ai/dsh-api-session-controller/client'
- import type { MessageImageSource } from '@deepseek-ai/dsh-client-ui-conversation/client'
-+import type { PropsRenderSlots } from '@deepseek-ai/dsh-client-ui-slots'
- import { fileExtension, FileTypeIcon, fileSizeText, JsonBlock, projectUserText, StateDot, TextShimmer } from '@deepseek-ai/dsh-client-ui-primitives'
- import type { ChatNodeOwnerProps, ChatNodeViewProps, ChatViewSlotProps } from '../contract/slots.ts'
- import type { ModelRetryNode, TurnErrorNode, UserMessageNode } from '../contract/snapshot.ts'
-@@ -158,6 +159,115 @@ function TurnMaxTokensItem({ t }: {
+-import type { PropsRenderFactories } from '@deepseek-ai/dsh-client-ui-slots'
++import type { PropsRenderFactories, PropsRenderSlots } from '@deepseek-ai/dsh-client-ui-slots'
+ import type { UserTextFacts } from '@deepseek-ai/dsh-client-ui-conversation/client'
+ import { JsonBlock, StateDot, TextShimmer } from '@deepseek-ai/dsh-client-ui-primitives'
+ import type {
+@@ -294,10 +294,23 @@ export function PendingSubmissionBubble({ submission, loadImage, renderFactorySl
    )
  }
  
+-/** User and admitted-steering keyed Chat renderer. */
+-export const UserMessageNodeView = memo(function UserMessageNodeView({
+-  node, renderFactorySlot, loadImage, t,
+-}: ChatNodeViewProps<'user' | 'steering'>) {
 +/**
-+ * Classification of a `[label](destination)` token's destination in a user
-+ * bubble: an allowlisted absolute URL opens externally; anything `new URL`
-+ * cannot parse reads as a file path the view's opener resolves against the
-+ * session cwd.
++ * Shared body of the user and steering rows.
++ *
++ * dshui overlay: `userActions` is the `conversation.chat.user-actions` strip.
++ * The user renderer fills it from the child slot its registration declares
++ * (the extension hangs per-message rollback there, anchored to the enclosing
++ * Turn); a steering row is admitted mid-turn and carries no strip.
 + */
-+type UserLinkDestination =
-+  | { kind: 'external'; href: string; newTab: boolean }
-+  | { kind: 'file'; path: string; line?: number }
-+
-+/**
-+ * Split a file destination off its optional line reference — the two spellings
-+ * dsh tells the model to write: the GitHub-style anchor (`a.dart#L10`,
-+ * `a.dart#L10-L20`) and the trailing `:line` / `:line-end` / `:line–end`
-+ * suffix. Only the first line survives: a range names one file opened at its
-+ * start, and the open gesture below carries a single line.
-+ * @param raw - A destination `new URL` could not parse.
-+ * @returns the path without its line reference, plus its 1-based first line.
-+ */
-+function filePathAndLine(raw: string): { path: string; line?: number } {
-+  const hash = raw.lastIndexOf('#')
-+  if (hash !== -1) {
-+    const anchored = /^L([1-9][0-9]*)(?:-L?([1-9][0-9]*))?$/.exec(raw.slice(hash + 1))
-+    if (anchored !== null) return { path: raw.slice(0, hash), line: Number(anchored[1]) }
-+  }
-+  const suffixed = /:([1-9][0-9]*)(?:[-–]([1-9][0-9]*))?$/.exec(raw)
-+  if (suffixed === null || suffixed.index === 0) return { path: raw }
-+  return { path: raw.slice(0, suffixed.index), line: Number(suffixed[1]) }
++function UserStyleNodeView({
++  node, renderFactorySlot, loadImage, t, userActions,
++}: {
++  readonly node: ChatNodeViewProps<'user' | 'steering'>['node']
++  readonly renderFactorySlot: ChatNodeViewProps['renderFactorySlot']
++  readonly loadImage: ChatNodeViewProps['loadImage']
++  readonly t: ChatNodeViewProps['t']
++  readonly userActions: ReactNode
++}) {
+   const data = node.data
+   return (
+     <UserStyleBubble
+@@ -313,11 +326,48 @@ export const UserMessageNodeView = memo(function UserMessageNodeView({
+           time={data.time}
+           clock="start"
+           className={css.actions}
++          extraActions={userActions}
+           t={t}
+         />
+       )}
+     />
+   )
 +}
 +
-+/**
-+ * @param raw - The verbatim `(destination)` of a `[label](destination)` token.
-+ * @returns the classified destination, or null to keep the syntax literal
-+ * (absolute URLs outside the http/https/mailto allowlist).
-+ */
-+function userLinkDestination(raw: string): UserLinkDestination | null {
-+  let protocol: string
-+  try {
-+    protocol = new URL(raw).protocol
-+  } catch {
-+    // Unparseable as an absolute URL — a (relative) file path carrying an
-+    // optional line reference in either spelling.
-+    return { kind: 'file', ...filePathAndLine(raw) }
-+  }
-+  if (protocol === 'http:' || protocol === 'https:') return { kind: 'external', href: raw, newTab: true }
-+  return protocol === 'mailto:' ? { kind: 'external', href: raw, newTab: false } : null
-+}
-+
-+/**
-+ * Display projection of sent user text: the upstream reference-chip projection
-+ * (wire session form, exact session labels, and plain `/name` / `@name`
-+ * tokens) plus `[label](destination)` markdown links (dshui overlay). An
-+ * allowlisted absolute URL opens externally; a destination `new URL` cannot
-+ * parse reads as a path the view's `openFile` resolves against the session
-+ * cwd, carrying its optional line reference as that gesture's line option; any
-+ * other absolute URL keeps the literal syntax. Everything flows inline in one
-+ * pre-wrap span — block boxes would stack every segment.
-+ */
-+function projectUserTextWithLinks(
-+  text: string,
-+  referenceLabels: readonly string[],
-+  skillNames: readonly string[],
-+  references: Pick<ChatNodeOwnerProps, 'openFile' | 'openSkill'> | undefined,
-+): ReactNode {
-+  const project = (segment: string): ReactNode =>
-+    projectUserText(segment, referenceLabels, skillNames, 'skill', references)
-+  const re = /\[([^\][\n]+)\]\(([^)\s]+)\)/g
-+  const parts: ReactNode[] = []
-+  let cursor = 0
-+  let m: RegExpExecArray | null
-+  while ((m = re.exec(text)) !== null) {
-+    const destination = userLinkDestination(m[2] ?? '')
-+    if (destination === null) continue
-+    if (m.index > cursor) parts.push(<span key={`t${cursor}`}>{project(text.slice(cursor, m.index))}</span>)
-+    parts.push(
-+      destination.kind === 'external'
-+        ? (
-+          <a
-+            key={`l${m.index}`}
-+            className={css.link}
-+            href={destination.href}
-+            {...(destination.newTab ? { target: '_blank', rel: 'noopener noreferrer' } : {})}
-+          >
-+            {m[1]}
-+          </a>
-+        )
-+        : (
-+          <button
-+            key={`l${m.index}`}
-+            type="button"
-+            className={css.link}
-+            onClick={() => {
-+              references?.openFile(
-+                destination.path,
-+                destination.line === undefined ? undefined : { line: destination.line },
-+              )
-+            }}
-+          >
-+            {m[1]}
-+          </button>
-+        ),
-+    )
-+    cursor = m.index + m[0].length
-+  }
-+  if (parts.length === 0) return project(text)
-+  if (cursor < text.length) parts.push(<span key={`t${cursor}`}>{project(text.slice(cursor))}</span>)
-+  return <span className={css.projectedText}>{parts}</span>
-+}
-+
- /** Right-aligned bubble shared by user and steering rows. */
- function UserStyleBubble({
-   content, renderMessageImages, actions, pending = false, echo = false, referenceLabels = [], skillNames = [],
-@@ -219,7 +329,7 @@ function UserStyleBubble({
-           </div>
-         )}
-         {showBubble && <div className={css.bubble}>
--          {projectUserText(text, referenceLabels, skillNames, 'skill', references)}
-+          {projectUserTextWithLinks(text, referenceLabels, skillNames, references)}
-           {rest.map((block, i) => <JsonBlock key={i} label={t('message.extraBlock')} payload={block} truncatedLabel={truncated} />)}
-         </div>}
-         {referenceLabels.length > 0 && (
-@@ -318,6 +428,39 @@ export function PendingSubmissionBubble({ submission, renderMessageImages, t }:
- 
- /** User and admitted-steering keyed Chat renderer. */
- export const UserMessageNodeView = memo(function UserMessageNodeView({
-+  node, renderMessageImages, openFile, openSkill, renderSlot, t,
++/** User keyed Chat renderer; declares the per-message action strip. */
++export const UserMessageNodeView = memo(function UserMessageNodeView({
++  node, renderFactorySlot, renderSlot, loadImage, t,
 +}: ChatNodeViewProps<'user' | 'steering'> & PropsRenderSlots<'conversation.chat.user-actions'>) {
-+  const data = node.data
 +  const turn = node.location.kind === 'turn' || node.location.kind === 'step'
 +    ? node.location.turn
 +    : undefined
@@ -980,34 +884,101 @@ index 9005150af0..9b1dfbdf18 100644
 +    ? null
 +    : renderSlot('conversation.chat.user-actions', { turn })
 +  return (
-+    <UserStyleBubble
-+      content={data.content}
-+      references={{ openFile, openSkill }}
-+      renderMessageImages={renderMessageImages}
-+      {...data.referenceLabels === undefined ? {} : { referenceLabels: data.referenceLabels }}
-+      {...data.skillNames === undefined ? {} : { skillNames: data.skillNames }}
++    <UserStyleNodeView
++      node={node}
++      renderFactorySlot={renderFactorySlot}
++      loadImage={loadImage}
 +      t={t}
-+      actions={text => (
-+        <MessageIconActions
-+          text={text}
-+          time={data.time}
-+          clock="start"
-+          className={css.actions}
-+          extraActions={userActions}
-+          t={t}
-+        />
-+      )}
++      userActions={userActions}
 +    />
 +  )
 +})
 +
-+/** Steering (mid-turn admitted user message) keyed Chat renderer; no user-actions strip. */
++/** Steering (mid-turn admitted user message) keyed Chat renderer; no action strip. */
 +export const SteeringMessageNodeView = memo(function SteeringMessageNodeView({
-   node, renderMessageImages, openFile, openSkill, t,
- }: ChatNodeViewProps<'user' | 'steering'>) {
-   const data = node.data
++  node, renderFactorySlot, loadImage, t,
++}: ChatNodeViewProps<'user' | 'steering'>) {
++  return (
++    <UserStyleNodeView
++      node={node}
++      renderFactorySlot={renderFactorySlot}
++      loadImage={loadImage}
++      t={t}
++      userActions={null}
++    />
++  )
+ })
+ 
+ /** Injected-context keyed Chat renderer. */
+diff --git a/packages/client/ui-chat/src/client/chat/UserLink.tsx b/packages/client/ui-chat/src/client/chat/UserLink.tsx
+new file mode 100644
+index 0000000000..c74723d413
+--- /dev/null
++++ b/packages/client/ui-chat/src/client/chat/UserLink.tsx
+@@ -0,0 +1,61 @@
++/**
++ * dshui overlay: one inline `[label](destination)` link inside sent user text.
++ *
++ * An allowlisted absolute URL is an anchor the browser opens; a destination
++ * `new URL` cannot parse is a path the Host resolves against the Session cwd
++ * (with its optional `#L10` / `:10` line reference), opened in the VS Code
++ * editor through the same bridge as every other file link.
++ */
++import type { UserTextNodeProps } from '@deepseek-ai/dsh-client-ui-conversation/client'
++import type { InjectFace } from '@deepseek-ai/dsh-client-ui-slots'
++import { userLinkDestination } from './user-link-rule.ts'
++import type {} from './user-link-rule.ts'
++import css from './MessageItem.module.css'
++
++/** Navigation seat of one rendered text link. */
++export interface UserLinkInjected {
++  /**
++   * Open a file destination through the Host's workspace-path opener.
++   * @param path - destination as written in the link.
++   * @param line - 1-based line the destination pointed at, when it carried one.
++   */
++  readonly openFile: (path: string, line?: number) => void
++}
++
++/**
++ * Render one claimed markdown link, or its literal syntax when the destination
++ * is outside the allowlist.
++ * @param props - the JSON node, its original spelling, interaction policy, and the navigation seat.
++ * @returns an inline anchor, an inline file button, or the original text.
++ */
++export function UserLink({
++  node, raw, interactive, openFile,
++}: UserTextNodeProps<'link'> & InjectFace<UserLinkInjected>) {
++  const destination = userLinkDestination(node.data.destination)
++  if (destination === null) return <>{raw}</>
++  const label = node.data.label
++  if (destination.kind === 'external') {
++    return interactive
++      ? (
++        <a
++          className={css.link}
++          href={destination.href}
++          {...destination.newTab ? { target: '_blank', rel: 'noopener noreferrer' } : {}}
++        >
++          {label}
++        </a>
++      )
++      : <span>{label}</span>
++  }
++  return interactive
++    ? (
++      <button
++        type="button"
++        className={css.link}
++        onClick={() => { openFile(destination.path, destination.line) }}
++      >
++        {label}
++      </button>
++    )
++    : <span>{label}</span>
++}
 diff --git a/packages/client/ui-chat/src/client/chat/register-node-renderers.ts b/packages/client/ui-chat/src/client/chat/register-node-renderers.ts
-index a5d4f9bc7a..9ff8185227 100644
+index 7e58223287..0e46996eeb 100644
 --- a/packages/client/ui-chat/src/client/chat/register-node-renderers.ts
 +++ b/packages/client/ui-chat/src/client/chat/register-node-renderers.ts
 @@ -6,8 +6,8 @@ import { NS } from '../locale.ts'
@@ -1042,11 +1013,157 @@ index a5d4f9bc7a..9ff8185227 100644
    ctx.slots.inject('conversation.chat.node', () => ctx.slots.register(
      { name: 'conversation.chat.node', key: 'context', locale: NS }, ContextMessageNodeView))
    ctx.slots.inject('conversation.chat.node', () => ctx.slots.register(
+diff --git a/packages/client/ui-chat/src/client/chat/register-user-links.ts b/packages/client/ui-chat/src/client/chat/register-user-links.ts
+new file mode 100644
+index 0000000000..0b1d04cc16
+--- /dev/null
++++ b/packages/client/ui-chat/src/client/chat/register-user-links.ts
+@@ -0,0 +1,45 @@
++/**
++ * dshui overlay: install the user-text link rule and its inline renderer.
++ *
++ * The rule is a global registry contribution (every Session's user text) and
++ * the renderer is a keyed entry under the Conversation-owned
++ * `conversation.user.text.node` slot, so both leave with this plugin fiber.
++ */
++import type { Context } from '@deepseek-ai/cordis'
++import type { UserTextNodeProps } from '@deepseek-ai/dsh-client-ui-conversation/client'
++import { dshuiClickOrigin, dshuiOpenPath } from '../dshui-open.ts'
++import { markdownLinkRule } from './user-link-rule.ts'
++import { UserLink, type UserLinkInjected } from './UserLink.tsx'
++
++/**
++ * Register the markdown-link rule and its renderer.
++ * @param ctx - Client root context of the Chat plugin.
++ */
++export function registerUserLinks(ctx: Context): void {
++  ctx.effect(
++    () => ctx.uiConversation.userText.register(markdownLinkRule),
++    'dshui: user-text markdown link rule',
++  )
++  ctx.slots.inject('conversation.user.text.node', function* () {
++    yield ctx.slots.register({
++      name: 'conversation.user.text.node',
++      key: 'link',
++      priority: 100,
++      inject: (sessionId: UserTextNodeProps<'link'>['sessionId']): UserLinkInjected => ({
++        openFile: (path, line) => {
++          const cwd = ctx.sessions.list.getSnapshot().byId[sessionId]?.cwd
++          const origin = dshuiClickOrigin()
++          ctx.remote.session.openWorkspacePath({
++            path: dshuiOpenPath(cwd, path),
++            ...(origin === undefined ? {} : { dshuiOrigin: origin }),
++            ...(line === undefined ? {} : { dshuiLine: line }),
++          }).then((result) => {
++            if (!result.ok) console.error(`[dshui] link open failed: ${result.error.message}`)
++          }, (error: unknown) => {
++            console.error('[dshui] link open request failed:', error)
++          })
++        },
++      }),
++    }, UserLink)
++  })
++}
+diff --git a/packages/client/ui-chat/src/client/chat/user-link-rule.ts b/packages/client/ui-chat/src/client/chat/user-link-rule.ts
+new file mode 100644
+index 0000000000..48f880129a
+--- /dev/null
++++ b/packages/client/ui-chat/src/client/chat/user-link-rule.ts
+@@ -0,0 +1,89 @@
++/**
++ * dshui overlay: `[label](destination)` markdown links in sent user text.
++ *
++ * The stock user-text projection renders reference chips and plain runs, so a
++ * link the model itself wrote (or the template of a shareable prompt) stayed
++ * literal text. This rule claims those tokens; {@link UserLink} renders them.
++ */
++import type { UserTextRule } from '@deepseek-ai/dsh-client-ui-conversation/client'
++
++declare module '@deepseek-ai/dsh-client-ui-conversation/client' {
++  interface UserTextDataMap {
++    link: {
++      /** Visible label between the brackets. */
++      readonly label: string
++      /** Verbatim `(destination)` payload. */
++      readonly destination: string
++    }
++  }
++}
++
++/** Classification of a destination; `null` keeps the syntax literal. */
++export type UserLinkDestination =
++  | { readonly kind: 'external'; readonly href: string; readonly newTab: boolean }
++  | { readonly kind: 'file'; readonly path: string; readonly line?: number }
++
++/**
++ * Split a file destination off its optional line reference — the two spellings
++ * dsh tells the model to write: the GitHub-style anchor (`a.dart#L10`,
++ * `a.dart#L10-L20`) and the trailing `:line` / `:line-end` / `:line–end`
++ * suffix. Only the first line survives: a range names one file opened at its
++ * start, and the open gesture carries a single line.
++ * @param raw - A destination `new URL` could not parse.
++ * @returns the path without its line reference, plus its 1-based first line.
++ */
++export function filePathAndLine(raw: string): { path: string; line?: number } {
++  const hash = raw.lastIndexOf('#')
++  if (hash !== -1) {
++    const anchored = /^L([1-9][0-9]*)(?:-L?([1-9][0-9]*))?$/.exec(raw.slice(hash + 1))
++    if (anchored !== null) return { path: raw.slice(0, hash), line: Number(anchored[1]) }
++  }
++  const suffixed = /:([1-9][0-9]*)(?:[-–]([1-9][0-9]*))?$/.exec(raw)
++  if (suffixed === null || suffixed.index === 0) return { path: raw }
++  return { path: raw.slice(0, suffixed.index), line: Number(suffixed[1]) }
++}
++
++/**
++ * @param raw - The verbatim `(destination)` of a `[label](destination)` token.
++ * @returns the classified destination, or null to keep the syntax literal
++ * (absolute URLs outside the http/https/mailto allowlist).
++ */
++export function userLinkDestination(raw: string): UserLinkDestination | null {
++  let protocol: string
++  try {
++    protocol = new URL(raw).protocol
++  } catch {
++    // Unparseable as an absolute URL — a (relative) file path carrying an
++    // optional line reference in either spelling.
++    return { kind: 'file', ...filePathAndLine(raw) }
++  }
++  if (protocol === 'http:' || protocol === 'https:') return { kind: 'external', href: raw, newTab: true }
++  return protocol === 'mailto:' ? { kind: 'external', href: raw, newTab: false } : null
++}
++
++/** Candidate grammar of one inline markdown link in original text. */
++const LINK_TOKEN = /\[([^\][\n]+)\]\(([^)\s]+)\)/g
++
++/**
++ * Claim the nearest renderable markdown link at or after `from`. A destination
++ * outside the allowlist is not a link the product can carry, so the syntax
++ * stays literal by skipping that candidate.
++ */
++export const markdownLinkRule: UserTextRule<'link'> = {
++  id: 'link',
++  order: 20,
++  match(text, from) {
++    const tokens = new RegExp(LINK_TOKEN.source, 'g')
++    tokens.lastIndex = from
++    for (let match = tokens.exec(text); match !== null; match = tokens.exec(text)) {
++      if (userLinkDestination(match[2] as string) === null) continue
++      return {
++        id: 'link',
++        start: match.index,
++        end: match.index + match[0].length,
++        data: { label: match[1] as string, destination: match[2] as string },
++      }
++    }
++    return undefined
++  },
++}
 diff --git a/packages/client/ui-chat/src/client/contract/slots.ts b/packages/client/ui-chat/src/client/contract/slots.ts
-index 52d7786e20..c298169752 100644
+index a85e28798d..e2c28c3865 100644
 --- a/packages/client/ui-chat/src/client/contract/slots.ts
 +++ b/packages/client/ui-chat/src/client/contract/slots.ts
-@@ -125,6 +125,17 @@ export type QuotaNoticeHostProps =
+@@ -128,6 +128,17 @@ export type QuotaNoticeHostProps =
    & PropsRenderSlots<'shell.quota-notice'>
    & InjectFace<QuotaNoticeInjected>
  
@@ -1064,7 +1181,7 @@ index 52d7786e20..c298169752 100644
  /** Optional prose file-mention provider consumed by Chat. */
  export interface ChatFileMentions {
    /**
-@@ -420,5 +431,13 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
+@@ -447,5 +458,13 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
       * survives switching or closing the panel that reported it.
       */
      'shell.quota-notice': { kind: 'chain'; scope: 'root'; owner: QuotaNoticeOwnerProps }
@@ -1078,8 +1195,60 @@ index 52d7786e20..c298169752 100644
 +    'conversation.chat.user-actions': { kind: 'list'; scope: 'session'; owner: UserActionOwnerProps }
    }
  }
+diff --git a/packages/client/ui-chat/src/client/dshui-open.ts b/packages/client/ui-chat/src/client/dshui-open.ts
+new file mode 100644
+index 0000000000..61e170079e
+--- /dev/null
++++ b/packages/client/ui-chat/src/client/dshui-open.ts
+@@ -0,0 +1,46 @@
++/**
++ * dshui overlay: the click origin and Host-facing path spelling shared by the
++ * Chat file-open seat (`apply.ts`) and the user-text link renderer.
++ *
++ * @module @deepseek-ai/dsh-client-ui-chat/dshui-open
++ */
++import { resolveWorkspacePath } from '@deepseek-ai/dsh-util-workspace-path'
++
++/**
++ * The VS Code workspace of the window the open click happens in, published by
++ * the dshui host plugin as `window.__DSHUI_WORKSPACE__` (with a fallback to
++ * the boot URL's `dshui_workspace` query parameter). Attached to
++ * `openWorkspacePath` as `dshuiOrigin` so the Host opens the file in this
++ * window even when the path's longest-prefix owner is another window.
++ * @returns the scope path, or undefined when neither source is set.
++ */
++export function dshuiClickOrigin(): string | undefined {
++  if (typeof window === 'undefined') return undefined
++  const global = (window as typeof window & { __DSHUI_WORKSPACE__?: unknown }).__DSHUI_WORKSPACE__
++  if (typeof global === 'string' && global !== '') return global
++  const param = new URLSearchParams(window.location.search).get('dshui_workspace')
++  if (param === null || param === '') return undefined
++  try {
++    const decoded = decodeURIComponent(param)
++    return decoded === '' ? undefined : decoded
++  } catch {
++    return param
++  }
++}
++
++/**
++ * The Host-facing spelling of one file-link destination. A destination that
++ * names the account home (`~`, `~/…`, `~\…`) is not workspace-relative:
++ * leading `./` and `../` segments cannot rise above that anchor, so they are
++ * dropped, and the `~` spelling travels to the Host, the only side that knows
++ * the home directory. Joining such a destination onto the Session cwd instead
++ * produces a literal `~` directory under the workspace.
++ * @param cwd - Session workspace root, when the Session is known.
++ * @param path - the link destination, before Host resolution.
++ * @returns the path to send with `openWorkspacePath`.
++ */
++export function dshuiOpenPath(cwd: string | undefined, path: string): string {
++  const anchored = path.replace(/^(?:\.{1,2}[/\\])+/, '')
++  if (anchored === '~' || anchored.startsWith('~/') || anchored.startsWith('~\\')) return anchored
++  return resolveWorkspacePath(cwd, path)
++}
 diff --git a/packages/client/ui-chat/tests/apply-inject.client.spec.tsx b/packages/client/ui-chat/tests/apply-inject.client.spec.tsx
-index 7eee5bcff7..fed5395089 100644
+index 2898fab578..c5c8add53a 100644
 --- a/packages/client/ui-chat/tests/apply-inject.client.spec.tsx
 +++ b/packages/client/ui-chat/tests/apply-inject.client.spec.tsx
 @@ -237,26 +237,58 @@ describe('Chat inject API', () => {
@@ -1151,7 +1320,7 @@ index 7eee5bcff7..fed5395089 100644
      await b.runtime.dispose()
    })
  
-@@ -416,13 +448,49 @@ describe('Chat inject API', () => {
+@@ -410,13 +442,49 @@ describe('Chat inject API', () => {
      // The Host resolves the relative path against the root it holds for the
      // Session; the Client need not know it.
      await injected.openFile('src/a.ts')
@@ -1205,7 +1374,7 @@ index 7eee5bcff7..fed5395089 100644
      const b = await bench()
      const entry = b.runtime.slots.entries('conversation.view')[0]!
 diff --git a/packages/client/ui-chat/tests/chat-branch-tails.client.spec.tsx b/packages/client/ui-chat/tests/chat-branch-tails.client.spec.tsx
-index 7954e2cb45..65b6205602 100644
+index fa922ee1e1..1e3de27de6 100644
 --- a/packages/client/ui-chat/tests/chat-branch-tails.client.spec.tsx
 +++ b/packages/client/ui-chat/tests/chat-branch-tails.client.spec.tsx
 @@ -1,6 +1,7 @@
@@ -1225,19 +1394,19 @@ index 7954e2cb45..65b6205602 100644
 +  CompactionNodeView, ContextMessageNodeView, RetryNodeView, SteeringMessageNodeView,
 +  UnknownNodeView, UserMessageNodeView,
  } from '../src/client/chat/MessageItem.tsx'
- import { AssistantMarkdown, type AssistantMarkdownProps } from '../src/client/chat/AssistantMarkdown.tsx'
+ import { AssistantMarkdown } from '../src/client/chat/AssistantMarkdown.tsx'
  import { useDetailedPresentation } from './presentation-fixture.client.ts'
-@@ -31,6 +32,8 @@ afterEach(() => {
- 
- const t: ChatNodeViewProps['t'] = makeTranslate(zh, commonZh)
- const renderMessageImages: AssistantMarkdownProps['renderMessageImages'] = () => null
+@@ -35,6 +36,8 @@ const t: ChatNodeViewProps['t'] = makeTranslate(zh, commonZh)
+ const renderUserImages: Parameters<ReturnType<typeof createUserContentFixture>>[1] = () => null
+ let renderUserContent: ReturnType<typeof createUserContentFixture>
+ beforeEach(() => { renderUserContent = createUserContentFixture() })
 +/** dshui: the user-actions child slot is unopened in these arms; stub it out. */
 +const renderUserActionsSlot = (() => null) as unknown as ComponentProps<typeof UserMessageNodeView>['renderSlot']
  const RETRY_ID = 'retry-fixture' as Extract<ConversationNode, { kind: 'model-retry' }>['retryId']
  
  // Recency scans the whole transcript; a detached fixture is its own latest row.
-@@ -72,8 +75,13 @@ function MessageItem({ node, t: translate, referenceLabels, skillNames }: Messag
-   } as unknown as ChatNodeViewProps
+@@ -81,8 +84,13 @@ function MessageItem({ node, t: translate, referenceLabels, skillNames }: Messag
+   }
    switch (node.kind) {
      case 'user':
 +      return (
@@ -1252,10 +1421,10 @@ index 7954e2cb45..65b6205602 100644
        return <ContextMessageNodeView {...props as ChatNodeViewProps<'context'>} />
      case 'compaction':
 diff --git a/packages/client/ui-chat/tests/chat-view.client.spec.tsx b/packages/client/ui-chat/tests/chat-view.client.spec.tsx
-index 2357acedc9..253a85f704 100644
+index 241a0a2048..ee371ac801 100644
 --- a/packages/client/ui-chat/tests/chat-view.client.spec.tsx
 +++ b/packages/client/ui-chat/tests/chat-view.client.spec.tsx
-@@ -41,7 +41,7 @@ import { en, zh } from '../src/client/locale.ts'
+@@ -42,7 +42,7 @@ import { en, zh } from '../src/client/locale.ts'
  import { AssistantNodeView } from '../src/client/chat/AssistantNodeView.tsx'
  import { CommandNodeView, ManualCompactionNodeView } from '../src/client/chat/CommandNodeView.tsx'
  import {
@@ -1264,7 +1433,7 @@ index 2357acedc9..253a85f704 100644
    TurnMaxTokensNodeView, UnknownNodeView, UserMessageNodeView,
  } from '../src/client/chat/MessageItem.tsx'
  import { TurnTailNodeView } from '../src/client/chat/TurnTailNodeView.tsx'
-@@ -270,6 +270,10 @@ type ToolOwner = Pick<ChatNodeOwnerProps, 'openFile' | 'inspectCall'> & {
+@@ -279,6 +279,10 @@ type ToolOwner = Pick<ChatNodeOwnerProps, 'openFile' | 'inspectCall'> & {
  const renderCommandSlot: React.ComponentProps<typeof CommandNodeView>['renderSlot'] =
    (_key, _owner, opts) => opts?.fallback ?? null
  const renderTurnTailSlot: React.ComponentProps<typeof TurnTailNodeView>['renderSlot'] = () => null
@@ -1272,10 +1441,10 @@ index 2357acedc9..253a85f704 100644
 +// extension hangs rollback there); the harness renders no occupant for it.
 +const renderUserActionsSlot: React.ComponentProps<typeof UserMessageNodeView>['renderSlot'] =
 +  (_key, _owner, opts) => opts?.fallback ?? null
- const assistantSlots: Pick<React.ComponentProps<typeof AssistantNodeView>, 'renderSlot'> = {
-   renderSlot: renderReasoningSlot,
- }
-@@ -305,9 +309,9 @@ function HarnessChatNode({ standard, owner, hookContext, usePerformanceUsage, to
+ 
+ function HarnessChatFlow({ standard, owner, hookContext, renderSlot }: {
+   readonly standard: HarnessStandardProps
+@@ -312,9 +316,9 @@ function HarnessChatNode({ standard, owner, hookContext, usePerformanceUsage, to
    const nodeProps = { ...shared, ...owner, ...hooks }
    switch (owner.node.kind) {
      case 'user':
@@ -1287,47 +1456,144 @@ index 2357acedc9..253a85f704 100644
      case 'context':
        return <ContextMessageNodeView {...nodeProps} node={owner.node} />
      case 'assistant-step':
-@@ -391,7 +395,7 @@ function makeHarness(
-   const useChatGroup = bindKeyedSnapshotSelector(
-     key => grouped?.groupSource(key as GroupKey) ?? absentGroup,
-   )
--  const openFile = vi.fn<(path: string) => Promise<void>>().mockResolvedValue(undefined)
-+  const openFile = vi.fn<(path: string, options?: { line?: number }) => Promise<void>>().mockResolvedValue(undefined)
-   const openSkill = vi.fn<(name: string) => void>()
-   const loadOlder = vi.fn()
-   const loadThrough = vi.fn<(seq: number) => Promise<void>>().mockResolvedValue(undefined)
-@@ -661,6 +665,26 @@ describe('Chat node rendering', () => {
-     expect(h.openFile).toHaveBeenCalledWith('src/index.ts', { line: 24 })
-   })
- 
-+  it('keeps the line of a Markdown file link inside a user bubble', () => {
-+    // User text renders literally, so dshui's own link projection owns these:
-+    // both line spellings must reach the opener as its line option.
-+    const h = makeHarness({
-+      nodes: [user(1, 'see [anchor](lib/a.dart#L268) and [suffix](lib/b.dart:94)')],
+diff --git a/packages/client/ui-chat/tests/user-link.client.spec.tsx b/packages/client/ui-chat/tests/user-link.client.spec.tsx
+new file mode 100644
+index 0000000000..0af010e164
+--- /dev/null
++++ b/packages/client/ui-chat/tests/user-link.client.spec.tsx
+@@ -0,0 +1,127 @@
++// @vitest-environment jsdom
++import { useState, type ReactNode } from 'react'
++import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest'
++import { act, cleanup, fireEvent } from '@testing-library/react'
++import { SessionId } from '@deepseek-ai/dsh-session/types'
++import { SlotTestRuntime } from '@deepseek-ai/dsh-client-test-runtime'
++import { LocaleRuntime } from '@deepseek-ai/dsh-client-locale/client'
++import { en as commonEn } from '@deepseek-ai/dsh-client-locale/src/locales/en.ts'
++import type { PropsRenderFactories, PropsRenderSlots } from '@deepseek-ai/dsh-client-ui-slots'
++import type { UserTextInjected } from '@deepseek-ai/dsh-client-ui-conversation/client'
++import { UserTextRegistry } from '../../ui-conversation/src/client/conversation/user-text-registry.ts'
++import { UserText, PlainUserText } from '../../ui-conversation/src/client/user-text/UserText.tsx'
++import { collapseWhitespaceRule, trimWhitespaceRule } from '../../ui-conversation/src/client/user-text/whitespace-rules.ts'
++import { markdownLinkRule, filePathAndLine, userLinkDestination } from '../src/client/chat/user-link-rule.ts'
++import { UserLink, type UserLinkInjected } from '../src/client/chat/UserLink.tsx'
++import { dshuiOpenPath } from '../src/client/dshui-open.ts'
++
++afterEach(cleanup)
++
++type RenderSeats = PropsRenderSlots<'conversation.approval.detail'> & PropsRenderFactories
++
++/** Mount the user-text pipeline with the dshui link rule and its renderer. */
++async function bench() {
++  const runtime = await SlotTestRuntime.create()
++  onTestFinished(() => runtime.dispose())
++  const locale = new LocaleRuntime(runtime.ctx)
++  runtime.ctx.provide('locale', locale)
++  locale.register('common', { en: commonEn, zh: commonEn })
++  locale.setLocale('en')
++  runtime.slots.installLocale(locale)
++  const openFile = vi.fn<UserLinkInjected['openFile']>()
++  await runtime.mount({ inject: ['slots'], apply: (ctx) => {
++    const userText = new UserTextRegistry(ctx)
++    for (const rule of [markdownLinkRule, collapseWhitespaceRule, trimWhitespaceRule]) userText.register(rule)
++    ctx.slots.registerFactory({
++      name: 'conversation.user.text', scope: 'session',
++      children: { 'conversation.user.text.node': { kind: 'keyed', scope: 'session', inline: true } },
++      inject: (): UserTextInjected => ({
++        hooks: { userTextRevision: {
++          getSnapshot: () => userText.getSnapshot(), subscribe: listener => userText.subscribe(listener),
++        } },
++        createUserTextEvaluator: () => userText.createEvaluator(),
++        reportTransformFailure: (error: unknown): never => { throw error },
++      }),
++    }, UserText)
++    ctx.slots.register({ name: 'conversation.user.text.node', key: 'text' }, PlainUserText)
++    ctx.slots.register({ name: 'conversation.user.text.node', key: 'link', inject: () => ({ openFile }) }, UserLink)
++  } })
++  await runtime.sessions.add({ id: 'user-link' })
++  const session = runtime.sessions.retainFor(runtime.ctx, SessionId('user-link'))
++  const captured: { seats?: RenderSeats; setContent?: (content: ReactNode) => void } = {}
++  await runtime.root.declare({ 'conversation.approval.detail': { kind: 'single', scope: 'session' } },
++    function TestRoot(props) {
++      const [content, setContent] = useState<ReactNode>(null)
++      captured.seats = props
++      captured.setContent = setContent
++      return content
 +    })
-+    const view = render(<h.ChatView {...h.props} />)
-+    fireEvent.click(view.getByRole('button', { name: 'anchor' }))
-+    expect(h.openFile).toHaveBeenCalledWith('lib/a.dart', { line: 268 })
-+    fireEvent.click(view.getByRole('button', { name: 'suffix' }))
-+    expect(h.openFile).toHaveBeenCalledWith('lib/b.dart', { line: 94 })
++  const view = runtime.renderRoot()
++  const { seats, setContent } = captured
++  if (seats === undefined || setContent === undefined) throw new Error('user link fixture root did not render')
++  const { SessionProvider } = seats
++  const render = (text: string, interactive = true) => {
++    const node = seats.renderFactorySlot('conversation.user.text', { text, facts: {}, interactive })
++    act(() => { setContent(<SessionProvider session={session}>{node}</SessionProvider>) })
++    return view
++  }
++  return { runtime, openFile, render }
++}
++
++describe('user text markdown links', () => {
++  it('claims markdown links and renders file destinations as open gestures with their line', async () => {
++    const b = await bench()
++    const container = b.render('see [anchor](lib/a.dart#L268) and [suffix](lib/b.dart:94)')
++    fireEvent.click(container.getByRole('button', { name: 'anchor' }))
++    expect(b.openFile).toHaveBeenCalledWith('lib/a.dart', 268)
++    fireEvent.click(container.getByRole('button', { name: 'suffix' }))
++    expect(b.openFile).toHaveBeenCalledWith('lib/b.dart', 94)
 +  })
 +
-+  it('opens a user-bubble file link without a line at the file top', () => {
-+    const h = makeHarness({ nodes: [user(1, 'see [plain](lib/a.dart)')] })
-+    const view = render(<h.ChatView {...h.props} />)
-+    fireEvent.click(view.getByRole('button', { name: 'plain' }))
-+    expect(h.openFile).toHaveBeenCalledWith('lib/a.dart')
++  it('opens a file link without a line at the file top', async () => {
++    const b = await bench()
++    const container = b.render('see [plain](lib/a.dart)')
++    fireEvent.click(container.getByRole('button', { name: 'plain' }))
++    expect(b.openFile).toHaveBeenCalledWith('lib/a.dart', undefined)
 +  })
 +
-   it('threads the injected file-mention vocabulary into the closing prose only', () => {
-     const wrote = (seq: number, callId: string): ToolResultNode => ({
-       ...toolResult(seq, callId, 'write'),
++  it('keeps allowlisted absolute URLs as anchors and non-interactive text as plain labels', async () => {
++    const b = await bench()
++    const container = b.render('read [docs](https://example.com/x) or [mail](mailto:a@example.com)')
++    expect(container.getByRole('link', { name: 'docs' }).getAttribute('target')).toBe('_blank')
++    expect(container.getByRole('link', { name: 'mail' }).getAttribute('target')).toBeNull()
++    const inert = b.render('see [plain](lib/a.dart)', false)
++    expect(inert.queryAllByRole('button')).toHaveLength(0)
++    expect(inert.getByText('plain')).toBeTruthy()
++  })
++
++  it('leaves destinations outside the allowlist as literal text', async () => {
++    const b = await bench()
++    const container = b.render('fetch [spec](ftp://example.com/spec)')
++    expect(container.queryAllByRole('button')).toHaveLength(0)
++    expect(container.queryAllByRole('link')).toHaveLength(0)
++    expect(container.container.textContent).toContain('[spec](ftp://example.com/spec)')
++  })
++})
++
++describe('user link destination parsing', () => {
++  it.each([
++    ['lib/a.dart', { path: 'lib/a.dart' }],
++    ['lib/a.dart#L10', { path: 'lib/a.dart', line: 10 }],
++    ['lib/a.dart#L10-L20', { path: 'lib/a.dart', line: 10 }],
++    ['lib/a.dart:94', { path: 'lib/a.dart', line: 94 }],
++    ['lib/a.dart:94-120', { path: 'lib/a.dart', line: 94 }],
++    ['lib/a.dart:94–120', { path: 'lib/a.dart', line: 94 }],
++  ])('splits the line reference off %s', (raw, expected) => {
++    expect(filePathAndLine(raw)).toEqual(expected)
++  })
++
++  it('classifies protocols and keeps home-relative destinations in their Host spelling', () => {
++    expect(userLinkDestination('https://example.com')).toEqual({ kind: 'external', href: 'https://example.com', newTab: true })
++    expect(userLinkDestination('mailto:a@example.com')).toEqual({ kind: 'external', href: 'mailto:a@example.com', newTab: false })
++    expect(userLinkDestination('ftp://example.com')).toBeNull()
++    expect(dshuiOpenPath('/work/repo', 'src/notes.md')).toBe('/work/repo/src/notes.md')
++    expect(dshuiOpenPath('/work/repo', '/etc/hosts')).toBe('/etc/hosts')
++    expect(dshuiOpenPath('/work/repo', './~/.dsh/config.yml')).toBe('~/.dsh/config.yml')
++  })
++})
 diff --git a/packages/client/ui-conversation/src/client/apply.ts b/packages/client/ui-conversation/src/client/apply.ts
-index 9994c4e9ae..39b5196b41 100644
+index e567bd1a50..d0c9aaa31c 100644
 --- a/packages/client/ui-conversation/src/client/apply.ts
 +++ b/packages/client/ui-conversation/src/client/apply.ts
-@@ -139,10 +139,8 @@ function scopedConversation(sessions: ISessions, id: SessionId): IConversation {
+@@ -142,10 +142,8 @@ function scopedConversation(sessions: ISessions, id: SessionId): IConversation {
  }
  
  /** Resolve package-internal attachment operations from the public service. */
@@ -1340,7 +1606,7 @@ index 9994c4e9ae..39b5196b41 100644
  }
  
  /**
-@@ -337,7 +335,11 @@ export function apply(ctx: Context, config: Config = Config({})): void {
+@@ -365,7 +363,11 @@ export function apply(ctx: Context, config: Config = Config({})): void {
              if (sessions.binding(nextId) === undefined) {
                throw new Error(`ui-conversation: session "${nextId}" resolved no binding`)
              }
@@ -1353,7 +1619,7 @@ index 9994c4e9ae..39b5196b41 100644
              if (draft.text !== '') {
                next.setDraft(draft)
                from.setDraft('')
-@@ -432,26 +434,33 @@ export function apply(ctx: Context, config: Config = Config({})): void {
+@@ -460,26 +462,33 @@ export function apply(ctx: Context, config: Config = Config({})): void {
        'conversation.composer.dock': { kind: 'list', scope: 'session' },
      },
      inject: (sessionId: SessionId | undefined): ComposerBarInjected => {
@@ -1407,7 +1673,7 @@ index 9994c4e9ae..39b5196b41 100644
        const inputTriggers = inputHub.inputTriggers(sessionId)
        const bridge = hostPathBridge()
 diff --git a/packages/client/ui-conversation/src/client/skeleton/ConversationContent.tsx b/packages/client/ui-conversation/src/client/skeleton/ConversationContent.tsx
-index 15bfdd8732..37b09bc998 100644
+index 218082ae31..4cd39b7965 100644
 --- a/packages/client/ui-conversation/src/client/skeleton/ConversationContent.tsx
 +++ b/packages/client/ui-conversation/src/client/skeleton/ConversationContent.tsx
 @@ -4,6 +4,7 @@ import type { WorkspaceId } from '@deepseek-ai/dsh-workspace/types'
@@ -1469,7 +1735,7 @@ index 15bfdd8732..37b09bc998 100644
          open: pickerOpen,
          anchorRef: pickerAnchor,
          selectedId: pendingWorkspaceId ?? sessionWorkspace?.workspaceId,
-@@ -138,7 +148,12 @@ export function ConversationContent(props: ConversationContentProps) {
+@@ -139,7 +149,12 @@ export function ConversationContent(props: ConversationContentProps) {
    // blank session whose workspace vanished (deleted from the sidebar). The
    // bar is ONE session-maybe slot rendered unconditionally — inert is a prop,
    // not a different tree, so the textarea DOM survives the transition.
@@ -1483,7 +1749,7 @@ index 15bfdd8732..37b09bc998 100644
    // A raised block is the same inert posture with the blocker's own reason:
    // one disabled textarea, never a second tree. The no-workspace state wins
    // when both hold — picking a workspace is the earlier prerequisite.
-@@ -148,9 +163,9 @@ export function ConversationContent(props: ConversationContentProps) {
+@@ -149,9 +164,9 @@ export function ConversationContent(props: ConversationContentProps) {
      ...(inert
        ? {
          disabled: true,
@@ -1495,7 +1761,7 @@ index 15bfdd8732..37b09bc998 100644
        }
        : blocked
          // `blocked`, not `disabled`: the bar refuses input either way, but a
-@@ -162,7 +177,7 @@ export function ConversationContent(props: ConversationContentProps) {
+@@ -163,7 +178,7 @@ export function ConversationContent(props: ConversationContentProps) {
  
    const composerBar = (
      <div className={clsx(css.composerStack, hero && css.composerHero)}>
@@ -1526,10 +1792,10 @@ index 674b644a9f..5fcd20627a 100644
        {renderFactorySlot('conversation.content', {
          variant: 'main',
 diff --git a/packages/client/ui-conversation/src/client/skeleton/ConversationRoot.module.css b/packages/client/ui-conversation/src/client/skeleton/ConversationRoot.module.css
-index 3aa0a9d1f9..847d9a749f 100644
+index 070cb94a75..d376a34b3e 100644
 --- a/packages/client/ui-conversation/src/client/skeleton/ConversationRoot.module.css
 +++ b/packages/client/ui-conversation/src/client/skeleton/ConversationRoot.module.css
-@@ -537,9 +537,26 @@ button.crumb:hover {
+@@ -551,9 +551,26 @@ button.crumb:hover {
    overflow-y: auto;
  }
  
@@ -1656,14 +1922,17 @@ index 0000000000..ec9e8ea4ae
 +  try { return decodeURIComponent(value) } catch { return value }
 +})()
 diff --git a/packages/client/ui-conversation/tsdown.config.ts b/packages/client/ui-conversation/tsdown.config.ts
-index 6ccfee9612..35be86df0a 100644
+index 7aa03cebc1..8c6f6cab90 100644
 --- a/packages/client/ui-conversation/tsdown.config.ts
 +++ b/packages/client/ui-conversation/tsdown.config.ts
-@@ -1,3 +1,3 @@
+@@ -1,3 +1,6 @@
  import { clientBundle } from '../tsdown.client.ts'
  
--export default clientBundle('@deepseek-ai/dsh-client-ui-conversation', ['lib/types/index.js'])
-+export default clientBundle('dshui-client-ui-conversation', ['lib/types/index.js'])
+-export default clientBundle(import.meta.dirname, ['lib/types/index.js'])
++export default clientBundle(import.meta.dirname, ['lib/types/index.js'], {
++  // dshui overlay: the profile row name is the row id patch.yml inserts.
++  pluginId: 'dshui-client-ui-conversation',
++})
 diff --git a/packages/client/ui-settings-general/src/client/settings-document-store.ts b/packages/client/ui-settings-general/src/client/settings-document-store.ts
 index 1a5f45d7ee..8fe87db0f3 100644
 --- a/packages/client/ui-settings-general/src/client/settings-document-store.ts
@@ -1710,11 +1979,11 @@ index 1a5f45d7ee..8fe87db0f3 100644
          const { message } = result.error
          this.store.update((state) => { state.error = message })
 diff --git a/packages/client/ui-settings-general/tests/components.client.spec.tsx b/packages/client/ui-settings-general/tests/components.client.spec.tsx
-index ac2e7f000b..69dcad2309 100644
+index ce7405affe..64bd30295d 100644
 --- a/packages/client/ui-settings-general/tests/components.client.spec.tsx
 +++ b/packages/client/ui-settings-general/tests/components.client.spec.tsx
-@@ -27,7 +27,11 @@ import { CurrentVersionRow } from '../src/client/CurrentVersionRow.tsx'
- import { DesktopUpdateBadge } from '../src/client/DesktopUpdateIndicator.tsx'
+@@ -28,7 +28,11 @@ import { DesktopUpdateBadge } from '../src/client/DesktopUpdateIndicator.tsx'
+ import { HostReleasePrompt, type HostReleasePromptProps } from '../src/client/HostReleasePrompt.tsx'
  import type { DesktopUpdateView } from '../src/types.ts'
  
 -afterEach(() => { cleanup(); vi.unstubAllEnvs() })
@@ -1726,7 +1995,7 @@ index ac2e7f000b..69dcad2309 100644
  
  // The seat's key domain is settings ∪ common; the stub answers from the
  // package dictionary and falls back to the key like the real chain.
-@@ -151,7 +155,31 @@ describe('SettingsDocumentAction', () => {
+@@ -153,7 +157,31 @@ describe('SettingsDocumentAction', () => {
      />)
      const action = await screen.findByRole('button', { name: 'Open configuration file' })
      fireEvent.click(action)
@@ -1772,11 +2041,32 @@ index 6bcc3d662e..f572287347 100644
    })
  
    it('marks absent or failed metadata unavailable without opening anything', async () => {
+diff --git a/packages/client/ui-tool/tests/chat-ptc-subcalls.client.spec.tsx b/packages/client/ui-tool/tests/chat-ptc-subcalls.client.spec.tsx
+index ce1f5b957e..24fedfdea1 100644
+--- a/packages/client/ui-tool/tests/chat-ptc-subcalls.client.spec.tsx
++++ b/packages/client/ui-tool/tests/chat-ptc-subcalls.client.spec.tsx
+@@ -14,6 +14,7 @@ import {
+   ConversationEventRegistry, ConversationViewRegistry, EMPTY_CONVERSATION_SNAPSHOT, type ConvViewOwnerProps,
+ } from '@deepseek-ai/dsh-client-ui-conversation/client'
+ import { en as conversationEn, NS as CONVERSATION_NS, zh as conversationZh } from '@deepseek-ai/dsh-client-ui-conversation/src/client/locales.ts'
++import { UserTextRegistry } from '@deepseek-ai/dsh-client-ui-conversation/src/client/conversation/user-text-registry.ts'
+ import { apply as applyChat, inject as injectChat } from '@deepseek-ai/dsh-client-ui-chat/client'
+ import { PartialArguments } from '@deepseek-ai/dsh-util-values'
+ import { apply as applyTool, inject as injectTool } from '../src/client/apply.ts'
+@@ -114,6 +115,8 @@ async function bench(snapshot: ChatSnapshot) {
+     views,
+     groups: { register: () => () => {} },
+     binding: () => ({ target: () => chat, snapshot: conversation }),
++    // dshui's Chat apply registers its user-text link rule on this service.
++    userText: new UserTextRegistry(ctx),
+   } as never)
+   ctx.uiSession.provide({
+     hooks: ['conversation'],
 diff --git a/packages/client/ui-workspace/src/client/contract/slots.ts b/packages/client/ui-workspace/src/client/contract/slots.ts
-index 568368dc63..2a471fbb8b 100644
+index d00b3658d8..8351069c44 100644
 --- a/packages/client/ui-workspace/src/client/contract/slots.ts
 +++ b/packages/client/ui-workspace/src/client/contract/slots.ts
-@@ -224,6 +224,12 @@ export type WorkspaceBrowserInjected = {
+@@ -228,6 +228,12 @@ export type WorkspaceBrowserInjected = {
      hostInfo: HostObservable<RemoteHostFacts>
      workspaceShortcuts: HostObservable<WorkspaceShortcutState>
      shortcuts: HostObservable<readonly ShortcutCatalogEntry[]>
@@ -1789,7 +2079,7 @@ index 568368dc63..2a471fbb8b 100644
    }
    /** Open the browser search and focus its input. */
    requestSearch: () => void
-@@ -348,6 +354,17 @@ export interface ArchiveSessionInjected {
+@@ -353,6 +359,17 @@ export interface ArchiveSessionInjected {
    unarchiveSession: (sessionId: SessionId) => void
  }
  
@@ -1808,10 +2098,10 @@ index 568368dc63..2a471fbb8b 100644
   * A stop-and-archive confirmation the archive action asked for: the Host
   * refused the plain archive because this work still runs.
 diff --git a/packages/client/ui-workspace/src/client/index.ts b/packages/client/ui-workspace/src/client/index.ts
-index 576bc20529..8e1729acba 100644
+index cc9da072c9..59d03b6162 100644
 --- a/packages/client/ui-workspace/src/client/index.ts
 +++ b/packages/client/ui-workspace/src/client/index.ts
-@@ -36,8 +36,8 @@ import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
+@@ -38,8 +38,8 @@ import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
  // Type-only: pulls the Session root standard-hook merge.
  import type {} from '@deepseek-ai/dsh-client-ui-session/client'
  import {
@@ -1820,9 +2110,9 @@ index 576bc20529..8e1729acba 100644
 +  type ArchiveSessionInjected, type DeleteSessionInjected, type ForkSessionInjected, menuOpenStateFactory,
 +  type PinSessionInjected, type SessionArchiveConfirmInjected, type SessionArchiveConfirmRequest,
    type RenameSessionInjected, type RowToast, type RowToastInjected, type RowToastState, type SessionRenameDialogInjected,
-   type WorkspaceBrowserInjected, type WorkspacePickerInjected,
+   type SessionIdInjected, type WorkspaceBrowserInjected, type WorkspacePickerInjected,
  } from './contract/slots.ts'
-@@ -46,6 +46,7 @@ import { UiWorkspaceService } from './navigation.ts'
+@@ -48,6 +48,7 @@ import { UiWorkspaceService } from './navigation.ts'
  import { createWorkspaceViewStore } from './stores.ts'
  import { WorkspaceBrowser } from './rows/WorkspaceBrowser.tsx'
  import { ArchiveSessionMenuItem, ArchiveSessionRowButton, SessionArchiveConfirmDialog } from './session-actions/ArchiveSession.tsx'
@@ -1830,9 +2120,9 @@ index 576bc20529..8e1729acba 100644
  import { derive } from './session-actions/derived.ts'
  import { ForkSessionMenuItem } from './session-actions/ForkSession.tsx'
  import { PinSessionMenuItem, PinSessionRowButton } from './session-actions/PinSession.tsx'
-@@ -238,6 +239,32 @@ export function apply(ctx: Context): void {
-       openSession(sessionId)
-     },
+@@ -261,6 +262,32 @@ export function apply(ctx: Context): void {
+     hooks: { toast: rowToast },
+     dismissToast: () => { rowToast.set(null) },
    })
 +  // dshui: Sessions whose log the extension host is deleting. The request is a
 +  // webview-shell message with no Host echo into the Session list, so the row
@@ -1863,10 +2153,10 @@ index 576bc20529..8e1729acba 100644
    const browserInjected = (): WorkspaceBrowserInjected => ({
      // Explicit group actions keep their target; unscoped New Session inherits
      // the current Session Workspace before the recent-Workspace fallback.
-@@ -259,7 +286,13 @@ export function apply(ctx: Context): void {
+@@ -281,7 +308,13 @@ export function apply(ctx: Context): void {
+     requestAddWorkspace: shortcutControls.add,
      closeAddWorkspace: shortcutControls.closeAdd,
      setDirectoryBusy: shortcutControls.directoryBusy,
-     dismissForkError: shortcutControls.dismissForkError,
 -    hooks: { directoryFlow: browserFlowSource, hostInfo, workspaceShortcuts: shortcutControls.state, shortcuts: ctx.shortcuts.catalog },
 +    hooks: {
 +      directoryFlow: browserFlowSource,
@@ -1878,13 +2168,13 @@ index 576bc20529..8e1729acba 100644
    })
    const pickerInjected = (): WorkspacePickerInjected => ({
      createWorkspace: input => workspaces.create(input),
-@@ -297,10 +330,14 @@ export function apply(ctx: Context): void {
-     yield ctx.slots.register({ name: 'sidebar.workspaces.session.menu.item', id: 'rename', order: 200, locale: NS, inject: renameInjected }, RenameSessionMenuItem)
+@@ -319,10 +352,14 @@ export function apply(ctx: Context): void {
      yield ctx.slots.register({ name: 'sidebar.workspaces.session.menu.item', id: 'fork', order: 300, locale: NS, inject: forkInjected }, ForkSessionMenuItem)
      yield ctx.slots.register({ name: 'sidebar.workspaces.session.menu.item', id: 'archive', order: 400, locale: NS, inject: archiveInjected }, ArchiveSessionMenuItem)
+     yield ctx.slots.register({ name: 'sidebar.workspaces.session.menu.item', id: 'session-id', order: 450, locale: NS, inject: sessionIdInjected }, SessionIdMenuItem)
 +    // dshui: the extension host's stronger verb — remove the Session log
-+    // directory — sits after archive and before plugin entries (500+).
-+    yield ctx.slots.register({ name: 'sidebar.workspaces.session.menu.item', id: 'delete', order: 450, locale: NS, inject: deleteInjected }, DeleteSessionMenuItem)
++    // directory — sits after the upstream entries and before plugin ones (500+).
++    yield ctx.slots.register({ name: 'sidebar.workspaces.session.menu.item', id: 'delete', order: 460, locale: NS, inject: deleteInjected }, DeleteSessionMenuItem)
    })
    ctx.slots.inject('sidebar.workspaces.session.row.action', function* () {
      yield ctx.slots.register({ name: 'sidebar.workspaces.session.row.action', id: 'archive', order: 100, locale: NS, inject: archiveInjected }, ArchiveSessionRowButton)
@@ -1894,7 +2184,7 @@ index 576bc20529..8e1729acba 100644
    // The surfaces the actions raise live in the frame-wide layer: they must
    // outlive the row menu the action sat in.
 diff --git a/packages/client/ui-workspace/src/client/locales.ts b/packages/client/ui-workspace/src/client/locales.ts
-index 6faf58ef27..b6e3b3c156 100644
+index 0214ab995f..bef193c3eb 100644
 --- a/packages/client/ui-workspace/src/client/locales.ts
 +++ b/packages/client/ui-workspace/src/client/locales.ts
 @@ -59,6 +59,8 @@ export const zh = {
@@ -1906,7 +2196,7 @@ index 6faf58ef27..b6e3b3c156 100644
    'menu.archiveSession': '归档会话',
    'menu.unarchiveSession': '取消归档',
    'menu.pinSession': '置顶会话',
-@@ -182,6 +184,8 @@ export const en = {
+@@ -185,6 +187,8 @@ export const en = {
    'delete.desc': 'This removes “{name}” from the workspace list. The folder and session logs will be kept. Its sessions will appear under Ungrouped.',
    'delete.pending': 'Deleting workspace…',
    'menu.fork': 'Fork session',
@@ -1916,10 +2206,10 @@ index 6faf58ef27..b6e3b3c156 100644
    'menu.unarchiveSession': 'Unarchive session',
    'menu.pinSession': 'Pin session',
 diff --git a/packages/client/ui-workspace/src/client/navigation.ts b/packages/client/ui-workspace/src/client/navigation.ts
-index 4e9bb97fa8..bc487494ae 100644
+index 9c8fa97760..9aea870822 100644
 --- a/packages/client/ui-workspace/src/client/navigation.ts
 +++ b/packages/client/ui-workspace/src/client/navigation.ts
-@@ -21,6 +21,7 @@ import type { DraftInitializationOptions } from '@deepseek-ai/dsh-client-ui-conv
+@@ -23,6 +23,7 @@ import type { DraftInitializationOptions } from '@deepseek-ai/dsh-client-ui-conv
  import type { RowToast } from './contract/slots.ts'
  import { pinOrderAccounts, pinOrderSource } from './pin-order.ts'
  import type { WorkspaceViewStoreActions } from './stores.ts'
@@ -1927,7 +2217,7 @@ index 4e9bb97fa8..bc487494ae 100644
  
  interface MainSelection {
    readonly sessionId?: SessionId
-@@ -264,7 +265,11 @@ class UiWorkspaceService extends Service implements UiWorkspace {
+@@ -331,7 +332,11 @@ class UiWorkspaceService extends Service implements UiWorkspace {
      const recent = workspace.phase === 'ready' && sessions.phase === 'ready'
        ? recentWorkspace(workspace.items, sessions.byId)
        : undefined
@@ -1940,7 +2230,7 @@ index 4e9bb97fa8..bc487494ae 100644
      if (target === undefined) {
        if (initializeDraft) {
          this.notify({ kind: 'createFailed', message: this.ctx.locale.bind('workspace')('draft.workspaceRequired') })
-@@ -342,7 +347,10 @@ class UiWorkspaceService extends Service implements UiWorkspace {
+@@ -409,7 +414,10 @@ class UiWorkspaceService extends Service implements UiWorkspace {
      let initial: 'waiting' | 'connecting' | 'done' = 'waiting'
      const reconcile = (): void => {
        if (this.lifetime.signal.aborted) return
@@ -1952,7 +2242,7 @@ index 4e9bb97fa8..bc487494ae 100644
        if (initial !== 'waiting') return
        const workspace = this.workspaces.list.getSnapshot()
        const sessions = this.sessions.list.getSnapshot()
-@@ -351,6 +359,15 @@ class UiWorkspaceService extends Service implements UiWorkspace {
+@@ -418,6 +426,15 @@ class UiWorkspaceService extends Service implements UiWorkspace {
          initial = 'done'
          return
        }
@@ -1968,9 +2258,9 @@ index 4e9bb97fa8..bc487494ae 100644
        initial = 'connecting'
        void this.restoreSelection(workspace, sessions).then(
          () => { initial = 'done' },
-@@ -391,7 +408,11 @@ class UiWorkspaceService extends Service implements UiWorkspace {
+@@ -458,7 +475,11 @@ class UiWorkspaceService extends Service implements UiWorkspace {
        && !workspaces.archivedSessionIds.includes(summary.id)) {
-       sessionId = await this.reuseBlank(workspace.workspaceId, summary.id)
+       sessionId = await this.restoreBlank(workspace.workspaceId, summary.id)
      }
 -    let target = workspace?.workspaceId ?? recentWorkspace(workspaces.items, sessions.byId)
 +    // dshui patch: an explicit saved workspace still wins; without one, the
@@ -1981,7 +2271,7 @@ index 4e9bb97fa8..bc487494ae 100644
      if (target === undefined && workspaces.items.length === 0 && sessions.ids.length === 0) {
        const prepared = await this.initializeDefaultWorkspace(navigation)
        if (navigation.aborted) return
-@@ -504,4 +525,15 @@ function recentWorkspace(
+@@ -571,4 +592,15 @@ function recentWorkspace(
    return selected
  }
  
@@ -1998,10 +2288,10 @@ index 4e9bb97fa8..bc487494ae 100644
 +
  export { UiWorkspaceService }
 diff --git a/packages/client/ui-workspace/src/client/rows/Rows.tsx b/packages/client/ui-workspace/src/client/rows/Rows.tsx
-index 9179773872..e552b88400 100644
+index 216a6fc00f..ca5e4fbb5e 100644
 --- a/packages/client/ui-workspace/src/client/rows/Rows.tsx
 +++ b/packages/client/ui-workspace/src/client/rows/Rows.tsx
-@@ -644,7 +644,7 @@ export function SessionNodeItem({
+@@ -645,7 +645,7 @@ export function SessionNodeItem({
        </span>
        {/* A blank New Session row is a provisional placeholder: nothing has
            happened in it yet, so a "now" timestamp and the row verbs
@@ -2011,7 +2301,7 @@ index 9179773872..e552b88400 100644
        {!row.blank && (
          <span
 diff --git a/packages/client/ui-workspace/src/client/rows/WorkspaceBrowser.tsx b/packages/client/ui-workspace/src/client/rows/WorkspaceBrowser.tsx
-index 4567ad75d7..f7806c85cb 100644
+index df871654ee..e25cd37f61 100644
 --- a/packages/client/ui-workspace/src/client/rows/WorkspaceBrowser.tsx
 +++ b/packages/client/ui-workspace/src/client/rows/WorkspaceBrowser.tsx
 @@ -34,7 +34,7 @@ import type { WorkspaceBrowserProps } from '../contract/slots.ts'
@@ -2023,7 +2313,7 @@ index 4567ad75d7..f7806c85cb 100644
  } from '../tree.ts'
  import { ProjectRowItem, SearchResultItem, SessionNodeItem } from './Rows.tsx'
  import { AnimatedRows } from './AnimatedRows.tsx'
-@@ -255,6 +255,10 @@ type SessionTreeProps = Pick<
+@@ -291,6 +291,10 @@ type SessionTreeProps = Pick<
    onDeleteRequest: (workspaceId: WorkspaceId, currentTitle: string) => void
    /** Open the rename dialog from a row title double-click. */
    onSessionRenameRequest: (sessionId: SessionNode['id'], currentTitle: string) => void
@@ -2034,7 +2324,7 @@ index 4567ad75d7..f7806c85cb 100644
    /** One Session chosen from search that must be exposed and scrolled into view. */
    revealSessionId?: SessionId | undefined
    /** Acknowledge that the chosen Session row has been revealed. */
-@@ -286,7 +290,7 @@ function SessionTree({
+@@ -322,7 +326,7 @@ function SessionTree({
    renderSlot,
    insertWorkspaceBefore,
    nestWorkspaces, groupExpansion, setGroupExpanded,
@@ -2043,7 +2333,7 @@ index 4567ad75d7..f7806c85cb 100644
    revealSessionId, onSessionRevealed, shortcuts,
  }: SessionTreeProps) {
    const panelActive = usePanelInfo(info => info.activePanelId !== null)
-@@ -337,8 +341,8 @@ function SessionTree({
+@@ -376,8 +380,8 @@ function SessionTree({
      () => deriveGroups(list, workspaces, rowState, statuses, {
        expandedGroups,
        ungroupedOrder: ungroupedSessionIds,
@@ -2054,7 +2344,7 @@ index 4567ad75d7..f7806c85cb 100644
    )
    useEffect(() => {
      for (let key = revealGroup; key !== undefined; key = parents.get(key)) {
-@@ -629,6 +633,7 @@ function SessionTree({
+@@ -689,6 +693,7 @@ function SessionTree({
  function FlatList({
    list, sessionIds, rowState, onLeaveArchivedOnly, useSessionStatus, open, onSessionRenameRequest,
    usePanelInfo, setSessionOrder, workspaceReady, animationResetKey,
@@ -2062,7 +2352,7 @@ index 4567ad75d7..f7806c85cb 100644
    revealSessionId, onSessionRevealed, renderSlot, t,
  }: Pick<
    SessionTreeProps,
-@@ -636,6 +641,8 @@ function FlatList({
+@@ -696,6 +701,8 @@ function FlatList({
    | 'open'
    | 'onSessionRenameRequest'
    | 'renderSlot'
@@ -2071,7 +2361,7 @@ index 4567ad75d7..f7806c85cb 100644
    | 'usePanelInfo'
    | 'setSessionOrder'
    | 'workspaceReady'
-@@ -652,8 +659,8 @@ function FlatList({
+@@ -712,8 +719,8 @@ function FlatList({
    const panelActive = usePanelInfo(info => info.activePanelId !== null)
    const statuses = useSessionStatus(s => s)
    const rows = useMemo(
@@ -2082,7 +2372,7 @@ index 4567ad75d7..f7806c85cb 100644
    )
    const [drag, setDrag] = useState<DragState | null>(null)
    const dropCommitted = useRef(false)
-@@ -744,6 +751,8 @@ function SearchResults({
+@@ -804,6 +811,8 @@ function SearchResults({
    workspaces,
    archivedSessionIds,
    archivedFilter,
@@ -2091,7 +2381,7 @@ index 4567ad75d7..f7806c85cb 100644
    query,
    remote,
    resultLimit,
-@@ -756,6 +765,10 @@ function SearchResults({
+@@ -816,6 +825,10 @@ function SearchResults({
    archivedFilter: ArchivedFilter
    /** Unarchive an archived result row in place. */
    onUnarchive: (id: SessionNode['id']) => void
@@ -2102,7 +2392,7 @@ index 4567ad75d7..f7806c85cb 100644
    query: string
    remote: RemoteSearchState
    resultLimit: number
-@@ -776,8 +789,10 @@ function SearchResults({
+@@ -836,8 +849,10 @@ function SearchResults({
        statuses,
        currentRemote,
        resultLimit,
@@ -2114,15 +2404,15 @@ index 4567ad75d7..f7806c85cb 100644
    )
    const pending = currentRemote.status === 'loading'
    const currentId = panelActive
-@@ -862,6 +877,7 @@ export function WorkspaceBrowser({
+@@ -921,6 +936,7 @@ export function WorkspaceBrowser({
+   requestAddWorkspace,
    closeAddWorkspace,
    setDirectoryBusy,
-   dismissForkError,
 +  useDeletedSessions,
    renderSlot,
    t,
  }: WorkspaceBrowserProps) {
-@@ -887,6 +903,12 @@ export function WorkspaceBrowser({
+@@ -946,6 +962,12 @@ export function WorkspaceBrowser({
    const workspaceStreamState = useWorkspaces(state => state.state)
    const archivedSessionIds = useWorkspaces(state => state.archivedSessionIds)
    const pinnedSessionIds = useWorkspaces(state => state.pinnedSessionIds)
@@ -2135,7 +2425,7 @@ index 4567ad75d7..f7806c85cb 100644
    // Live occupancy of this surface's directory-flow hole (the same source the
    // flow reads): a composition without a picking affordance can add nothing.
    const directoryFlowAvailable = useDirectoryFlow(occupied => occupied)
-@@ -1352,6 +1374,8 @@ export function WorkspaceBrowser({
+@@ -1411,6 +1433,8 @@ export function WorkspaceBrowser({
                workspaces={workspaces}
                archivedSessionIds={archivedSessionIds}
                archivedFilter={archivedFilter}
@@ -2144,7 +2434,7 @@ index 4567ad75d7..f7806c85cb 100644
                query={normalizedQuery}
                remote={remoteSearch}
                resultLimit={searchResultLimit}
-@@ -1373,6 +1397,8 @@ export function WorkspaceBrowser({
+@@ -1432,6 +1456,8 @@ export function WorkspaceBrowser({
                  onSessionRenameRequest={requestSessionRename}
                  renderSlot={renderSlot}
                  setSessionOrder={saveSessionOrder}
@@ -2153,7 +2443,7 @@ index 4567ad75d7..f7806c85cb 100644
                  revealSessionId={revealSessionId}
                  onSessionRevealed={acknowledgeSessionReveal}
                  t={t}
-@@ -1391,6 +1417,8 @@ export function WorkspaceBrowser({
+@@ -1450,6 +1476,8 @@ export function WorkspaceBrowser({
                  workspaceReady={workspaceReady}
                  nestWorkspaces={groupBy === 'workspace-tree'}
                  animationResetKey={`${groupBy}/${orderBy}/${archivedFilter}`}
@@ -2462,10 +2752,10 @@ index eb67d0ebe3..f67fa7b46d 100644
  
    return {
 diff --git a/packages/client/ui-workspace/tests/apply.client.spec.ts b/packages/client/ui-workspace/tests/apply.client.spec.ts
-index 0e1024f119..e8b85ed80f 100644
+index 0d3278cdf0..f0fa5cc4c1 100644
 --- a/packages/client/ui-workspace/tests/apply.client.spec.ts
 +++ b/packages/client/ui-workspace/tests/apply.client.spec.ts
-@@ -20,6 +20,7 @@ import {
+@@ -21,6 +21,7 @@ import {
  } from '../src/client/contract/slots.ts'
  import { WorkspaceBrowser } from '../src/client/rows/WorkspaceBrowser.tsx'
  import { ArchiveSessionMenuItem, ArchiveSessionRowButton, SessionArchiveConfirmDialog } from '../src/client/session-actions/ArchiveSession.tsx'
@@ -2473,23 +2763,23 @@ index 0e1024f119..e8b85ed80f 100644
  import { ForkSessionMenuItem } from '../src/client/session-actions/ForkSession.tsx'
  import { PinSessionMenuItem, PinSessionRowButton } from '../src/client/session-actions/PinSession.tsx'
  import { RenameSessionMenuItem, SessionRenameDialog } from '../src/client/session-actions/RenameSession.tsx'
-@@ -234,8 +235,9 @@ describe('ui-workspace apply', () => {
+@@ -265,8 +266,9 @@ describe('ui-workspace apply', () => {
      await Promise.resolve()
      expect(after.slots.entries('conversation.hero.workspace')[0]!.component).toBe(WorkspacePicker)
      // The row actions follow the browser's own declaration, whenever it lands.
--    expect(after.slots.entries(MENU_ITEM)).toHaveLength(4)
+-    expect(after.slots.entries(MENU_ITEM)).toHaveLength(5)
 -    expect(after.slots.entries(ROW_ACTION)).toHaveLength(2)
-+    // dshui adds the delete entry beside the shipped pin/rename/fork/archive.
-+    expect(after.slots.entries(MENU_ITEM)).toHaveLength(5)
++    // dshui adds the delete entry beside the shipped pin/rename/fork/archive/session-id.
++    expect(after.slots.entries(MENU_ITEM)).toHaveLength(6)
 +    expect(after.slots.entries(ROW_ACTION)).toHaveLength(3)
      expect(after.slots.entries('shell.overlay')).toHaveLength(3)
    })
  
-@@ -257,10 +259,12 @@ describe('ui-workspace apply', () => {
-       ['rename', 200, RenameSessionMenuItem, 'workspace'],
+@@ -289,10 +291,12 @@ describe('ui-workspace apply', () => {
        ['fork', 300, ForkSessionMenuItem, 'workspace'],
        ['archive', 400, ArchiveSessionMenuItem, 'workspace'],
-+      ['delete', 450, DeleteSessionMenuItem, 'workspace'],
+       ['session-id', 450, SessionIdMenuItem, 'workspace'],
++      ['delete', 460, DeleteSessionMenuItem, 'workspace'],
      ])
      expect(rows(ROW_ACTION)).toEqual([
        ['archive', 100, ArchiveSessionRowButton, 'workspace'],
@@ -2498,35 +2788,35 @@ index 0e1024f119..e8b85ed80f 100644
      ])
      expect(rows('shell.overlay')).toEqual([
        ['workspace.session-rename', undefined, SessionRenameDialog, 'workspace'],
-@@ -764,8 +768,8 @@ describe('ui-workspace apply', () => {
+@@ -876,8 +880,8 @@ describe('ui-workspace apply', () => {
      declare(b.slots, 'sidebar.workspaces', 'conversation.hero.workspace', 'conversation.empty.workspace', 'shell.overlay')
      const fiber = b.ctx.plugin({ inject: [...inject], apply })
      await fiber.await()
--    expect(b.slots.entries(MENU_ITEM)).toHaveLength(4)
+-    expect(b.slots.entries(MENU_ITEM)).toHaveLength(5)
 -    expect(b.slots.entries(ROW_ACTION)).toHaveLength(2)
-+    expect(b.slots.entries(MENU_ITEM)).toHaveLength(5)
++    expect(b.slots.entries(MENU_ITEM)).toHaveLength(6)
 +    expect(b.slots.entries(ROW_ACTION)).toHaveLength(3)
      expect(b.slots.entries('shell.overlay')).toHaveLength(3)
      await fiber.dispose()
      expect(b.slots.entries('sidebar.workspaces')).toHaveLength(0)
 diff --git a/packages/client/ui-workspace/tests/rename-assembly.client.spec.tsx b/packages/client/ui-workspace/tests/rename-assembly.client.spec.tsx
-index 0187272d53..6056b36b07 100644
+index 274f595533..cdcecb9197 100644
 --- a/packages/client/ui-workspace/tests/rename-assembly.client.spec.tsx
 +++ b/packages/client/ui-workspace/tests/rename-assembly.client.spec.tsx
 @@ -123,7 +123,7 @@ describe('session rename through the assembled browser', () => {
      const trigger = within(row as HTMLElement).getByLabelText('会话“Persisted title”的操作')
      fireEvent.click(trigger)
      expect(view.getAllByRole('menuitem').map(item => item.textContent)).toEqual([
--      '置顶会话', '重命名', '分叉会话', '归档会话', 'Export action', 'Last action',
-+      '置顶会话', '重命名', '分叉会话', '归档会话', '删除会话', 'Export action', 'Last action',
+-      '置顶会话', '重命名', '分叉会话', '归档会话', '复制 Session ID', 'Export action', 'Last action',
++      '置顶会话', '重命名', '分叉会话', '归档会话', '复制 Session ID', '删除会话', 'Export action', 'Last action',
      ])
      expect(view.getAllByRole('separator')).toHaveLength(1)
      const last = view.getByRole('menuitem', { name: 'Last action' })
 diff --git a/packages/client/ui-workspace/tests/workspace-browser.client.spec.tsx b/packages/client/ui-workspace/tests/workspace-browser.client.spec.tsx
-index f88dd51e96..8704e5d448 100644
+index 4b62826cbc..924ed74f42 100644
 --- a/packages/client/ui-workspace/tests/workspace-browser.client.spec.tsx
 +++ b/packages/client/ui-workspace/tests/workspace-browser.client.spec.tsx
-@@ -136,6 +136,8 @@ function mount(overrides: Partial<WorkspaceBrowserProps> = {}) {
+@@ -137,6 +137,8 @@ function mount(overrides: Partial<WorkspaceBrowserProps> = {}) {
      createWorkspace: vi.fn(async () => workspace('created', [])),
      useDirectoryFlow: bindSnapshotSelector({ getSnapshot: () => true, subscribe: () => () => {} }),
      useHostInfo: selector => selector({ home: undefined, isLoopback: true }),
@@ -2536,46 +2826,58 @@ index f88dd51e96..8704e5d448 100644
      t,
      ...overrides,
 diff --git a/packages/client/ui-workspace/tsdown.config.ts b/packages/client/ui-workspace/tsdown.config.ts
-index c4bb255e57..b1838e5da4 100644
+index 7aa03cebc1..7f3b261154 100644
 --- a/packages/client/ui-workspace/tsdown.config.ts
 +++ b/packages/client/ui-workspace/tsdown.config.ts
-@@ -1,3 +1,3 @@
+@@ -1,3 +1,6 @@
  import { clientBundle } from '../tsdown.client.ts'
  
--export default clientBundle('@deepseek-ai/dsh-client-ui-workspace', ['lib/types/index.js'])
-+export default clientBundle('dshui-client-ui-workspace', ['lib/types/index.js'])
+-export default clientBundle(import.meta.dirname, ['lib/types/index.js'])
++export default clientBundle(import.meta.dirname, ['lib/types/index.js'], {
++  // dshui overlay: the profile row name is the row id patch.yml inserts.
++  pluginId: 'dshui-client-ui-workspace',
++})
 diff --git a/packages/extensions/cordis-client-runner/src/client/slot-catalog.ts b/packages/extensions/cordis-client-runner/src/client/slot-catalog.ts
-index e134f1d984..0c858193f5 100644
+index 50bcbe529a..df70bc0c7a 100644
 --- a/packages/extensions/cordis-client-runner/src/client/slot-catalog.ts
 +++ b/packages/extensions/cordis-client-runner/src/client/slot-catalog.ts
-@@ -176,7 +176,7 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
+@@ -182,7 +182,7 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
      ],
      replaceRisk: 'none',
      example: 'return {\n  inject: [\'slots\'],\n  apply(ctx) {\n    ctx.slots.inject(\'conversation.chat.assistant-actions\', () => ctx.slots.register(\n      { name: \'conversation.chat.assistant-actions\', id: \'my-entry\', order: 100, label: \'My entry\' },\n      () => React.createElement(\'div\', null, \'hello\'),\n    ))\n  },\n}',
--    source: 'packages/client/ui-chat/src/client/contract/slots.ts:414',
-+    source: 'packages/client/ui-chat/src/client/contract/slots.ts:425',
+-    source: 'packages/client/ui-chat/src/client/contract/slots.ts:441',
++    source: 'packages/client/ui-chat/src/client/contract/slots.ts:452',
    },
    {
      key: 'conversation.chat.commandview',
-@@ -224,7 +224,7 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
+@@ -233,7 +233,7 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
      occupants: [],
      replaceRisk: 'none',
      example: 'return {\n  inject: [\'slots\'],\n  apply(ctx) {\n    ctx.slots.inject(\'conversation.chat.commandview\', () => ctx.slots.register(\n      { name: \'conversation.chat.commandview\', key: \'<one key the owner dispatches>\' },\n      () => React.createElement(\'div\', null, \'hello\'),\n    ))\n  },\n}',
--    source: 'packages/client/ui-chat/src/client/contract/slots.ts:396',
-+    source: 'packages/client/ui-chat/src/client/contract/slots.ts:407',
+-    source: 'packages/client/ui-chat/src/client/contract/slots.ts:423',
++    source: 'packages/client/ui-chat/src/client/contract/slots.ts:434',
    },
    {
      key: 'conversation.chat.flow',
-@@ -267,7 +267,7 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
+@@ -279,7 +279,7 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
      ],
      replaceRisk: 'shadows-shipped-ui',
      example: 'return {\n  inject: [\'slots\'],\n  apply(ctx) {\n    ctx.slots.inject(\'conversation.chat.flow\', () => ctx.slots.register(\n      { name: \'conversation.chat.flow\' },\n      () => React.createElement(\'div\', null, \'hello\'),\n    ))\n  },\n}',
--    source: 'packages/client/ui-chat/src/client/contract/slots.ts:365',
-+    source: 'packages/client/ui-chat/src/client/contract/slots.ts:376',
+-    source: 'packages/client/ui-chat/src/client/contract/slots.ts:390',
++    source: 'packages/client/ui-chat/src/client/contract/slots.ts:401',
+   },
+   {
+     key: 'conversation.chat.message.images',
+@@ -325,7 +325,7 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
+     ],
+     replaceRisk: 'shadows-shipped-ui',
+     example: 'return {\n  inject: [\'slots\'],\n  apply(ctx) {\n    ctx.slots.inject(\'conversation.chat.message.images\', () => ctx.slots.register(\n      { name: \'conversation.chat.message.images\' },\n      () => React.createElement(\'div\', null, \'hello\'),\n    ))\n  },\n}',
+-    source: 'packages/client/ui-chat/src/client/contract/slots.ts:415',
++    source: 'packages/client/ui-chat/src/client/contract/slots.ts:426',
    },
    {
      key: 'conversation.chat.node',
-@@ -317,7 +317,7 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
+@@ -377,7 +377,7 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
      declaredBy: 'an entry in \'conversation.chat.flow\' (client-ui-chat), so it exists while that entry is mounted',
      occupants: [
        'client-ui-chat UserMessageNodeView key \'user\'',
@@ -2584,30 +2886,30 @@ index e134f1d984..0c858193f5 100644
        'client-ui-chat ContextMessageNodeView key \'context\'',
        'client-ui-chat TurnTriggerNodeView key \'turn-trigger\'',
        'client-ui-chat SystemPromptNodeView key \'system-prompt\'',
-@@ -338,7 +338,7 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
+@@ -398,7 +398,7 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
      ],
      replaceRisk: 'shadows-shipped-ui',
      example: 'return {\n  inject: [\'slots\'],\n  apply(ctx) {\n    ctx.slots.inject(\'conversation.chat.node\', () => ctx.slots.register(\n      { name: \'conversation.chat.node\', key: \'<one key the owner dispatches>\' },\n      () => React.createElement(\'div\', null, \'hello\'),\n    ))\n  },\n}',
--    source: 'packages/client/ui-chat/src/client/contract/slots.ts:377',
-+    source: 'packages/client/ui-chat/src/client/contract/slots.ts:388',
-   },
-   {
-     key: 'conversation.chat.reasoning.body',
-@@ -378,7 +378,7 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
-     ],
-     replaceRisk: 'shadows-shipped-ui',
-     example: 'return {\n  inject: [\'slots\'],\n  apply(ctx) {\n    ctx.slots.inject(\'conversation.chat.reasoning.body\', () => ctx.slots.register(\n      { name: \'conversation.chat.reasoning.body\' },\n      () => React.createElement(\'div\', null, \'hello\'),\n    ))\n  },\n}',
 -    source: 'packages/client/ui-chat/src/client/contract/slots.ts:402',
 +    source: 'packages/client/ui-chat/src/client/contract/slots.ts:413',
    },
    {
+     key: 'conversation.chat.reasoning.body',
+@@ -441,7 +441,7 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
+     ],
+     replaceRisk: 'shadows-shipped-ui',
+     example: 'return {\n  inject: [\'slots\'],\n  apply(ctx) {\n    ctx.slots.inject(\'conversation.chat.reasoning.body\', () => ctx.slots.register(\n      { name: \'conversation.chat.reasoning.body\' },\n      () => React.createElement(\'div\', null, \'hello\'),\n    ))\n  },\n}',
+-    source: 'packages/client/ui-chat/src/client/contract/slots.ts:429',
++    source: 'packages/client/ui-chat/src/client/contract/slots.ts:440',
+   },
+   {
      key: 'conversation.chat.turnTail',
-@@ -440,7 +440,65 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
+@@ -506,7 +506,68 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
      ],
      replaceRisk: 'none',
      example: 'return {\n  inject: [\'slots\'],\n  apply(ctx) {\n    ctx.slots.inject(\'conversation.chat.turnTail\', () => ctx.slots.register(\n      { name: \'conversation.chat.turnTail\', id: \'my-entry\', order: 100, label: \'My entry\' },\n      () => React.createElement(\'div\', null, \'hello\'),\n    ))\n  },\n}',
--    source: 'packages/client/ui-chat/src/client/contract/slots.ts:408',
-+    source: 'packages/client/ui-chat/src/client/contract/slots.ts:419',
+-    source: 'packages/client/ui-chat/src/client/contract/slots.ts:435',
++    source: 'packages/client/ui-chat/src/client/contract/slots.ts:446',
 +  },
 +  {
 +    key: 'conversation.chat.user-actions',
@@ -2642,13 +2944,15 @@ index e134f1d984..0c858193f5 100644
 +      'TurnLocation',
 +    ],
 +    standardProps: [
++      'useRemoteAccess: (action: RemoteEndpoint) => boolean',
 +      'useResource: UseResource',
 +      'useWorkspaces: SnapshotSelectorHook<WorkspaceSnapshot>',
 +      'usePanelInfo: UsePanelInfo',
 +      'useSessions: UseSessions',
 +      'useSessionStatus: UseSessionStatus',
 +      'useSessionRetainInfo: UseSessionRetainInfo',
-+      'useWorkspaces: SnapshotSelectorHook<WorkspaceSnapshot>',
++      'useSessionAccess: (sessionId: SessionId, action: RemoteEndpoint) => boolean',
++      'useWorkspaceAccess: (workspaceId: WorkspaceId, action: RemoteEndpoint) => boolean',
 +      'useChat: UseChat',
 +      'useConversation: UseConversation',
 +      'useInput: SnapshotSelectorHook<InputState>',
@@ -2656,6 +2960,7 @@ index e134f1d984..0c858193f5 100644
 +      'useSession: SessionSnapshotSelector',
 +      'sessionId: SessionId',
 +      'useProjection: UseProjection',
++      'useAccess: (action: RemoteEndpoint) => boolean',
 +      'useTrajectory: UseTrajectory',
 +    ],
 +    keyDomain: '',
@@ -2665,37 +2970,51 @@ index e134f1d984..0c858193f5 100644
 +    occupants: [],
 +    replaceRisk: 'none',
 +    example: 'return {\n  inject: [\'slots\'],\n  apply(ctx) {\n    ctx.slots.inject(\'conversation.chat.user-actions\', () => ctx.slots.register(\n      { name: \'conversation.chat.user-actions\', id: \'my-entry\', order: 100, label: \'My entry\' },\n      () => React.createElement(\'div\', null, \'hello\'),\n    ))\n  },\n}',
-+    source: 'packages/client/ui-chat/src/client/contract/slots.ts:441',
++    source: 'packages/client/ui-chat/src/client/contract/slots.ts:468',
+   },
+   {
+     key: 'conversation.chat.user.images',
+@@ -552,7 +613,7 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
+     ],
+     replaceRisk: 'shadows-shipped-ui',
+     example: 'return {\n  inject: [\'slots\'],\n  apply(ctx) {\n    ctx.slots.inject(\'conversation.chat.user.images\', () => ctx.slots.register(\n      { name: \'conversation.chat.user.images\' },\n      () => React.createElement(\'div\', null, \'hello\'),\n    ))\n  },\n}',
+-    source: 'packages/client/ui-chat/src/client/contract/slots.ts:417',
++    source: 'packages/client/ui-chat/src/client/contract/slots.ts:428',
    },
    {
      key: 'conversation.composer',
-@@ -1255,7 +1313,7 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
+@@ -1916,11 +1977,12 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
+       'useAccess: (action: RemoteEndpoint) => boolean',
+       'useTrajectory: UseTrajectory',
      ],
-     replaceRisk: 'shadows-shipped-ui',
-     example: 'return {\n  inject: [\'slots\'],\n  apply(ctx) {\n    ctx.slots.inject(\'conversation.message.images\', () => ctx.slots.register(\n      { name: \'conversation.message.images\' },\n      () => React.createElement(\'div\', null, \'hello\'),\n    ))\n  },\n}',
--    source: 'packages/client/ui-chat/src/client/contract/slots.ts:390',
-+    source: 'packages/client/ui-chat/src/client/contract/slots.ts:401',
-   },
-   {
-     key: 'conversation.plan-review.actions',
-@@ -3020,7 +3078,7 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
+-    keyDomain: 'fixed by the owner\'s key table { [Id in UserTextId]: { node: UserTextNode<Id> } }, already taken: command, file, folder, secret, session, skill, text',
++    keyDomain: 'fixed by the owner\'s key table { [Id in UserTextId]: { node: UserTextNode<Id> } }, already taken: command, file, folder, link, secret, session, skill, text',
+     hookContext: '',
+     slotInject: '',
+     declaredBy: 'factory \'conversation.user.text\' (client-ui-conversation), so it exists while that definition is registered',
+     occupants: [
++      'client-ui-chat UserLink key \'link\'',
+       'client-ui-conversation PlainUserText key \'text\'',
+       'client-ui-conversation SessionReference key \'session\'',
+       'client-ui-goal GoalCommandReference key \'command\'',
+@@ -3444,7 +3506,7 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
      ],
      replaceRisk: 'none',
      example: 'return {\n  inject: [\'slots\'],\n  apply(ctx) {\n    ctx.slots.inject(\'shell.quota-notice\', () => ctx.slots.register(\n      { name: \'shell.quota-notice\', select: owner => null },\n      () => React.createElement(\'div\', null, \'hello\'),\n    ))\n  },\n}',
--    source: 'packages/client/ui-chat/src/client/contract/slots.ts:422',
-+    source: 'packages/client/ui-chat/src/client/contract/slots.ts:433',
+-    source: 'packages/client/ui-chat/src/client/contract/slots.ts:449',
++    source: 'packages/client/ui-chat/src/client/contract/slots.ts:460',
    },
    {
      key: 'sidebar',
-@@ -4098,6 +4156,7 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
-       'client-ui-workspace RenameSessionMenuItem id \'rename\'',
+@@ -4583,6 +4645,7 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
        'client-ui-workspace ForkSessionMenuItem id \'fork\'',
        'client-ui-workspace ArchiveSessionMenuItem id \'archive\'',
+       'client-ui-workspace SessionIdMenuItem id \'session-id\'',
 +      'client-ui-workspace DeleteSessionMenuItem id \'delete\'',
      ],
      replaceRisk: 'none',
-     example: 'return {\n  inject: [\'slots\'],\n  apply(ctx) {\n    const copyLabel = \'Copy Session ID\' // Localize in the contributing package.\n    ctx.slots.inject(\'sidebar.workspaces.session.menu.item\', () => ctx.slots.register(\n      { name: \'sidebar.workspaces.session.menu.item\', id: \'copy-session-id\', order: 500 },\n      ({ sessionId, useMenuOpenState }) => {\n        const [, setMenuOpen] = useMenuOpenState()\n        return React.createElement(\n          \'button\',\n          { type: \'button\', role: \'menuitem\', onClick: () => { setMenuOpen(false); void navigator.clipboard.writeText(sessionId) } },\n          copyLabel,\n        )\n      },\n    ))\n  },\n}',
-@@ -4151,6 +4210,7 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
+     example: 'return {\n  inject: [\'slots\'],\n  apply(ctx) {\n    const copyLabel = \'Copy session title\' // Localize in the contributing package.\n    ctx.slots.inject(\'sidebar.workspaces.session.menu.item\', () => ctx.slots.register(\n      { name: \'sidebar.workspaces.session.menu.item\', id: \'copy-session-title\', order: 500 },\n      ({ displayTitle, useMenuOpenState }) => {\n        const [, setMenuOpen] = useMenuOpenState()\n        return React.createElement(\n          \'button\',\n          {\n            type: \'button\', role: \'menuitem\',\n            onClick: () => { setMenuOpen(false); void navigator.clipboard.writeText(displayTitle) },\n          },\n          copyLabel,\n        )\n      },\n    ))\n  },\n}',
+@@ -4638,6 +4701,7 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
      occupants: [
        'client-ui-workspace ArchiveSessionRowButton id \'archive\'',
        'client-ui-workspace PinSessionRowButton id \'pin\'',
