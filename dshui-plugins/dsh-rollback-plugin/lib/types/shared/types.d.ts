@@ -59,11 +59,11 @@ export interface RollbackFileChange {
     /** Session modification list: the file's current state matches an accept marker. */
     accepted?: boolean;
     /**
-     * The change is not attributable to this session's tool chain: another
-     * session, an external editor or bash wrote it. In the rollback preview these
-     * rows are left unselected by default so a rollback cannot clobber work this
-     * session never made; in the modification list they are already-accepted files
-     * changed outside this session.
+     * The rollback preview diff is workspace-wide, so it also lists files another
+     * session (or an editor/bash) touched since the snapshot. Those rows are
+     * marked `foreign` and are left unselected by default so a rollback cannot
+     * clobber work this session never made. The session modification list does
+     * not attribute changes at all and never sets this flag.
      */
     foreign?: boolean;
     createdAfterSnapshot?: boolean;
@@ -223,6 +223,11 @@ export interface RollbackSessionChangesValue {
     /** Binds this list to the worktree state captured while listing. */
     listId: string;
     baseline?: RollbackSessionBaseline;
+    /**
+     * Every worktree change against this session's accepted baseline, plus already
+     * accepted rows whose content still equals the baseline. Rows are not filtered
+     * by who wrote the change.
+     */
     changes: RollbackFileChange[];
     modifications: RollbackModification[];
     acceptedFiles: string[];

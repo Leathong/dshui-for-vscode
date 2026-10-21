@@ -10,10 +10,11 @@ import type { CallTracker } from './tracking.ts';
  *
  * The baseline is `refs/dsh/accepted`, so "what changed" is one
  * `git diff accepted` against the worktree and "is it accepted" is a blob
- * comparison. Per-call patches come from the tracked commit chain. Everything
- * the previous implementation needed — fingerprints, accept-time content
- * snapshots, cross-session activity windows and borrowed object stores — is
- * gone.
+ * comparison. Per-call patches come from the tracked commit chain and only
+ * annotate rows; the list itself is the whole worktree diff, not an
+ * attribution-filtered subset. Everything the previous implementation needed —
+ * fingerprints, accept-time content snapshots, cross-session activity windows
+ * and borrowed object stores — is gone.
  */
 export interface SessionChangesOptions {
     spawnTimeoutMs: number;
@@ -61,18 +62,17 @@ export declare class SessionChangeManager {
      * baseline, i.e. what this session accepted. One diff process; hunks are
      * intentionally omitted (the accepted group is a file list).
      *
-     * Suppression is per *attribution*, not per path: only paths this session
-     * itself re-wrote after accepting (`ownPending`) leave the accepted group.
-     * A path touched by another session keeps its accepted row and is reported
-     * through `warnings`, instead of silently masquerading as a change of ours.
+     * Suppression is purely path-based: a path that is still pending (it differs
+     * from the accepted baseline, so it is already in the unaccepted list) never
+     * appears twice. No authorship is inferred — the tracked chain is not
+     * authoritative, and guessing wrong would either hide a row or duplicate it.
      */
     private acceptedRows;
     private nestedRoots;
     /**
-     * Per-call patches of the session chain, with hunks and accept state. Also
-     * reports, per path, the post-image blob of the *newest* call and whether that
-     * call has a usable post-image — the caller uses it to attribute the worktree
-     * content to this session (or to somebody else).
+     * Per-call patches of the session chain, with hunks and accept state. A
+     * patch is accepted when its post-image blob equals the accepted blob of the
+     * same path. The chain only annotates rows; it never scopes the list.
      */
     private modifications;
     private locatePatch;

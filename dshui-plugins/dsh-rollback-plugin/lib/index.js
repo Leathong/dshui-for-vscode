@@ -1765,7 +1765,7 @@ var SessionChangeManager = class {
 		const isNestedPath = (rel) => nestedRoots.some((root) => rel === root || rel.startsWith(`${root}/`));
 		const nestedPaths = trackedPaths.filter(isNestedPath);
 		const plainPaths = trackedPaths.filter((rel) => !isNestedPath(rel));
-		const allViews = patchFileViews(await provider.withScratch(async (scratch) => {
+		const views = patchFileViews(await provider.withScratch(async (scratch) => {
 			await provider.readTree(scratch, accepted);
 			await provider.stagePaths(scratch, plainPaths);
 			await provider.stagePathsByContent(scratch, nestedPaths);
@@ -1774,8 +1774,6 @@ var SessionChangeManager = class {
 				indexFile: scratch
 			});
 		}), this.options.maxDiffHunksPerFile, this.options.maxDiffBytesPerFile);
-		const sessionPaths = new Set(trackedPaths);
-		const views = allViews.filter((view) => sessionPaths.has(view.path));
 		const probe = /* @__PURE__ */ new Map();
 		const changes = views.map((view) => {
 			probe.set(view.path, view.newBlob);
@@ -1795,12 +1793,9 @@ var SessionChangeManager = class {
 				...view.view.length > 0 ? { hunks: view.view } : {}
 			};
 		});
-		const { items: modifications, latestBlob, attributable } = await this.modifications(session, cwd, provider, accepted, views);
-		const ownPending = /* @__PURE__ */ new Set();
-		for (const change of changes) if (!(attributable.get(change.path) === true && latestBlob.get(change.path) !== probe.get(change.path))) ownPending.add(change.path);
-		const acceptedRows = await this.acceptedRows(cwd, provider, sessionBase, accepted, changes, ownPending, warnings);
-		const acceptedPaths = new Set(acceptedRows.map((row) => row.path));
-		for (const change of changes) if (acceptedPaths.has(change.path) && !ownPending.has(change.path)) change.foreign = true;
+		const modifications = await this.modifications(session, cwd, provider, accepted);
+		const pending = new Set(changes.map((change) => change.path));
+		const acceptedRows = await this.acceptedRows(provider, sessionBase, accepted, pending, warnings);
 		attachToolCalls(changes, modifications);
 		for (const rel of this.tracker.oversizedPaths(sessionId)) if (!probe.has(rel)) warnings.push(`"${rel}" exceeds maxBlobBytes and is only rollback-able at turn granularity`);
 		if (this.tracker.baseDegraded(sessionId)) warnings.push("the call chain baseline was captured after the session started; the first write to each path has no caller-level patch");
@@ -2147,12 +2142,12 @@ var SessionChangeManager = class {
 	* baseline, i.e. what this session accepted. One diff process; hunks are
 	* intentionally omitted (the accepted group is a file list).
 	*
-	* Suppression is per *attribution*, not per path: only paths this session
-	* itself re-wrote after accepting (`ownPending`) leave the accepted group.
-	* A path touched by another session keeps its accepted row and is reported
-	* through `warnings`, instead of silently masquerading as a change of ours.
+	* Suppression is purely path-based: a path that is still pending (it differs
+	* from the accepted baseline, so it is already in the unaccepted list) never
+	* appears twice. No authorship is inferred — the tracked chain is not
+	* authoritative, and guessing wrong would either hide a row or duplicate it.
 	*/
-	async acceptedRows(cwd, provider, sessionBase, accepted, changes, ownPending, warnings) {
+	async acceptedRows(provider, sessionBase, accepted, pending, warnings) {
 		if (sessionBase === void 0) return [];
 		const acceptedTree = await provider.treeOf(accepted).catch(() => void 0);
 		if (acceptedTree === void 0) {
@@ -2165,9 +2160,7 @@ var SessionChangeManager = class {
 			warnings.push("the accepted-file list could not be computed from the snapshot repository");
 			return [];
 		}
-		const foreign = changes.filter((change) => !ownPending.has(change.path) && entries.some((entry) => entry.path === change.path)).map((change) => change.path);
-		if (foreign.length > 0) warnings.push(`already-accepted path(s) changed outside this session's tool chain: ${summarize(foreign)}`);
-		return entries.filter((entry) => !ownPending.has(entry.path)).map((entry) => ({
+		return entries.filter((entry) => !pending.has(entry.path)).map((entry) => ({
 			path: entry.path,
 			absolutePath: provider.absolutePath(entry.path),
 			status: entry.status === "A" ? "created" : entry.status === "D" ? "deleted" : "modified",
@@ -2180,18 +2173,13 @@ var SessionChangeManager = class {
 		return this.snapshots.nestedRoots(provider.cwd, provider);
 	}
 	/**
-	* Per-call patches of the session chain, with hunks and accept state. Also
-	* reports, per path, the post-image blob of the *newest* call and whether that
-	* call has a usable post-image — the caller uses it to attribute the worktree
-	* content to this session (or to somebody else).
+	* Per-call patches of the session chain, with hunks and accept state. A
+	* patch is accepted when its post-image blob equals the accepted blob of the
+	* same path. The chain only annotates rows; it never scopes the list.
 	*/
-	async modifications(session, cwd, provider, accepted, views) {
+	async modifications(session, cwd, provider, accepted) {
 		const calls = await this.tracker.loadCalls(cwd, session.id);
-		if (calls.length === 0) return {
-			items: [],
-			latestBlob: /* @__PURE__ */ new Map(),
-			attributable: /* @__PURE__ */ new Map()
-		};
+		if (calls.length === 0) return [];
 		const commits = calls.map((call) => call.commit).filter((commit) => commit !== void 0);
 		const patches = commits.length > 0 ? await provider.diffTreePatches(commits, { context: this.options.diffContextLines }).catch(() => /* @__PURE__ */ new Map()) : /* @__PURE__ */ new Map();
 		const patched = [...new Set(calls.map((call) => call.path))];
@@ -2208,16 +2196,12 @@ var SessionChangeManager = class {
 			list.push(call);
 			byPath.set(call.path, list);
 		}
-		const latestBlob = /* @__PURE__ */ new Map();
-		const attributable = /* @__PURE__ */ new Map();
 		const result = [];
 		for (const call of calls) {
 			const view = patchFileViews(call.commit === void 0 ? "" : patches.get(call.commit) ?? "", this.options.maxDiffHunksPerFile, this.options.maxDiffBytesPerFile).find((item) => item.path === call.path);
 			const blob = blobs.get(call.callId);
 			const acceptedBlob = acceptedBlobs.get(call.path);
 			const later = (byPath.get(call.path) ?? []).filter((item) => item.seq > call.seq).map((item) => item.callId);
-			latestBlob.set(call.path, blob);
-			attributable.set(call.path, call.deleted === true || blob !== void 0 || call.commit !== void 0);
 			result.push({
 				modificationId: call.callId,
 				toolName: call.toolName === "write" ? "write" : "edit",
@@ -2234,11 +2218,7 @@ var SessionChangeManager = class {
 				...later.length > 0 ? { laterModificationIds: later } : {}
 			});
 		}
-		return {
-			items: result.sort((a, b) => a.seq - b.seq || a.turn - b.turn || a.step - b.step),
-			latestBlob,
-			attributable
-		};
+		return result.sort((a, b) => a.seq - b.seq || a.turn - b.turn || a.step - b.step);
 	}
 	async locatePatch(bound, provider, modificationId) {
 		const call = (await this.tracker.loadCalls(bound.cwd, bound.sessionId)).find((item) => item.callId === modificationId);
