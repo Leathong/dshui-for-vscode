@@ -59,11 +59,12 @@ export interface RollbackFileChange {
     /** Session modification list: the file's current state matches an accept marker. */
     accepted?: boolean;
     /**
-     * The rollback preview diff is workspace-wide, so it also lists files another
-     * session (or an editor/bash) touched since the snapshot. Those rows are
-     * marked `foreign` and are left unselected by default so a rollback cannot
-     * clobber work this session never made. The session modification list does
-     * not attribute changes at all and never sets this flag.
+     * The change is not attributable to this session's tool chain: another
+     * session, an external editor or bash wrote it (or overwrote it after this
+     * session's last call). In the rollback preview these rows are left
+     * unselected by default so a rollback cannot clobber work this session never
+     * made; in the session modification list the row is still listed but carries
+     * the 「非本会话改动」 badge.
      */
     foreign?: boolean;
     createdAfterSnapshot?: boolean;

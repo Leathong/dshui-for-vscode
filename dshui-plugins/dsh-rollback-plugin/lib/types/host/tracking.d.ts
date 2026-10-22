@@ -25,6 +25,17 @@ export declare const CHAIN_HEAD_REF = "refs/dsh/head";
  * gone or has been re-pointed at the chain tip.
  */
 export declare const CHAIN_BASE_REF = "refs/dsh/base";
+/**
+ * Session-start blobs for paths the chain base tree never captured.
+ *
+ * `refs/dsh/base` comes from `git add -A`, which skips ignored files (and paths
+ * excluded for commitless nested repositories). Without their session-start
+ * content the modification list can only describe such a file as newly created
+ * and undo would delete it, so the first write/edit intent on an unbaselined
+ * path records its current content here: one commit per flush, a tree entry per
+ * path, and no extra work at all for tracked files.
+ */
+export declare const CHAIN_PRE_REF = "refs/dsh/pre";
 /** A tool call whose path changed. `blob` is the content *after* the call. */
 export interface TrackedCall {
     callId: string;
@@ -79,6 +90,27 @@ export declare class CallTracker {
     /** Wait for every queued hash of one session (used before asserting on blobs). */
     settle(sessionId: string): Promise<void>;
     /**
+     * Record the session-start content of a path the next write/edit is about to
+     * replace, when the chain base tree does not contain it.
+     *
+     * `git add -A` refuses ignored paths, so a pre-existing file inside an
+     * ignored folder is absent from `refs/dsh/base`: the modification list could
+     * only call it "created" and show its whole content, and undo would delete
+     * it. Capturing the pre-image at the write/edit intent (before the tool
+     * mutates the file) restores the missing baseline. The read only happens on
+     * the first touch of an unbaselined path that already exists; tracked files
+     * are an in-memory set lookup and new files are a missing-file stat.
+     */
+    capturePreImage(target: FsTarget, actor: RollbackToolActor | undefined): Promise<void>;
+    /**
+     * Session-start blobs of paths the base tree never captured, keyed by path.
+     * In-memory entries win over `refs/dsh/pre` (which only catches up at flush).
+     */
+    preImageBlobs(cwd: string, sessionId: string): Promise<{
+        blobs: Map<string, string>;
+        oversized: string[];
+    }>;
+    /**
      * Ensure the session's chain base exists, capturing the full worktree once.
      * Called at turn start (before any tool call) and lazily as a fallback. When
      * calls were already recorded the base is post-write and `baseDegraded` is
@@ -88,8 +120,9 @@ export declare class CallTracker {
     /** True when the chain base was captured after calls were already recorded. */
     baseDegraded(sessionId: string): boolean;
     /**
-     * Freeze every pending call into `refs/dsh/head` with one fast-import. Returns
-     * the chain head commit, or undefined when git is unavailable.
+     * Freeze every pending call into `refs/dsh/head` and every new pre-image into
+     * `refs/dsh/pre` with one fast-import. Returns the chain head commit, or
+     * undefined when git is unavailable.
      */
     flush(sessionId: string): Promise<string | undefined>;
     /** Freeze every session with pending calls (turn end / shutdown best-effort). */
@@ -118,6 +151,23 @@ export declare class CallTracker {
     loadCalls(cwd: string, sessionId: string): Promise<TrackedCall[]>;
     /** Forget in-memory state (session close / tests). */
     reset(sessionId?: string): void;
+    /** Resolve an fs event to its session, workspace, absolute and relative path. */
+    private targetFor;
+    /**
+     * Load the set of paths the chain base tree contains, once per session. The
+     * base capture already runs `add -A`; this is one extra `ls-tree` at base
+     * creation (or the first unbaselined write after a restart) that lets every
+     * later intent classify its path without touching git.
+     */
+    private ensureBasePaths;
+    /** Blobs persisted in `refs/dsh/pre` (empty until the first flush). */
+    private persistedPreImages;
+    /**
+     * Whether this session already wrote the path before the current intent. A
+     * yes without a persisted pre-image means the path was created by the
+     * session, so its session-start state is "absent".
+     */
+    private writtenBefore;
     private track;
     /** Session base commit: a full worktree capture, committed once per session. */
     private createBase;

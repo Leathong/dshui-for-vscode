@@ -41,6 +41,76 @@ function attributionSession(ctx, session) {
 	}
 	return current;
 }
+/** The newest tracked write/edit call per path; `calls` is in chain order. */
+function newestCalls(calls) {
+	const newest = /* @__PURE__ */ new Map();
+	for (const call of calls) {
+		const previous = newest.get(call.path);
+		if (previous === void 0 || call.seq >= previous.seq) newest.set(call.path, call);
+	}
+	return newest;
+}
+/**
+* Post-image blob of each call, keyed by `callId`. Deletions map to
+* `undefined`; calls without a usable post-image are absent from the map so
+* callers can tell "the call removed the file" from "nothing recorded".
+*/
+async function callPostImages(provider, calls) {
+	const result = /* @__PURE__ */ new Map();
+	const pending = [];
+	for (const call of calls) {
+		if (call.deleted === true) {
+			result.set(call.callId, void 0);
+			continue;
+		}
+		if (call.blob !== void 0) {
+			result.set(call.callId, call.blob);
+			continue;
+		}
+		if (call.commit !== void 0) pending.push(call);
+	}
+	if (pending.length > 0) {
+		const hashes = await provider.blobHashes(pending.map((call) => ({
+			treeish: call.commit,
+			path: call.path
+		}))).catch(() => new Array(pending.length));
+		pending.forEach((call, index) => result.set(call.callId, hashes[index]));
+	}
+	return result;
+}
+/**
+* Paths whose current content cannot be attributed to this session's newest
+* write/edit call.
+*
+* A path without any tracked call was never written by this session's tools,
+* so it is foreign. A path whose newest call has no usable post-image
+* (oversized, superseded, never frozen) stays on this session's side (the
+* permissive legacy semantics). Otherwise the call's post-image must equal the
+* current blob; anything else — another session, an editor, bash, or a later
+* overwrite — is foreign.
+*
+* `current` optionally supplies the worktree blob of every path (the session
+* modification list already has it as `probe`); when omitted it is hashed in
+* one batch.
+*/
+async function foreignPaths(provider, calls, paths, current) {
+	const wanted = [...new Set(paths)];
+	const foreign = /* @__PURE__ */ new Set();
+	if (wanted.length === 0) return foreign;
+	const blobs = current ?? await provider.hashBlobs(wanted).catch(() => /* @__PURE__ */ new Map());
+	const newest = newestCalls(calls);
+	const postImages = await callPostImages(provider, [...newest.values()]);
+	for (const rel of wanted) {
+		const call = newest.get(rel);
+		if (call === void 0) {
+			foreign.add(rel);
+			continue;
+		}
+		if (!postImages.has(call.callId)) continue;
+		if (postImages.get(call.callId) !== blobs.get(rel)) foreign.add(rel);
+	}
+	return foreign;
+}
 //#endregion
 //#region lib/types/host/accept-base.js
 /**
@@ -84,6 +154,90 @@ var AcceptBase = class {
 		const provider = this.snapshots.providerFor(cwd, sessionId);
 		if (!await provider.available().catch(() => false)) return void 0;
 		return provider.readRef(ACCEPTED_REF);
+	}
+	/**
+	* Ensure the accepted baseline and fold in the session-start blobs of paths
+	* the chain base tree never captured (ignored files, paths excluded from
+	* `add -A` for commitless nested repositories).
+	*
+	* These entries describe the state *before* the session wrote the file, so
+	* they belong to the baseline exactly like the chain-base tree. Entries are
+	* only added when the accepted tree does not know the path yet, which keeps a
+	* user accept authoritative. Every write is a compare-and-swap and the
+	* common, fully merged case is one `cat-file --batch-check`.
+	*/
+	async ensureBaseline(cwd, sessionId, seedTree, preImages) {
+		const baseline = await this.ensure(cwd, sessionId, seedTree, { requireSeed: true });
+		if (baseline === void 0 || preImages.size === 0) return {
+			commit: baseline,
+			merged: [],
+			skipped: []
+		};
+		const provider = this.snapshots.providerFor(cwd, sessionId);
+		const paths = [...preImages.keys()];
+		const missingAgainst = async (commit) => {
+			const hashes = await provider.blobHashes(paths.map((path) => ({
+				treeish: commit,
+				path
+			}))).catch(() => paths.map(() => void 0));
+			return paths.filter((_, index) => hashes[index] === void 0);
+		};
+		const skipped = [];
+		let current = baseline;
+		for (let attempt = 0; attempt < 2; attempt += 1) {
+			const missing = await missingAgainst(current);
+			if (missing.length === 0) return {
+				commit: current,
+				merged: [],
+				skipped
+			};
+			const tree = await provider.withScratch(async (scratch) => {
+				await provider.readTree(scratch, current);
+				const entries = missing.map((path) => ({
+					path,
+					blob: preImages.get(path)
+				})).filter((entry) => entry.blob !== void 0);
+				try {
+					await provider.updateIndexInfo(scratch, entries);
+				} catch {
+					for (const entry of entries) try {
+						await provider.updateIndexInfo(scratch, [entry]);
+					} catch {
+						skipped.push(entry.path);
+					}
+				}
+				return provider.writeTree(scratch);
+			}).catch(() => void 0);
+			if (tree === void 0) return {
+				commit: current,
+				merged: [],
+				skipped
+			};
+			const merged = missing.filter((path) => !skipped.includes(path));
+			if (merged.length === 0) return {
+				commit: current,
+				merged: [],
+				skipped
+			};
+			const commit = await provider.commitTree(tree, [current], `dsh baseline pre-images\nsession=${sessionId}\npaths=${merged.join(",")}\n`);
+			if (await provider.updateRef("refs/dsh/accepted", commit, current)) return {
+				commit,
+				merged,
+				skipped
+			};
+			const winner = await provider.readRef(ACCEPTED_REF);
+			if (winner === void 0) return {
+				commit: current,
+				merged: [],
+				skipped
+			};
+			current = winner;
+		}
+		return {
+			commit: current,
+			merged: [],
+			skipped
+		};
 	}
 	/** The accepted blob of one path (undefined = absent from the accepted tree). */
 	async acceptedBlob(cwd, sessionId, relPath) {
@@ -763,6 +917,31 @@ var GitProvider = class {
 		if (result.code !== 0) return void 0;
 		const hash = result.stdout.trim();
 		return isHash(hash) ? hash : void 0;
+	}
+	/**
+	* Every blob in a tree-ish as `path → blob hash` (one `ls-tree` process).
+	* Reads `refs/dsh/pre`, the session-start contents `git add -A` refused to
+	* index (ignored paths).
+	*/
+	async treeBlobs(treeish, signal) {
+		const result = await this.run([
+			"ls-tree",
+			"-r",
+			"-z",
+			treeish
+		], signal);
+		if (result.code !== 0) return /* @__PURE__ */ new Map();
+		const entries = /* @__PURE__ */ new Map();
+		for (const record of result.stdout.split("\0")) {
+			if (record === "") continue;
+			const tab = record.indexOf("	");
+			if (tab < 0) continue;
+			const meta = record.slice(0, tab).split(" ");
+			if (meta[1] !== "blob") continue;
+			const blob = meta[2];
+			if (blob !== void 0 && isHash(blob)) entries.set(record.slice(tab + 1), blob);
+		}
+		return entries;
 	}
 	/**
 	* Resolve many `<treeish>:<path>` lookups in **one** process
@@ -1726,6 +1905,544 @@ async function replayPatches(provider, scratchIndex, base, steps, skip) {
 	return { ok: true };
 }
 //#endregion
+//#region lib/types/host/tracking.js
+/**
+* Per-call tracking: one write/edit tool call becomes one commit on
+* `refs/dsh/head`, built entirely from git objects (docs/git-only-plan.md §2.2,
+* §2.3).
+*
+* The hot path is a single `git hash-object -w` per call; the blob hash and the
+* call metadata stay in memory until `flush()` freezes them into the chain with
+* one `git fast-import`. Nothing is written to JSON, and no ref moves per call —
+* so the former per-modification ledger rewrite (and its write amplification)
+* is gone.
+*
+* Known limitation: two *concurrent* calls writing the same path can be hashed
+* out of order, so the earlier call may record the later call's content. This
+* cannot be repaired after the fact (the intermediate content is already gone);
+* it only affects which of the two patches appears to carry the change, never
+* the final state.
+*/
+const CHAIN_HEAD_REF = "refs/dsh/head";
+/**
+* The session's *list* base: the tree captured at its first turn start. Unlike
+* `head` this ref never moves, so the accepted-file list can be diffed against
+* it after a host restart, when the in-memory anchor (`track.base`) is either
+* gone or has been re-pointed at the chain tip.
+*/
+const CHAIN_BASE_REF = "refs/dsh/base";
+/**
+* Session-start blobs for paths the chain base tree never captured.
+*
+* `refs/dsh/base` comes from `git add -A`, which skips ignored files (and paths
+* excluded for commitless nested repositories). Without their session-start
+* content the modification list can only describe such a file as newly created
+* and undo would delete it, so the first write/edit intent on an unbaselined
+* path records its current content here: one commit per flush, a tree entry per
+* path, and no extra work at all for tracked files.
+*/
+const CHAIN_PRE_REF = "refs/dsh/pre";
+const DEFAULT_MAX_CALLS = 500;
+/** key=value lines recorded in each commit message (parsed back by `loadCalls`). */
+function encodeMessage(call) {
+	return [
+		`callId=${call.callId}`,
+		`tool=${call.toolName}`,
+		`turn=${call.turn}`,
+		`step=${call.step}`,
+		`seq=${call.seq}`,
+		`paths=${call.path}`,
+		...call.deleted === true ? ["deleted=1"] : [],
+		""
+	].join("\n");
+}
+function decodeMessage(commit, message) {
+	const fields = /* @__PURE__ */ new Map();
+	for (const line of message.split("\n")) {
+		const index = line.indexOf("=");
+		if (index <= 0) continue;
+		fields.set(line.slice(0, index), line.slice(index + 1));
+	}
+	const callId = fields.get("callId");
+	const callPath = fields.get("paths");
+	if (callId === void 0 || callPath === void 0) return void 0;
+	const deleted = fields.get("deleted") === "1";
+	return {
+		callId,
+		toolName: fields.get("tool") ?? "unknown",
+		path: callPath,
+		turn: Number(fields.get("turn") ?? "0") || 0,
+		step: Number(fields.get("step") ?? "0") || 0,
+		seq: Number(fields.get("seq") ?? "-1"),
+		timestamp: 0,
+		...deleted ? { deleted: true } : {},
+		commit
+	};
+}
+var CallTracker = class {
+	ctx;
+	snapshots;
+	options;
+	tracks = /* @__PURE__ */ new Map();
+	maxCalls;
+	constructor(ctx, snapshots, options) {
+		this.ctx = ctx;
+		this.snapshots = snapshots;
+		this.options = options;
+		this.maxCalls = Math.max(1, options.maxCallsPerSession ?? DEFAULT_MAX_CALLS);
+	}
+	/**
+	* Record one observed write/edit. Synchronous by contract (`fs/observed` is a
+	* synchronous event); the blob write runs on the session's serial queue.
+	*
+	* Paths inside a nested git repository are tracked like any other: the call is
+	* captured from the file's bytes, so the embedded worktree never has to be
+	* indexed (the list path stages those paths from their blob).
+	*/
+	observe(target, observation, actor) {
+		const resolved = this.targetFor(target, actor);
+		if (resolved === void 0) return;
+		const { session, cwd, abs, rel: relPath } = resolved;
+		const callId = actor?.callId;
+		const toolName = actor?.name;
+		const track = this.track(session.id, cwd);
+		const position = positionForCall(session, callId);
+		const fallback = sessionTurnPosition(session);
+		const observed = statIdentity(abs);
+		const call = {
+			callId,
+			toolName,
+			path: relPath,
+			turn: position?.turn ?? fallback?.turn ?? 0,
+			step: position?.step ?? fallback?.step ?? 0,
+			seq: position?.seq ?? fallback?.seq ?? -1,
+			timestamp: Date.now(),
+			...observed === void 0 ? { deleted: true } : { identity: observed.key }
+		};
+		track.calls.push(call);
+		this.trim(track);
+		const kind = observation.kind;
+		track.queue = track.queue.then(async () => {
+			if (kind === "absent") return;
+			const current = statIdentity(abs);
+			if (current === void 0) {
+				call.superseded = true;
+				delete call.deleted;
+				return;
+			}
+			if (observed !== void 0 && current.key !== observed.key) {
+				call.superseded = true;
+				return;
+			}
+			if (current.size > this.options.maxBlobBytes) {
+				call.oversized = true;
+				return;
+			}
+			const blob = await this.snapshots.providerFor(cwd, session.id).writeBlob(abs).catch(() => void 0);
+			if (blob === void 0) call.deleted = true;
+			else call.blob = blob;
+		}).catch(() => void 0);
+	}
+	/** Wait for every queued hash of one session (used before asserting on blobs). */
+	async settle(sessionId) {
+		await this.tracks.get(sessionId)?.queue.catch(() => void 0);
+	}
+	/**
+	* Record the session-start content of a path the next write/edit is about to
+	* replace, when the chain base tree does not contain it.
+	*
+	* `git add -A` refuses ignored paths, so a pre-existing file inside an
+	* ignored folder is absent from `refs/dsh/base`: the modification list could
+	* only call it "created" and show its whole content, and undo would delete
+	* it. Capturing the pre-image at the write/edit intent (before the tool
+	* mutates the file) restores the missing baseline. The read only happens on
+	* the first touch of an unbaselined path that already exists; tracked files
+	* are an in-memory set lookup and new files are a missing-file stat.
+	*/
+	async capturePreImage(target, actor) {
+		const resolved = this.targetFor(target, actor);
+		if (resolved === void 0) return;
+		const { session, cwd, abs, rel } = resolved;
+		const track = this.track(session.id, cwd);
+		if (track.preImages.has(rel)) return;
+		if (track.basePaths?.has(rel) === true) return;
+		const provider = this.snapshots.providerFor(cwd, session.id);
+		if (!await provider.available().catch(() => false)) return;
+		if (!await this.ensureBasePaths(track, provider)) return;
+		if (track.basePaths?.has(rel) === true) return;
+		const stored = (await this.persistedPreImages(track, provider)).get(rel);
+		if (stored !== void 0) {
+			track.preImages.set(rel, {
+				blob: stored,
+				persisted: true
+			});
+			return;
+		}
+		const stat = statLstat(abs);
+		if (stat === void 0) {
+			track.preImages.set(rel, { absent: true });
+			return;
+		}
+		if (!stat.isFile() || stat.isSymbolicLink()) return;
+		if (await this.writtenBefore(track, provider, rel)) {
+			track.preImages.set(rel, { absent: true });
+			return;
+		}
+		if (stat.size > this.options.maxBlobBytes) {
+			track.preImages.set(rel, { oversized: true });
+			return;
+		}
+		const blob = await provider.writeBlob(abs).catch(() => void 0);
+		if (blob !== void 0) track.preImages.set(rel, { blob });
+	}
+	/**
+	* Session-start blobs of paths the base tree never captured, keyed by path.
+	* In-memory entries win over `refs/dsh/pre` (which only catches up at flush).
+	*/
+	async preImageBlobs(cwd, sessionId) {
+		const track = this.track(sessionId, cwd);
+		const provider = this.snapshots.providerFor(cwd, sessionId);
+		const blobs = new Map(await this.persistedPreImages(track, provider).catch(() => /* @__PURE__ */ new Map()));
+		const oversized = [];
+		for (const [rel, value] of track.preImages) if ("blob" in value) blobs.set(rel, value.blob);
+		else if ("oversized" in value) oversized.push(rel);
+		return {
+			blobs,
+			oversized
+		};
+	}
+	/**
+	* Ensure the session's chain base exists, capturing the full worktree once.
+	* Called at turn start (before any tool call) and lazily as a fallback. When
+	* calls were already recorded the base is post-write and `baseDegraded` is
+	* set: the first call on each path then has no caller-level baseline.
+	*/
+	async ensureBase(sessionId, cwd) {
+		const track = this.track(sessionId, cwd);
+		if (track.base !== void 0 && track.head !== void 0) return track.head;
+		const provider = this.snapshots.providerFor(cwd, sessionId);
+		if (!await provider.available().catch(() => false)) return void 0;
+		return this.createBase(track, provider);
+	}
+	/** True when the chain base was captured after calls were already recorded. */
+	baseDegraded(sessionId) {
+		return this.tracks.get(sessionId)?.baseDegraded === true;
+	}
+	/**
+	* Freeze every pending call into `refs/dsh/head` and every new pre-image into
+	* `refs/dsh/pre` with one fast-import. Returns the chain head commit, or
+	* undefined when git is unavailable.
+	*/
+	async flush(sessionId) {
+		const track = this.tracks.get(sessionId);
+		if (track === void 0) return void 0;
+		await track.queue.catch(() => void 0);
+		const pending = track.calls.filter((call) => call.commit === void 0);
+		const freshPre = [...track.preImages.entries()].filter(([, value]) => "blob" in value && value.persisted !== true);
+		if (pending.length === 0 && freshPre.length === 0) return track.head;
+		const provider = this.snapshots.providerFor(track.cwd, track.sessionId);
+		if (!await provider.available().catch(() => false)) return track.head;
+		const base = track.head ?? track.base ?? await this.createBase(track, provider);
+		if (base === void 0) return void 0;
+		const committed = pending.filter((call) => call.blob !== void 0 || call.deleted === true);
+		const lines = [];
+		let parent = base;
+		committed.forEach((call, index) => {
+			const message = encodeMessage(call);
+			const length = Buffer.byteLength(message, "utf8");
+			lines.push("commit refs/dsh/head");
+			lines.push(`mark :${index + 1}`);
+			lines.push(`committer dsh <dsh@local> ${Math.floor(call.timestamp / 1e3)} +0000`);
+			lines.push(`data ${length}`);
+			lines.push(message);
+			lines.push(`from ${parent}`);
+			lines.push(call.deleted === true || call.blob === void 0 ? `D ${call.path}` : `M 100644 ${call.blob} ${call.path}`);
+			lines.push("");
+			parent = `:${index + 1}`;
+		});
+		let previousPre;
+		if (freshPre.length > 0) {
+			previousPre = await provider.readRef(CHAIN_PRE_REF).catch(() => void 0);
+			const message = `dsh pre-images\nsession=${track.sessionId}\n`;
+			lines.push("commit refs/dsh/pre");
+			lines.push(`committer dsh <dsh@local> ${Math.floor(Date.now() / 1e3)} +0000`);
+			lines.push(`data ${Buffer.byteLength(message, "utf8")}`);
+			lines.push(message);
+			if (previousPre !== void 0) lines.push(`from ${previousPre}`);
+			for (const [rel, value] of freshPre) if ("blob" in value) lines.push(`M 100644 ${value.blob} ${rel}`);
+			lines.push("");
+		}
+		if (lines.length === 0) return base;
+		await provider.fastImport(lines.join("\n"));
+		if (freshPre.length > 0) {
+			const persisted = track.persistedPre ?? (previousPre === void 0 ? /* @__PURE__ */ new Map() : await provider.treeBlobs(previousPre).catch(() => /* @__PURE__ */ new Map()));
+			for (const [rel, value] of freshPre) if ("blob" in value) {
+				persisted.set(rel, value.blob);
+				value.persisted = true;
+			}
+			track.persistedPre = persisted;
+		}
+		const head = await provider.readRef(CHAIN_HEAD_REF);
+		if (head === void 0) return base;
+		if (committed.length > 0) {
+			const list = await provider.run([
+				"rev-list",
+				"--reverse",
+				`${base}..${head}`
+			]);
+			const commits = list.code === 0 ? list.stdout.split("\n").filter(Boolean) : [];
+			committed.forEach((call, index) => {
+				const commit = commits[index];
+				if (commit !== void 0) call.commit = commit;
+			});
+		}
+		track.head = head;
+		return head;
+	}
+	/** Freeze every session with pending calls (turn end / shutdown best-effort). */
+	async flushAll() {
+		for (const sessionId of [...this.tracks.keys()]) await this.flush(sessionId).catch(() => void 0);
+	}
+	/** Calls of the current process, oldest first (frozen entries carry `commit`). */
+	calls(sessionId) {
+		return this.tracks.get(sessionId)?.calls ?? [];
+	}
+	/** Session base commit (the chain's first parent), when known. */
+	base(sessionId) {
+		return this.tracks.get(sessionId)?.base;
+	}
+	/**
+	* The session's list base (`refs/dsh/base`), which is the chain *root* no
+	* matter how the in-memory anchor was set. Chains created before the ref
+	* existed are backfilled once from the parentless root of `refs/dsh/head`.
+	* Returns undefined when the session has no chain at all.
+	*/
+	async readBase(cwd, sessionId) {
+		const provider = this.snapshots.providerFor(cwd, sessionId);
+		if (!await provider.available().catch(() => false)) return this.tracks.get(sessionId)?.base;
+		const stored = await provider.readRef(CHAIN_BASE_REF);
+		if (stored !== void 0) return stored;
+		const head = await provider.readRef("refs/dsh/head") ?? this.tracks.get(sessionId)?.head;
+		if (head === void 0) return this.tracks.get(sessionId)?.base;
+		const roots = await provider.roots(head).catch(() => []);
+		const root = roots[roots.length - 1];
+		if (root === void 0) return void 0;
+		await provider.updateRef(CHAIN_BASE_REF, root).catch(() => false);
+		return root;
+	}
+	head(sessionId) {
+		return this.tracks.get(sessionId)?.head;
+	}
+	/** Paths touched by this session's calls (hashed form, forward slashes). */
+	pathsForSession(sessionId) {
+		return new Set(this.calls(sessionId).map((call) => call.path));
+	}
+	/** Paths seen but not captured because they exceeded `maxBlobBytes`. */
+	oversizedPaths(sessionId) {
+		return new Set(this.calls(sessionId).filter((call) => call.oversized === true).map((call) => call.path));
+	}
+	/**
+	* Cold read: rebuild the call list from the commit chain, so patch identity
+	* survives a process restart for everything already frozen (unfrozen calls
+	* are intentionally lost — docs/git-only-plan.md §4.4).
+	*/
+	async loadCalls(cwd, sessionId) {
+		const live = this.tracks.get(sessionId);
+		if (live !== void 0) {
+			if (!live.calls.some((call) => call.commit === void 0) && live.calls.length > 0) return live.calls;
+		}
+		const provider = this.snapshots.providerFor(cwd, sessionId);
+		if (!await provider.available().catch(() => false)) return live?.calls ?? [];
+		const log = await provider.run([
+			"log",
+			"--format=%H%x00%ct%x00%B%x1e",
+			CHAIN_HEAD_REF
+		]);
+		if (log.code !== 0) return live?.calls ?? [];
+		const calls = [];
+		for (const record of log.stdout.split("")) {
+			const parts = record.split("\0");
+			if (parts.length < 3) continue;
+			const commit = (parts[0] ?? "").trim();
+			const timestamp = Number(parts[1] ?? "0") * 1e3;
+			const call = decodeMessage(commit, parts[2] ?? "");
+			if (call === void 0) continue;
+			call.timestamp = timestamp;
+			calls.push(call);
+		}
+		calls.reverse();
+		if (live !== void 0 && calls.length > 0) {
+			for (const call of live.calls) if (call.commit !== void 0 && !calls.some((item) => item.callId === call.callId)) calls.push(call);
+		}
+		return calls;
+	}
+	/** Forget in-memory state (session close / tests). */
+	reset(sessionId) {
+		if (sessionId === void 0) this.tracks.clear();
+		else this.tracks.delete(sessionId);
+	}
+	/** Resolve an fs event to its session, workspace, absolute and relative path. */
+	targetFor(target, actor) {
+		const callId = actor?.callId;
+		const toolName = actor?.name;
+		const agentSession = actor?.agent?.session;
+		if (callId === void 0 || agentSession === void 0) return void 0;
+		if (toolName !== "write" && toolName !== "edit") return void 0;
+		const session = attributionSession(this.ctx, agentSession);
+		const cwd = session.header?.cwd;
+		if (cwd === void 0 || cwd === "") return void 0;
+		const abs = this.ctx.fs.processPath(target);
+		const rel = relativeToCwd(cwd, abs);
+		if (rel === void 0) return void 0;
+		return {
+			session,
+			cwd,
+			abs,
+			rel
+		};
+	}
+	/**
+	* Load the set of paths the chain base tree contains, once per session. The
+	* base capture already runs `add -A`; this is one extra `ls-tree` at base
+	* creation (or the first unbaselined write after a restart) that lets every
+	* later intent classify its path without touching git.
+	*/
+	async ensureBasePaths(track, provider) {
+		if (track.basePaths !== void 0) return true;
+		track.basePathsLoading ??= (async () => {
+			const base = await this.readBase(track.cwd, track.sessionId).catch(() => void 0);
+			if (base === void 0) return;
+			const tree = await provider.treeOf(base).catch(() => void 0);
+			if (tree === void 0) return;
+			const paths = await provider.pathsInTree(tree).catch(() => void 0);
+			if (paths !== void 0) track.basePaths = new Set(paths);
+		})();
+		await track.basePathsLoading.catch(() => void 0);
+		return track.basePaths !== void 0;
+	}
+	/** Blobs persisted in `refs/dsh/pre` (empty until the first flush). */
+	async persistedPreImages(track, provider) {
+		if (track.persistedPre !== void 0) return track.persistedPre;
+		const ref = await provider.readRef(CHAIN_PRE_REF).catch(() => void 0);
+		track.persistedPre = ref === void 0 ? /* @__PURE__ */ new Map() : await provider.treeBlobs(ref).catch(() => /* @__PURE__ */ new Map());
+		return track.persistedPre;
+	}
+	/**
+	* Whether this session already wrote the path before the current intent. A
+	* yes without a persisted pre-image means the path was created by the
+	* session, so its session-start state is "absent".
+	*/
+	async writtenBefore(track, provider, rel) {
+		if (track.calls.some((call) => call.path === rel)) return true;
+		return (await this.loadCalls(track.cwd, track.sessionId).catch(() => [])).some((call) => call.path === rel);
+	}
+	track(sessionId, cwd) {
+		const existing = this.tracks.get(sessionId);
+		if (existing !== void 0 && path.resolve(existing.cwd) === path.resolve(cwd)) return existing;
+		const created = {
+			sessionId,
+			cwd,
+			calls: [],
+			preImages: /* @__PURE__ */ new Map(),
+			queue: Promise.resolve()
+		};
+		this.tracks.set(sessionId, created);
+		return created;
+	}
+	/** Session base commit: a full worktree capture, committed once per session. */
+	async createBase(track, provider) {
+		const existing = await provider.readRef(CHAIN_HEAD_REF);
+		if (existing !== void 0) {
+			track.base = existing;
+			track.head = existing;
+			if (await provider.readRef("refs/dsh/base") === void 0) {
+				const roots = await provider.roots(existing).catch(() => []);
+				const root = roots[roots.length - 1];
+				if (root !== void 0) await provider.updateRef(CHAIN_BASE_REF, root).catch(() => false);
+			}
+			return existing;
+		}
+		if (track.calls.length > 0) track.baseDegraded = true;
+		const tree = await provider.captureTree().catch(() => void 0);
+		if (tree === void 0) return void 0;
+		const commit = await provider.commitTree(tree, [], `dsh base\nsession=${track.sessionId}\n`);
+		await provider.updateRef(CHAIN_HEAD_REF, commit);
+		await provider.updateRef(CHAIN_BASE_REF, commit).catch(() => false);
+		track.base = commit;
+		track.head = commit;
+		track.basePaths = new Set(await provider.pathsInTree(tree).catch(() => []));
+		return commit;
+	}
+	trim(track) {
+		const overflow = track.calls.length - this.maxCalls;
+		if (overflow > 0) track.calls.splice(0, overflow);
+	}
+};
+/**
+* Workspace-relative path with forward slashes, or undefined when the path is
+* outside the workspace (or is the workspace root itself).
+*/
+function relativeToCwd(cwd, abs) {
+	const rel = path.relative(cwd, abs);
+	if (rel === "" || rel === ".." || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)) return void 0;
+	return rel.split(path.sep).join("/");
+}
+function statLstat(abs) {
+	try {
+		return fs.lstatSync(abs);
+	} catch {
+		return;
+	}
+}
+/**
+* Cheap synchronous identity of a file, captured when the observation arrives.
+* Re-checked before hashing so a call whose content was already replaced by a
+* later call is dropped instead of mis-attributed.
+*/
+function statIdentity(abs) {
+	try {
+		const stat = fs.statSync(abs);
+		if (!stat.isFile()) return void 0;
+		return {
+			key: `${stat.size}:${stat.mtimeMs}:${stat.ino}`,
+			size: stat.size
+		};
+	} catch {
+		return;
+	}
+}
+/** The session-log position of a tool call (turn/step/seq). */
+function positionForCall(session, callId) {
+	const events = session.snapshotEvents();
+	for (let index = events.length - 1; index >= 0; index -= 1) {
+		const event = events[index];
+		if (event === void 0 || event.type !== "tool/call") continue;
+		const data = event.data;
+		if (data.callId !== callId) continue;
+		return {
+			turn: data.turn ?? 0,
+			step: data.step ?? 0,
+			seq: event.seq
+		};
+	}
+}
+/** Fallback coordinates: the session's currently open turn/step. */
+function sessionTurnPosition(session) {
+	let turn = 0;
+	let step = 0;
+	let seq = -1;
+	for (const event of session.snapshotEvents()) {
+		seq = event.seq;
+		if (event.type === "turn/start") turn = event.data.turn;
+		if (event.type === "step/start") step = event.data.step;
+	}
+	return turn > 0 ? {
+		turn,
+		step,
+		seq
+	} : void 0;
+}
+//#endregion
 //#region lib/types/host/session-changes.js
 var SessionChangeManager = class {
 	ctx;
@@ -1735,6 +2452,13 @@ var SessionChangeManager = class {
 	safety;
 	options;
 	bound = /* @__PURE__ */ new Map();
+	/** Last effective baseline tree per session, keyed by chain base + pre-image paths. */
+	baselineTrees = /* @__PURE__ */ new Map();
+	/**
+	* In-flight boundary captures are tracked inside SnapshotManager's per-session
+	* capture queue; the list awaits `waitForCaptures()` before reading a
+	* boundary so it never uses a tree whose capture is still running.
+	*/
 	constructor(ctx, snapshots, tracker, accepts, safety, options) {
 		this.ctx = ctx;
 		this.snapshots = snapshots;
@@ -1742,6 +2466,76 @@ var SessionChangeManager = class {
 		this.accepts = accepts;
 		this.safety = safety;
 		this.options = options;
+	}
+	/**
+	* Record the turn-end boundary when a turn finishes. The capture runs after
+	* `turn/end` is appended, so it contains everything the turn produced;
+	* changes made afterwards are excluded while the session stays idle. The
+	* O(worktree) capture is skipped when the session never created a snapshot
+	* repository (nothing could be listed anyway). Subagent sessions fold into
+	* their main session.
+	*/
+	noteTurnEnd(session, turn) {
+		if (isSubagentSession(session)) return void 0;
+		const cwd = session.header.cwd;
+		if (cwd === void 0 || cwd === "") return void 0;
+		if (!this.snapshots.hasRepository(cwd, session.id)) return void 0;
+		return this.snapshots.captureTurnEnd(session, turn).catch(() => void 0);
+	}
+	/**
+	* Record the gap between the previous turn's end and this turn's start.
+	*
+	* Only a transition whose previous event is a completed `turn/end` (after
+	* skipping restore markers) is safe: for an aborted/mid-turn close the
+	* previous boundary would include that turn's work as "gap". A fork seed
+	* marker is also rejected (its parent boundary is not this session's turn).
+	*/
+	noteTurnStart(session, turn, startTree) {
+		if (isSubagentSession(session)) return void 0;
+		const cwd = session.header.cwd;
+		if (cwd === void 0 || cwd === "") return void 0;
+		if (!this.snapshots.hasRepository(cwd, session.id)) return void 0;
+		const events = session.snapshotEvents();
+		let start = -1;
+		for (let index = events.length - 1; index >= 0; index -= 1) {
+			const event = events[index];
+			if (event.type === "turn/start" && event.data.turn === turn) {
+				start = index;
+				break;
+			}
+		}
+		if (start < 0) return void 0;
+		let index = start - 1;
+		while (index >= 0) {
+			const event = events[index];
+			if (event.type !== "session/end-seed") break;
+			if (event.data.inherited === true) return void 0;
+			index -= 1;
+		}
+		const previous = index >= 0 ? events[index] : void 0;
+		if (previous?.type !== "turn/end") return void 0;
+		return this.snapshots.recordGap(session, turn, startTree, previous.time).catch(() => void 0);
+	}
+	/**
+	* Record the session's end boundary when it is disposed (closed, or the
+	* host shuts down). This is the fallback for a close that happened inside a
+	* turn, where no turn-end capture covers the final state. Sessions that
+	* never wrote through the tracked chain and never accepted anything have no
+	* modification list to protect, so the O(worktree) capture is skipped.
+	*/
+	noteSessionEnd(session) {
+		if (isSubagentSession(session)) return void 0;
+		const cwd = session.header.cwd;
+		if (cwd === void 0 || cwd === "") return void 0;
+		const sessionId = session.id;
+		if (!this.snapshots.hasRepository(cwd, sessionId)) return void 0;
+		return (async () => {
+			const provider = this.snapshots.providerFor(cwd, sessionId);
+			if (!await provider.available().catch(() => false)) return;
+			const [head, accepted] = await Promise.all([provider.readRef(CHAIN_HEAD_REF).catch(() => void 0), provider.readRef(ACCEPTED_REF).catch(() => void 0)]);
+			if (head === void 0 && accepted === void 0) return;
+			await this.snapshots.captureEnd(session);
+		})().catch(() => void 0);
 	}
 	async sessionChanges(sessionId) {
 		const live = this.liveSession(sessionId);
@@ -1753,14 +2547,23 @@ var SessionChangeManager = class {
 		const provider = this.snapshots.providerFor(cwd, sessionId);
 		if (!await provider.available().catch(() => false)) return failure("rollback-failed", "the isolated git snapshot repository is unavailable for this workspace", { sessionId });
 		await this.tracker.flush(sessionId);
-		const sessionBase = await this.seedTree(sessionId, cwd);
-		if (sessionBase === void 0) warnings.push("this session has no chain base, so already-accepted files cannot be listed");
-		const accepted = await this.accepts.ensure(cwd, sessionId, sessionBase, { requireSeed: true });
+		const chainBase = await this.seedTree(sessionId, cwd);
+		if (chainBase === void 0) warnings.push("this session has no chain base, so already-accepted files cannot be listed");
+		const pre = await this.tracker.preImageBlobs(cwd, sessionId).catch(() => ({
+			blobs: /* @__PURE__ */ new Map(),
+			oversized: []
+		}));
+		const baselineTree = chainBase === void 0 ? void 0 : await this.baselineWithPreImages(provider, sessionId, chainBase, pre.blobs, warnings);
+		const seeded = await this.accepts.ensureBaseline(cwd, sessionId, baselineTree, pre.blobs);
+		const accepted = seeded.commit;
 		if (accepted === void 0) {
-			if (sessionBase === void 0) return ok(this.emptyValue(session, warnings));
+			if (chainBase === void 0) return ok(this.emptyValue(session, warnings));
 			return failure("rollback-failed", "no accepted baseline could be established for this session", { sessionId });
 		}
-		const trackedPaths = [...new Set((await this.tracker.loadCalls(cwd, sessionId)).map((call) => call.path))];
+		if (seeded.skipped.length > 0) warnings.push(`the session-start content of ${summarize(seeded.skipped)} could not be folded into the baseline; those files are listed as newly created`);
+		for (const rel of pre.oversized) warnings.push(`"${rel}" is in an ignored path and exceeds maxBlobBytes; its session-start content was not captured, so the whole file is listed`);
+		const calls = await this.tracker.loadCalls(cwd, sessionId);
+		const trackedPaths = [...new Set(calls.map((call) => call.path))];
 		const nestedRoots = await this.nestedRoots(provider);
 		const isNestedPath = (rel) => nestedRoots.some((root) => rel === root || rel.startsWith(`${root}/`));
 		const nestedPaths = trackedPaths.filter(isNestedPath);
@@ -1793,9 +2596,21 @@ var SessionChangeManager = class {
 				...view.view.length > 0 ? { hunks: view.view } : {}
 			};
 		});
-		const modifications = await this.modifications(session, cwd, provider, accepted);
-		const pending = new Set(changes.map((change) => change.path));
-		const acceptedRows = await this.acceptedRows(provider, sessionBase, accepted, pending, warnings);
+		const foreign = await foreignPaths(provider, calls, changes.map((change) => change.path), probe);
+		for (const change of changes) if (foreign.has(change.path)) change.foreign = true;
+		await this.snapshots.waitForCaptures(cwd, sessionId);
+		const gapState = await this.snapshots.gapState(cwd, sessionId).catch(() => ({}));
+		const hidden = await this.dropGapChanges(provider, changes, probe, gapState, warnings);
+		const idle = sessionIdleEnd(session);
+		if (idle !== void 0) {
+			const boundary = idle.turnEnded ? await this.snapshots.turnEndBoundary(cwd, sessionId).catch(() => void 0) : await this.snapshots.endBoundary(cwd, sessionId).catch(() => void 0);
+			const endTree = boundary !== void 0 && boundary.createdAt + 1e3 >= idle.endedAt ? boundary.tree : void 0;
+			const boundaryHidden = await this.dropAfterBoundaryChanges(provider, changes, probe, idle.endedAt, idle.turnEnded ? "turn" : "session", endTree, warnings);
+			for (const rel of boundaryHidden) hidden.add(rel);
+		}
+		const modifications = (await this.modifications(provider, accepted, calls, baselineTree, pre.blobs)).filter((item) => !hidden.has(item.path));
+		const pending = new Set([...changes.map((change) => change.path), ...hidden]);
+		const acceptedRows = await this.acceptedRows(provider, baselineTree, accepted, pending, warnings);
 		attachToolCalls(changes, modifications);
 		for (const rel of this.tracker.oversizedPaths(sessionId)) if (!probe.has(rel)) warnings.push(`"${rel}" exceeds maxBlobBytes and is only rollback-able at turn granularity`);
 		if (this.tracker.baseDegraded(sessionId)) warnings.push("the call chain baseline was captured after the session started; the first write to each path has no caller-level patch");
@@ -1805,9 +2620,11 @@ var SessionChangeManager = class {
 			sessionId,
 			cwd,
 			accepted,
-			...sessionBase === void 0 ? {} : { sessionBase },
+			...baselineTree === void 0 ? {} : { sessionBase: baselineTree },
+			preImages: pre.blobs,
 			probe,
 			changes,
+			excluded: new Set(hidden),
 			createdAt: Date.now()
 		});
 		while (this.bound.size > 32) {
@@ -1886,6 +2703,10 @@ var SessionChangeManager = class {
 		const provider = this.snapshots.providerFor(bound.value.cwd, bound.value.sessionId);
 		const rel = safeRel(provider, request.path);
 		if (rel === void 0) return failure("path-not-in-snapshot", `path "${request.path}" is not a valid workspace path`, { sessionId: request.sessionId });
+		if (bound.value.excluded.has(rel)) return failure("workspace-changed", `"${rel}" was changed outside this session's turns and is not part of the rollback scope`, {
+			sessionId: request.sessionId,
+			paths: [rel]
+		});
 		const outcome = await this.withUndo(bound.value, [rel], async () => {
 			if (await this.accepts.acceptedBlob(bound.value.cwd, bound.value.sessionId, rel) === void 0) {
 				await fs.promises.rm(provider.absolutePath(rel), { force: true });
@@ -1917,6 +2738,10 @@ var SessionChangeManager = class {
 		const located = await this.locatePatch(bound.value, provider, request.modificationId);
 		if (located === void 0) return failure("rollback-failed", `patch "${request.modificationId}" is no longer known`, { sessionId: request.sessionId });
 		const rel = located.call.path;
+		if (bound.value.excluded.has(rel)) return failure("workspace-changed", `"${rel}" was changed outside this session's turns and is not part of the rollback scope`, {
+			sessionId: request.sessionId,
+			paths: [rel]
+		});
 		let results = [];
 		const outcome = await this.withUndo(bound.value, [rel], async () => {
 			const chain = (await this.tracker.loadCalls(bound.value.cwd, bound.value.sessionId)).filter((call) => call.path === rel && call.commit !== void 0);
@@ -1929,7 +2754,7 @@ var SessionChangeManager = class {
 				if (blob !== void 0 && blob === acceptedBlob) continue;
 				steps.push({
 					path: rel,
-					patch: await this.callPatch(provider, call)
+					patch: await this.callPatch(provider, call, bound.value.sessionBase, bound.value.preImages)
 				});
 				ids.push(call.callId);
 			}
@@ -1975,6 +2800,10 @@ var SessionChangeManager = class {
 		const provider = this.snapshots.providerFor(bound.value.cwd, bound.value.sessionId);
 		const rel = safeRel(provider, request.path);
 		if (rel === void 0) return failure("path-not-in-snapshot", `path "${request.path}" is not a valid workspace path`, { sessionId: request.sessionId });
+		if (bound.value.excluded.has(rel)) return failure("workspace-changed", `"${rel}" was changed outside this session's turns and is not part of the rollback scope`, {
+			sessionId: request.sessionId,
+			paths: [rel]
+		});
 		let undone = 0;
 		let conflict;
 		const outcome = await this.withUndo(bound.value, [rel], async () => {
@@ -2121,6 +2950,58 @@ var SessionChangeManager = class {
 		if (base === void 0) return void 0;
 		return this.snapshots.providerFor(cwd, sessionId).treeOf(base).catch(() => void 0);
 	}
+	/**
+	* The chain-base tree with the session-start contents of paths the base
+	* capture could never see (ignored files, excluded nested paths) added on
+	* top. This is the baseline both the accepted seed and the "already
+	* accepted" group compare against.
+	*
+	* A path that would fall under a gitlink in the base tree cannot also be a
+	* file (a non-materialized nested repo): those stay on the whole-file
+	* behaviour and are reported once as a warning.
+	*/
+	async baselineWithPreImages(provider, sessionId, baseTree, preImages, warnings) {
+		if (preImages.size === 0) return baseTree;
+		const key = `${baseTree}\0${[...preImages.keys()].sort().join("\0")}`;
+		const cached = this.baselineTrees.get(sessionId);
+		if (cached !== void 0 && cached.key === key) return cached.tree;
+		const skipped = [];
+		try {
+			const tree = await provider.withScratch(async (scratch) => {
+				await provider.readTree(scratch, baseTree);
+				const entries = [...preImages].map(([path, blob]) => ({
+					path,
+					blob
+				}));
+				try {
+					await provider.updateIndexInfo(scratch, entries);
+				} catch {
+					for (const entry of entries) try {
+						await provider.updateIndexInfo(scratch, [entry]);
+					} catch {
+						skipped.push(entry.path);
+					}
+				}
+				return provider.writeTree(scratch);
+			});
+			if (skipped.length > 0) warnings.push(`the session-start content of ${summarize(skipped)} is outside the baseline tree; those files are listed as newly created`);
+			else {
+				this.baselineTrees.set(sessionId, {
+					key,
+					tree
+				});
+				while (this.baselineTrees.size > 64) {
+					const oldest = this.baselineTrees.keys().next().value;
+					if (oldest === void 0) break;
+					this.baselineTrees.delete(oldest);
+				}
+			}
+			return tree;
+		} catch {
+			warnings.push("session-start content for ignored paths could not be merged into the baseline tree; those files are listed as newly created");
+			return baseTree;
+		}
+	}
 	/** A list with nothing to show (no chain, no accept baseline yet). */
 	emptyValue(session, warnings) {
 		return {
@@ -2136,6 +3017,97 @@ var SessionChangeManager = class {
 			acceptedModifications: [],
 			warnings: [...new Set(warnings)]
 		};
+	}
+	/**
+	* Drop foreign rows whose current content was last changed outside a turn.
+	*
+	* `refs/dsh/gap` holds the cumulative content of paths whose last gap change
+	* produced a file; `refs/dsh/gap-deleted` holds paths whose last gap change
+	* removed one. Ownership is checked first, so a path a turn wrote again (even
+	* back to the old gap content) is never dropped here. Paths absent from both
+	* trees were not observed in a gap and stay listed.
+	*/
+	async dropGapChanges(provider, changes, probe, state, warnings) {
+		const hidden = /* @__PURE__ */ new Set();
+		const candidates = changes.filter((change) => change.foreign === true);
+		if (candidates.length === 0) return hidden;
+		const { gapTree, deletedTree } = state;
+		if (gapTree === void 0 && deletedTree === void 0) return hidden;
+		const specs = [];
+		if (gapTree !== void 0) for (const change of candidates) specs.push({
+			treeish: gapTree,
+			path: change.path
+		});
+		if (deletedTree !== void 0) for (const change of candidates) specs.push({
+			treeish: deletedTree,
+			path: change.path
+		});
+		const hashes = await provider.blobHashes(specs).catch(() => void 0);
+		if (hashes === void 0) return hidden;
+		const gapOffset = gapTree === void 0 ? -1 : 0;
+		const deletedOffset = deletedTree === void 0 ? -1 : gapTree === void 0 ? 0 : candidates.length;
+		candidates.forEach((change, index) => {
+			const current = probe.get(change.path);
+			if (current === void 0) {
+				if (deletedOffset >= 0 && hashes[deletedOffset + index] !== void 0) hidden.add(change.path);
+				return;
+			}
+			if (gapOffset >= 0) {
+				const gapBlob = hashes[gapOffset + index];
+				if (gapBlob !== void 0 && gapBlob === current) hidden.add(change.path);
+			}
+		});
+		if (hidden.size === 0) return hidden;
+		for (let index = changes.length - 1; index >= 0; index -= 1) if (hidden.has(changes[index].path)) changes.splice(index, 1);
+		warnings.push(`${hidden.size} file(s) were changed outside a session turn and are not listed: ${summarize([...hidden])}`);
+		return hidden;
+	}
+	/**
+	* Drop foreign rows written after the current idle boundary (a completed
+	* turn, or a session-end fallback when the close happened inside a turn).
+	*
+	* The primary boundary is the tree captured at that boundary: a row present
+	* there whose current blob differs (including a deletion) was modified after
+	* the turn/session ended. A row absent from the tree is ambiguous — `add -A`
+	* skips ignored and excluded paths, so it may have existed at the boundary
+	* without being recorded — and only the file mtime can prove it appeared
+	* later.
+	*
+	* When no boundary tree exists, the file mtime against the boundary event is
+	* the fallback for every candidate; a deleted file has no mtime and stays
+	* listed in that case.
+	*
+	* Only rows already proven foreign are candidates: a path whose content still
+	* matches this session's newest tracked post-image stays listed either way.
+	* The hidden paths are removed from `changes`; the caller keeps them out of
+	* the accepted group so the same path cannot reappear there.
+	*/
+	async dropAfterBoundaryChanges(provider, changes, probe, boundaryAt, label, boundaryTree, warnings) {
+		const candidates = changes.filter((change) => change.foreign === true);
+		const hidden = /* @__PURE__ */ new Set();
+		if (candidates.length === 0) return hidden;
+		const boundaryHashes = boundaryTree === void 0 ? void 0 : await provider.blobHashes(candidates.map((change) => ({
+			treeish: boundaryTree,
+			path: change.path
+		}))).catch(() => void 0);
+		if (boundaryTree !== void 0 && boundaryHashes !== void 0) await Promise.all(candidates.map(async (change, index) => {
+			const boundaryBlob = boundaryHashes[index];
+			if (boundaryBlob === probe.get(change.path)) return;
+			if (boundaryBlob !== void 0) {
+				hidden.add(change.path);
+				return;
+			}
+			const stat = await fs.promises.stat(change.absolutePath).catch(() => void 0);
+			if (stat !== void 0 && stat.mtimeMs > boundaryAt) hidden.add(change.path);
+		}));
+		else await Promise.all(candidates.map(async (change) => {
+			const stat = await fs.promises.stat(change.absolutePath).catch(() => void 0);
+			if (stat !== void 0 && stat.mtimeMs > boundaryAt) hidden.add(change.path);
+		}));
+		if (hidden.size === 0) return hidden;
+		for (let index = changes.length - 1; index >= 0; index -= 1) if (hidden.has(changes[index].path)) changes.splice(index, 1);
+		warnings.push(`${hidden.size} file(s) were modified after this ${label} ended and are not listed: ${summarize([...hidden])}`);
+		return hidden;
 	}
 	/**
 	* Accepted rows: paths whose accepted content differs from the session
@@ -2176,9 +3148,13 @@ var SessionChangeManager = class {
 	* Per-call patches of the session chain, with hunks and accept state. A
 	* patch is accepted when its post-image blob equals the accepted blob of the
 	* same path. The chain only annotates rows; it never scopes the list.
+	*
+	* The first call on an ignored path has a parent tree that lacks the file
+	* (`add -A` skipped it), so its chain patch is a whole-file "added" patch.
+	* When the session-start blob is known the patch is recomputed from the
+	* baseline tree, which turns it back into the actual modification.
 	*/
-	async modifications(session, cwd, provider, accepted) {
-		const calls = await this.tracker.loadCalls(cwd, session.id);
+	async modifications(provider, accepted, calls, baselineTree, preImages) {
 		if (calls.length === 0) return [];
 		const commits = calls.map((call) => call.commit).filter((commit) => commit !== void 0);
 		const patches = commits.length > 0 ? await provider.diffTreePatches(commits, { context: this.options.diffContextLines }).catch(() => /* @__PURE__ */ new Map()) : /* @__PURE__ */ new Map();
@@ -2198,7 +3174,8 @@ var SessionChangeManager = class {
 		}
 		const result = [];
 		for (const call of calls) {
-			const view = patchFileViews(call.commit === void 0 ? "" : patches.get(call.commit) ?? "", this.options.maxDiffHunksPerFile, this.options.maxDiffBytesPerFile).find((item) => item.path === call.path);
+			let view = patchFileViews(call.commit === void 0 ? "" : patches.get(call.commit) ?? "", this.options.maxDiffHunksPerFile, this.options.maxDiffBytesPerFile).find((item) => item.path === call.path);
+			if (view?.status === "added" && call.commit !== void 0 && baselineTree !== void 0 && preImages?.has(call.path) === true) view = await this.baselinePatch(provider, baselineTree, call.commit, call.path) ?? view;
 			const blob = blobs.get(call.callId);
 			const acceptedBlob = acceptedBlobs.get(call.path);
 			const later = (byPath.get(call.path) ?? []).filter((item) => item.seq > call.seq).map((item) => item.callId);
@@ -2223,7 +3200,7 @@ var SessionChangeManager = class {
 	async locatePatch(bound, provider, modificationId) {
 		const call = (await this.tracker.loadCalls(bound.cwd, bound.sessionId)).find((item) => item.callId === modificationId);
 		if (call === void 0) return void 0;
-		const patch = await this.callPatch(provider, call);
+		const patch = await this.callPatch(provider, call, bound.sessionBase, bound.preImages);
 		const view = patchFileViews(patch, this.options.maxDiffHunksPerFile, this.options.maxDiffBytesPerFile).find((item) => item.path === call.path);
 		return {
 			call,
@@ -2260,7 +3237,18 @@ var SessionChangeManager = class {
 		}
 		return result;
 	}
-	async callPatch(provider, call) {
+	/**
+	* The patch between the session baseline and one call, restricted to its
+	* path. Used when the call's chain parent lacks the file (an ignored path):
+	* the chain patch would add the whole file while the baseline already holds
+	* its session-start content.
+	*/
+	async baselinePatch(provider, baselineTree, commit, rel) {
+		const patch = await this.renderPatch(provider, baselineTree, commit, rel);
+		if (patch === "") return void 0;
+		return patchFileViews(patch, this.options.maxDiffHunksPerFile, this.options.maxDiffBytesPerFile).find((item) => item.path === rel);
+	}
+	async callPatch(provider, call, baselineTree, preImages) {
 		if (call.commit === void 0) return "";
 		const result = await provider.run([
 			"diff-tree",
@@ -2272,6 +3260,24 @@ var SessionChangeManager = class {
 			call.commit,
 			"--",
 			call.path
+		]);
+		if (result.code !== 0) return "";
+		if (baselineTree === void 0 || preImages?.has(call.path) !== true) return result.stdout;
+		if (patchFileViews(result.stdout, this.options.maxDiffHunksPerFile, this.options.maxDiffBytesPerFile).find((item) => item.path === call.path)?.status !== "added") return result.stdout;
+		const delta = await this.renderPatch(provider, baselineTree, call.commit, call.path);
+		return delta === "" ? result.stdout : delta;
+	}
+	/** Raw `diff` output for a baseline-to-call patch (kept as text for replay). */
+	async renderPatch(provider, baselineTree, commit, rel) {
+		const result = await provider.run([
+			"diff",
+			"--no-renames",
+			"--full-index",
+			`--unified=${this.options.diffContextLines}`,
+			baselineTree,
+			commit,
+			"--",
+			rel
 		]);
 		return result.code === 0 ? result.stdout : "";
 	}
@@ -2379,6 +3385,28 @@ function attachToolCalls(changes, modifications) {
 /** The turn the session started at (first `turn/start`). */
 function sessionStartTurn(session) {
 	return (session.snapshotEvents().find((item) => item.type === "turn/start")?.data)?.turn ?? 0;
+}
+function sessionIdleEnd(session) {
+	const events = session.snapshotEvents();
+	let last = events.length - 1;
+	let restored = false;
+	while (last >= 0) {
+		const event = events[last];
+		if (event.type !== "session/end-seed") break;
+		if (event.data.inherited === true) return void 0;
+		restored = true;
+		last -= 1;
+	}
+	if (last < 0) return void 0;
+	const event = events[last];
+	if (event.type === "turn/end") return {
+		endedAt: event.time,
+		turnEnded: true
+	};
+	if (restored) return {
+		endedAt: event.time,
+		turnEnded: false
+	};
 }
 //#endregion
 //#region lib/types/host/restore.js
@@ -2719,66 +3747,18 @@ var RollbackRestore = class {
 	}
 	/**
 	* Attribute every previewed change to this session's tool-call chain and flag
-	* the rest as `foreign`.
-	*
-	* A path is ours when the newest tracked call for it has no usable post-image
-	* (oversized, superseded, never frozen — the permissive legacy semantics) or
-	* when the worktree still matches that post-image. Everything else was
-	* written by another session or outside the tool chain, including a file this
-	* session wrote and somebody else overwrote afterwards.
+	* the rest as `foreign` (see `foreignPaths`).
 	*/
 	async attributeChanges(provider, calls, changes) {
 		if (changes.length === 0) return [];
-		const current = await provider.hashBlobs(changes.map((change) => change.path)).catch(() => /* @__PURE__ */ new Map());
-		const newest = /* @__PURE__ */ new Map();
-		for (const call of calls) {
-			const previous = newest.get(call.path);
-			if (previous === void 0 || call.seq >= previous.seq) newest.set(call.path, call);
-		}
-		const postImages = await this.callPostImages(provider, [...newest.values()]);
-		const foreign = [];
+		const foreign = await foreignPaths(provider, calls, changes.map((change) => change.path));
+		const paths = [];
 		for (const change of changes) {
-			const call = newest.get(change.path);
-			if (call === void 0) {
-				change.foreign = true;
-				foreign.push(change.path);
-				continue;
-			}
-			if (!postImages.has(call.callId)) continue;
-			if (postImages.get(call.callId) !== current.get(change.path)) {
-				change.foreign = true;
-				foreign.push(change.path);
-			}
+			if (!foreign.has(change.path)) continue;
+			change.foreign = true;
+			paths.push(change.path);
 		}
-		return foreign;
-	}
-	/**
-	* Post-image blob of each call, keyed by `callId`. Deletions map to
-	* `undefined`; calls without a usable post-image are absent from the map so
-	* callers can tell "the call removed the file" from "nothing recorded".
-	*/
-	async callPostImages(provider, calls) {
-		const result = /* @__PURE__ */ new Map();
-		const pending = [];
-		for (const call of calls) {
-			if (call.deleted === true) {
-				result.set(call.callId, void 0);
-				continue;
-			}
-			if (call.blob !== void 0) {
-				result.set(call.callId, call.blob);
-				continue;
-			}
-			if (call.commit !== void 0) pending.push(call);
-		}
-		if (pending.length > 0) {
-			const hashes = await provider.blobHashes(pending.map((call) => ({
-				treeish: call.commit,
-				path: call.path
-			}))).catch(() => new Array(pending.length));
-			pending.forEach((call, index) => result.set(call.callId, hashes[index]));
-		}
-		return result;
+		return paths;
 	}
 	/** Per-call patches of one turn, read from the tracked commit chain. */
 	async buildModifications(turn, provider, tracked) {
@@ -2977,379 +3957,6 @@ function isAlive$1(pid) {
 	}
 }
 //#endregion
-//#region lib/types/host/tracking.js
-/**
-* Per-call tracking: one write/edit tool call becomes one commit on
-* `refs/dsh/head`, built entirely from git objects (docs/git-only-plan.md §2.2,
-* §2.3).
-*
-* The hot path is a single `git hash-object -w` per call; the blob hash and the
-* call metadata stay in memory until `flush()` freezes them into the chain with
-* one `git fast-import`. Nothing is written to JSON, and no ref moves per call —
-* so the former per-modification ledger rewrite (and its write amplification)
-* is gone.
-*
-* Known limitation: two *concurrent* calls writing the same path can be hashed
-* out of order, so the earlier call may record the later call's content. This
-* cannot be repaired after the fact (the intermediate content is already gone);
-* it only affects which of the two patches appears to carry the change, never
-* the final state.
-*/
-const CHAIN_HEAD_REF = "refs/dsh/head";
-/**
-* The session's *list* base: the tree captured at its first turn start. Unlike
-* `head` this ref never moves, so the accepted-file list can be diffed against
-* it after a host restart, when the in-memory anchor (`track.base`) is either
-* gone or has been re-pointed at the chain tip.
-*/
-const CHAIN_BASE_REF = "refs/dsh/base";
-const DEFAULT_MAX_CALLS = 500;
-/** key=value lines recorded in each commit message (parsed back by `loadCalls`). */
-function encodeMessage(call) {
-	return [
-		`callId=${call.callId}`,
-		`tool=${call.toolName}`,
-		`turn=${call.turn}`,
-		`step=${call.step}`,
-		`seq=${call.seq}`,
-		`paths=${call.path}`,
-		...call.deleted === true ? ["deleted=1"] : [],
-		""
-	].join("\n");
-}
-function decodeMessage(commit, message) {
-	const fields = /* @__PURE__ */ new Map();
-	for (const line of message.split("\n")) {
-		const index = line.indexOf("=");
-		if (index <= 0) continue;
-		fields.set(line.slice(0, index), line.slice(index + 1));
-	}
-	const callId = fields.get("callId");
-	const callPath = fields.get("paths");
-	if (callId === void 0 || callPath === void 0) return void 0;
-	const deleted = fields.get("deleted") === "1";
-	return {
-		callId,
-		toolName: fields.get("tool") ?? "unknown",
-		path: callPath,
-		turn: Number(fields.get("turn") ?? "0") || 0,
-		step: Number(fields.get("step") ?? "0") || 0,
-		seq: Number(fields.get("seq") ?? "-1"),
-		timestamp: 0,
-		...deleted ? { deleted: true } : {},
-		commit
-	};
-}
-var CallTracker = class {
-	ctx;
-	snapshots;
-	options;
-	tracks = /* @__PURE__ */ new Map();
-	maxCalls;
-	constructor(ctx, snapshots, options) {
-		this.ctx = ctx;
-		this.snapshots = snapshots;
-		this.options = options;
-		this.maxCalls = Math.max(1, options.maxCallsPerSession ?? DEFAULT_MAX_CALLS);
-	}
-	/**
-	* Record one observed write/edit. Synchronous by contract (`fs/observed` is a
-	* synchronous event); the blob write runs on the session's serial queue.
-	*
-	* Paths inside a nested git repository are tracked like any other: the call is
-	* captured from the file's bytes, so the embedded worktree never has to be
-	* indexed (the list path stages those paths from their blob).
-	*/
-	observe(target, observation, actor) {
-		const callId = actor?.callId;
-		const toolName = actor?.name;
-		const agentSession = actor?.agent?.session;
-		if (callId === void 0 || agentSession === void 0) return;
-		if (toolName !== "write" && toolName !== "edit") return;
-		const session = attributionSession(this.ctx, agentSession);
-		const cwd = session.header?.cwd;
-		if (cwd === void 0 || cwd === "") return;
-		const abs = this.ctx.fs.processPath(target);
-		const rel = path.relative(cwd, abs);
-		if (rel === "" || rel === ".." || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)) return;
-		const relPath = rel.split(path.sep).join("/");
-		const track = this.track(session.id, cwd);
-		const position = positionForCall(session, callId);
-		const fallback = sessionTurnPosition(session);
-		const observed = statIdentity(abs);
-		const call = {
-			callId,
-			toolName,
-			path: relPath,
-			turn: position?.turn ?? fallback?.turn ?? 0,
-			step: position?.step ?? fallback?.step ?? 0,
-			seq: position?.seq ?? fallback?.seq ?? -1,
-			timestamp: Date.now(),
-			...observed === void 0 ? { deleted: true } : { identity: observed.key }
-		};
-		track.calls.push(call);
-		this.trim(track);
-		const kind = observation.kind;
-		track.queue = track.queue.then(async () => {
-			if (kind === "absent") return;
-			const current = statIdentity(abs);
-			if (current === void 0) {
-				call.superseded = true;
-				delete call.deleted;
-				return;
-			}
-			if (observed !== void 0 && current.key !== observed.key) {
-				call.superseded = true;
-				return;
-			}
-			if (current.size > this.options.maxBlobBytes) {
-				call.oversized = true;
-				return;
-			}
-			const blob = await this.snapshots.providerFor(cwd, session.id).writeBlob(abs).catch(() => void 0);
-			if (blob === void 0) call.deleted = true;
-			else call.blob = blob;
-		}).catch(() => void 0);
-	}
-	/** Wait for every queued hash of one session (used before asserting on blobs). */
-	async settle(sessionId) {
-		await this.tracks.get(sessionId)?.queue.catch(() => void 0);
-	}
-	/**
-	* Ensure the session's chain base exists, capturing the full worktree once.
-	* Called at turn start (before any tool call) and lazily as a fallback. When
-	* calls were already recorded the base is post-write and `baseDegraded` is
-	* set: the first call on each path then has no caller-level baseline.
-	*/
-	async ensureBase(sessionId, cwd) {
-		const track = this.track(sessionId, cwd);
-		if (track.base !== void 0 && track.head !== void 0) return track.head;
-		const provider = this.snapshots.providerFor(cwd, sessionId);
-		if (!await provider.available().catch(() => false)) return void 0;
-		return this.createBase(track, provider);
-	}
-	/** True when the chain base was captured after calls were already recorded. */
-	baseDegraded(sessionId) {
-		return this.tracks.get(sessionId)?.baseDegraded === true;
-	}
-	/**
-	* Freeze every pending call into `refs/dsh/head` with one fast-import. Returns
-	* the chain head commit, or undefined when git is unavailable.
-	*/
-	async flush(sessionId) {
-		const track = this.tracks.get(sessionId);
-		if (track === void 0) return void 0;
-		await track.queue.catch(() => void 0);
-		const pending = track.calls.filter((call) => call.commit === void 0);
-		if (pending.length === 0) return track.head;
-		const provider = this.snapshots.providerFor(track.cwd, track.sessionId);
-		if (!await provider.available().catch(() => false)) return track.head;
-		const base = track.head ?? track.base ?? await this.createBase(track, provider);
-		if (base === void 0) return void 0;
-		const committed = pending.filter((call) => call.blob !== void 0 || call.deleted === true);
-		if (committed.length === 0) return base;
-		const lines = [];
-		let parent = base;
-		committed.forEach((call, index) => {
-			const message = encodeMessage(call);
-			const length = Buffer.byteLength(message, "utf8");
-			lines.push("commit refs/dsh/head");
-			lines.push(`mark :${index + 1}`);
-			lines.push(`committer dsh <dsh@local> ${Math.floor(call.timestamp / 1e3)} +0000`);
-			lines.push(`data ${length}`);
-			lines.push(message);
-			lines.push(`from ${parent}`);
-			lines.push(call.deleted === true || call.blob === void 0 ? `D ${call.path}` : `M 100644 ${call.blob} ${call.path}`);
-			lines.push("");
-			parent = `:${index + 1}`;
-		});
-		await provider.fastImport(lines.join("\n"));
-		const head = await provider.readRef(CHAIN_HEAD_REF);
-		if (head === void 0) return base;
-		const list = await provider.run([
-			"rev-list",
-			"--reverse",
-			`${base}..${head}`
-		]);
-		const commits = list.code === 0 ? list.stdout.split("\n").filter(Boolean) : [];
-		committed.forEach((call, index) => {
-			const commit = commits[index];
-			if (commit !== void 0) call.commit = commit;
-		});
-		track.head = head;
-		return head;
-	}
-	/** Freeze every session with pending calls (turn end / shutdown best-effort). */
-	async flushAll() {
-		for (const sessionId of [...this.tracks.keys()]) await this.flush(sessionId).catch(() => void 0);
-	}
-	/** Calls of the current process, oldest first (frozen entries carry `commit`). */
-	calls(sessionId) {
-		return this.tracks.get(sessionId)?.calls ?? [];
-	}
-	/** Session base commit (the chain's first parent), when known. */
-	base(sessionId) {
-		return this.tracks.get(sessionId)?.base;
-	}
-	/**
-	* The session's list base (`refs/dsh/base`), which is the chain *root* no
-	* matter how the in-memory anchor was set. Chains created before the ref
-	* existed are backfilled once from the parentless root of `refs/dsh/head`.
-	* Returns undefined when the session has no chain at all.
-	*/
-	async readBase(cwd, sessionId) {
-		const provider = this.snapshots.providerFor(cwd, sessionId);
-		if (!await provider.available().catch(() => false)) return this.tracks.get(sessionId)?.base;
-		const stored = await provider.readRef(CHAIN_BASE_REF);
-		if (stored !== void 0) return stored;
-		const head = await provider.readRef("refs/dsh/head") ?? this.tracks.get(sessionId)?.head;
-		if (head === void 0) return this.tracks.get(sessionId)?.base;
-		const roots = await provider.roots(head).catch(() => []);
-		const root = roots[roots.length - 1];
-		if (root === void 0) return void 0;
-		await provider.updateRef(CHAIN_BASE_REF, root).catch(() => false);
-		return root;
-	}
-	head(sessionId) {
-		return this.tracks.get(sessionId)?.head;
-	}
-	/** Paths touched by this session's calls (hashed form, forward slashes). */
-	pathsForSession(sessionId) {
-		return new Set(this.calls(sessionId).map((call) => call.path));
-	}
-	/** Paths seen but not captured because they exceeded `maxBlobBytes`. */
-	oversizedPaths(sessionId) {
-		return new Set(this.calls(sessionId).filter((call) => call.oversized === true).map((call) => call.path));
-	}
-	/**
-	* Cold read: rebuild the call list from the commit chain, so patch identity
-	* survives a process restart for everything already frozen (unfrozen calls
-	* are intentionally lost — docs/git-only-plan.md §4.4).
-	*/
-	async loadCalls(cwd, sessionId) {
-		const live = this.tracks.get(sessionId);
-		if (live !== void 0) {
-			if (!live.calls.some((call) => call.commit === void 0) && live.calls.length > 0) return live.calls;
-		}
-		const provider = this.snapshots.providerFor(cwd, sessionId);
-		if (!await provider.available().catch(() => false)) return live?.calls ?? [];
-		const log = await provider.run([
-			"log",
-			"--format=%H%x00%ct%x00%B%x1e",
-			CHAIN_HEAD_REF
-		]);
-		if (log.code !== 0) return live?.calls ?? [];
-		const calls = [];
-		for (const record of log.stdout.split("")) {
-			const parts = record.split("\0");
-			if (parts.length < 3) continue;
-			const commit = (parts[0] ?? "").trim();
-			const timestamp = Number(parts[1] ?? "0") * 1e3;
-			const call = decodeMessage(commit, parts[2] ?? "");
-			if (call === void 0) continue;
-			call.timestamp = timestamp;
-			calls.push(call);
-		}
-		calls.reverse();
-		if (live !== void 0 && calls.length > 0) {
-			for (const call of live.calls) if (call.commit !== void 0 && !calls.some((item) => item.callId === call.callId)) calls.push(call);
-		}
-		return calls;
-	}
-	/** Forget in-memory state (session close / tests). */
-	reset(sessionId) {
-		if (sessionId === void 0) this.tracks.clear();
-		else this.tracks.delete(sessionId);
-	}
-	track(sessionId, cwd) {
-		const existing = this.tracks.get(sessionId);
-		if (existing !== void 0 && path.resolve(existing.cwd) === path.resolve(cwd)) return existing;
-		const created = {
-			sessionId,
-			cwd,
-			calls: [],
-			queue: Promise.resolve()
-		};
-		this.tracks.set(sessionId, created);
-		return created;
-	}
-	/** Session base commit: a full worktree capture, committed once per session. */
-	async createBase(track, provider) {
-		const existing = await provider.readRef(CHAIN_HEAD_REF);
-		if (existing !== void 0) {
-			track.base = existing;
-			track.head = existing;
-			if (await provider.readRef("refs/dsh/base") === void 0) {
-				const roots = await provider.roots(existing).catch(() => []);
-				const root = roots[roots.length - 1];
-				if (root !== void 0) await provider.updateRef(CHAIN_BASE_REF, root).catch(() => false);
-			}
-			return existing;
-		}
-		if (track.calls.length > 0) track.baseDegraded = true;
-		const tree = await provider.captureTree().catch(() => void 0);
-		if (tree === void 0) return void 0;
-		const commit = await provider.commitTree(tree, [], `dsh base\nsession=${track.sessionId}\n`);
-		await provider.updateRef(CHAIN_HEAD_REF, commit);
-		await provider.updateRef(CHAIN_BASE_REF, commit).catch(() => false);
-		track.base = commit;
-		track.head = commit;
-		return commit;
-	}
-	trim(track) {
-		const overflow = track.calls.length - this.maxCalls;
-		if (overflow > 0) track.calls.splice(0, overflow);
-	}
-};
-/**
-* Cheap synchronous identity of a file, captured when the observation arrives.
-* Re-checked before hashing so a call whose content was already replaced by a
-* later call is dropped instead of mis-attributed.
-*/
-function statIdentity(abs) {
-	try {
-		const stat = fs.statSync(abs);
-		if (!stat.isFile()) return void 0;
-		return {
-			key: `${stat.size}:${stat.mtimeMs}:${stat.ino}`,
-			size: stat.size
-		};
-	} catch {
-		return;
-	}
-}
-/** The session-log position of a tool call (turn/step/seq). */
-function positionForCall(session, callId) {
-	const events = session.snapshotEvents();
-	for (let index = events.length - 1; index >= 0; index -= 1) {
-		const event = events[index];
-		if (event === void 0 || event.type !== "tool/call") continue;
-		const data = event.data;
-		if (data.callId !== callId) continue;
-		return {
-			turn: data.turn ?? 0,
-			step: data.step ?? 0,
-			seq: event.seq
-		};
-	}
-}
-/** Fallback coordinates: the session's currently open turn/step. */
-function sessionTurnPosition(session) {
-	let turn = 0;
-	let step = 0;
-	let seq = -1;
-	for (const event of session.snapshotEvents()) {
-		seq = event.seq;
-		if (event.type === "turn/start") turn = event.data.turn;
-		if (event.type === "step/start") step = event.data.step;
-	}
-	return turn > 0 ? {
-		turn,
-		step,
-		seq
-	} : void 0;
-}
-//#endregion
 //#region lib/types/host/snapshot.js
 /**
 * Encode an arbitrary string as one filesystem-safe path segment, mirroring
@@ -3437,6 +4044,33 @@ async function writeJsonFileAtomic(file, value) {
 }
 const POINTS_PREFIX = "refs/dsh/points/";
 /**
+* `refs/dsh/end`: worktree tree captured when the session is disposed. It is
+* the boundary between changes made during the session and changes made after
+* it, not a rollback target (the last turn point still predates the last
+* turn's writes, so it cannot serve that purpose).
+*/
+const SESSION_END_REF = "refs/dsh/end";
+/**
+* `refs/dsh/turn-end`: worktree tree captured immediately after a `turn/end`.
+* It is the per-turn boundary used to tell changes made while the turn was
+* running (part of the session) from changes made after it ended. Only the
+* latest turn is kept; each completed turn replaces it.
+*/
+const TURN_END_REF = "refs/dsh/turn-end";
+/**
+* `refs/dsh/gap`: cumulative tree of paths whose current content was last
+* changed outside any turn (between two turns, or while the session was
+* closed). `refs/dsh/gap-deleted` records paths whose last gap change was a
+* deletion (presence only; blob content is the pre-deletion object).
+*
+* The gap trees are updated at every turn start by diffing the previous
+* turn-end tree against the new turn-start tree. They let the modification
+* list exclude changes that happened while no turn was running, without a
+* per-path replay over every historic snapshot.
+*/
+const GAP_REF = "refs/dsh/gap";
+const GAP_DELETED_REF = "refs/dsh/gap-deleted";
+/**
 * Turn-start rollback points, stored as git commits
 * (docs/git-only-plan.md §2.1).
 *
@@ -3456,6 +4090,12 @@ var SnapshotManager = class {
 	dshHome;
 	/** In-flight isolated repo inits, keyed by repo dir (dedupe across providers). */
 	isolatedInit = /* @__PURE__ */ new Map();
+	/**
+	* Per-session capture serialization. Turn-start, turn-end and session-end
+	* captures all reuse the provider's persistent scan index, so overlapping
+	* runs would interleave `add -A`/`write-tree` on one index file.
+	*/
+	captureQueues = /* @__PURE__ */ new Map();
 	constructor(options, ctx) {
 		this.options = options;
 		this.ctx = ctx;
@@ -3463,6 +4103,21 @@ var SnapshotManager = class {
 	}
 	get ledgerDir() {
 		return this.options.ledgerDir;
+	}
+	/**
+	* Run `run` after any capture already queued for this session. A failed
+	* predecessor never blocks the next capture; the queue entry is dropped once
+	* the chain drains.
+	*/
+	queueCapture(cwd, sessionId, run) {
+		const key = `${cwd}\0${sessionId}`;
+		const current = (this.captureQueues.get(key) ?? Promise.resolve()).then(run, run);
+		this.captureQueues.set(key, current);
+		const settle = () => {
+			if (this.captureQueues.get(key) === current) this.captureQueues.delete(key);
+		};
+		current.then(settle, settle);
+		return current;
 	}
 	/**
 	* Provider bound to one session's isolated snapshot repo (kept inside the
@@ -3515,6 +4170,11 @@ var SnapshotManager = class {
 	async capture(session, turn) {
 		const cwd = session.header.cwd;
 		if (cwd === void 0 || cwd === "") return void 0;
+		return this.queueCapture(cwd, session.id, () => this.capturePoint(session, turn));
+	}
+	async capturePoint(session, turn) {
+		const cwd = session.header.cwd;
+		if (cwd === void 0 || cwd === "") return void 0;
 		const provider = this.providerFor(cwd, session.id);
 		if (!await provider.available().catch(() => false)) return void 0;
 		const ref = pointRef(turn);
@@ -3549,6 +4209,170 @@ var SnapshotManager = class {
 		const list = this.manifests.get(session.id) ?? [];
 		this.manifests.set(session.id, [...list.filter((item) => item.turn !== turn), manifest]);
 		return manifest;
+	}
+	/**
+	* Capture the worktree at session disposal into {@link SESSION_END_REF}.
+	*
+	* A turn point is taken at turn *start*, so the newest point of a session
+	* predates its last turn's writes and cannot mark the session's end. This is
+	* the fallback end boundary for a close that happened inside a turn (or
+	* before any turn ended); a normal turn end records {@link TURN_END_REF}
+	* instead, which is stricter about changes made after the last turn.
+	*/
+	async captureEnd(session) {
+		const cwd = session.header.cwd;
+		if (cwd === void 0 || cwd === "") return void 0;
+		return this.queueCapture(cwd, session.id, () => this.captureBoundary(session, SESSION_END_REF, "session end"));
+	}
+	/**
+	* Capture the worktree immediately after `turn/end` into {@link TURN_END_REF}.
+	* This is the per-turn boundary: changes made after the turn are excluded
+	* while the session stays idle, while everything the turn itself produced
+	* stays in the list.
+	*/
+	async captureTurnEnd(session, turn) {
+		const cwd = session.header.cwd;
+		if (cwd === void 0 || cwd === "") return void 0;
+		return this.queueCapture(cwd, session.id, () => this.captureBoundary(session, TURN_END_REF, "turn end", turn));
+	}
+	async captureBoundary(session, ref, label, turn) {
+		const cwd = session.header.cwd;
+		if (cwd === void 0 || cwd === "") return void 0;
+		const provider = this.providerFor(cwd, session.id);
+		if (!await provider.available().catch(() => false)) return void 0;
+		const captured = await provider.captureTreeInfo().catch(() => void 0);
+		const tree = captured?.tree;
+		if (tree === void 0) return void 0;
+		if (captured?.nested === void 0) this.nestedRootsCache.delete(cwd);
+		else this.nestedRootsCache.set(cwd, captured.nested);
+		const message = [
+			label,
+			`session=${session.id}`,
+			...turn === void 0 ? [] : [`turn=${turn}`],
+			`cwd=${cwd}`,
+			`created=${Date.now()}`,
+			""
+		].join("\n");
+		const commit = await provider.commitTree(tree, [], message);
+		if (!await provider.updateRef(ref, commit)) return void 0;
+		return tree;
+	}
+	/** Tree and capture time of the last session-end boundary, if one exists. */
+	async endBoundary(cwd, sessionId) {
+		return this.refBoundary(cwd, sessionId, SESSION_END_REF);
+	}
+	/** Tree and capture time of the latest turn-end boundary, if one exists. */
+	async turnEndBoundary(cwd, sessionId) {
+		return this.refBoundary(cwd, sessionId, TURN_END_REF);
+	}
+	/** Wait for every capture queued for this session (turn start/end, gaps). */
+	async waitForCaptures(cwd, sessionId) {
+		await this.captureQueues.get(`${cwd}\0${sessionId}`)?.catch(() => void 0);
+	}
+	/**
+	* Record the changes made between the previous turn's end and this turn's
+	* start into the cumulative gap trees.
+	*
+	* `boundaryAt` is the previous `turn/end` event time; a stale turn-end ref
+	* (its capture time is older than that event) is not used. Entries touching a
+	* gitlink are skipped because their objects are not worktree blobs. The two
+	* trees are cumulative: a path updated here leaves the other tree.
+	*/
+	async recordGap(session, turn, startTree, boundaryAt) {
+		const cwd = session.header.cwd;
+		if (cwd === void 0 || cwd === "") return;
+		await this.queueCapture(cwd, session.id, () => this.recordGapNow(session, turn, startTree, boundaryAt));
+	}
+	async recordGapNow(session, turn, startTree, boundaryAt) {
+		const cwd = session.header.cwd;
+		if (cwd === void 0 || cwd === "") return;
+		const provider = this.providerFor(cwd, session.id);
+		if (!await provider.available().catch(() => false)) return;
+		const boundary = await this.refBoundary(cwd, session.id, TURN_END_REF);
+		if (boundary === void 0 || boundary.createdAt + 1e3 < boundaryAt) return;
+		if (boundary.tree === startTree) return;
+		const entries = await provider.diffEntries(boundary.tree, startTree).catch(() => void 0);
+		if (entries === void 0) return;
+		const effective = entries.filter((entry) => entry.newMode !== "160000" && entry.oldMode !== "160000");
+		if (effective.length === 0) return;
+		const gapTree = await this.treeForRef(provider, GAP_REF);
+		const deletedTree = await this.treeForRef(provider, GAP_DELETED_REF);
+		const gapAdd = effective.filter((entry) => entry.status !== "D").map((entry) => ({
+			path: entry.path,
+			blob: entry.newHash,
+			mode: entry.newMode
+		}));
+		const gapRemove = effective.filter((entry) => entry.status === "D").map((entry) => ({ path: entry.path }));
+		const deletedAdd = effective.filter((entry) => entry.status === "D").map((entry) => ({
+			path: entry.path,
+			blob: entry.oldHash,
+			mode: entry.oldMode
+		}));
+		const deletedRemove = effective.filter((entry) => entry.status !== "D").map((entry) => ({ path: entry.path }));
+		const nextGap = await provider.withScratch(async (scratch) => {
+			if (gapTree !== void 0) await provider.readTree(scratch, gapTree);
+			await provider.updateIndexInfo(scratch, [...gapAdd, ...gapRemove]);
+			return provider.writeTree(scratch);
+		});
+		const nextDeleted = await provider.withScratch(async (scratch) => {
+			if (deletedTree !== void 0) await provider.readTree(scratch, deletedTree);
+			await provider.updateIndexInfo(scratch, [...deletedAdd, ...deletedRemove]);
+			return provider.writeTree(scratch);
+		});
+		const createdAt = Date.now();
+		const message = [
+			"gap changes",
+			`session=${session.id}`,
+			`turn=${turn}`,
+			`cwd=${cwd}`,
+			`created=${createdAt}`,
+			""
+		].join("\n");
+		if (nextGap !== gapTree) {
+			const commit = await provider.commitTree(nextGap, [], message);
+			await provider.updateRef(GAP_REF, commit);
+		}
+		if (nextDeleted !== deletedTree) {
+			const commit = await provider.commitTree(nextDeleted, [], message);
+			await provider.updateRef(GAP_DELETED_REF, commit);
+		}
+	}
+	/** Cumulative gap trees for this session, if any gap was recorded. */
+	async gapState(cwd, sessionId) {
+		const provider = this.providerFor(cwd, sessionId);
+		if (!await provider.available().catch(() => false)) return {};
+		const entries = await provider.listRefsWithMeta("refs/dsh/gap*").catch(() => []);
+		const result = {};
+		for (const entry of entries) {
+			if (entry.tree === "") continue;
+			if (entry.ref === "refs/dsh/gap") result.gapTree = entry.tree;
+			else if (entry.ref === "refs/dsh/gap-deleted") result.deletedTree = entry.tree;
+		}
+		return result;
+	}
+	async treeForRef(provider, ref) {
+		const commit = await provider.readRef(ref).catch(() => void 0);
+		if (commit === void 0) return void 0;
+		return provider.treeOf(commit).catch(() => void 0);
+	}
+	/**
+	* The capture time lets a reader reject a boundary left behind by an earlier
+	* lifecycle when the latest capture failed (a stale tree would misclassify
+	* changes that happened in between).
+	*/
+	async refBoundary(cwd, sessionId, ref) {
+		const provider = this.providerFor(cwd, sessionId);
+		if (!await provider.available().catch(() => false)) return void 0;
+		const entry = (await provider.listRefsWithMeta(ref).catch(() => [])).find((item) => item.ref === ref);
+		if (entry === void 0 || entry.tree === "" || entry.createdAt <= 0) return void 0;
+		return {
+			tree: entry.tree,
+			createdAt: entry.createdAt * 1e3
+		};
+	}
+	/** Whether this session ever created an isolated snapshot repository. */
+	hasRepository(cwd, sessionId) {
+		return fs.existsSync(sessionSnapshotRepo(this.dshHome, cwd, sessionId));
 	}
 	/** Exact point first, then the newest earlier point for the same session. */
 	async find(cwd, sessionId, targetTurn) {
@@ -4482,6 +5306,13 @@ function apply(ctx, options = {}) {
 	if (options.enabled === false) return;
 	const host = ctx;
 	const service = new RollbackService(ctx, options);
+	ctx.on("session/disposed", (session) => {
+		service.sessionChangeManager.noteSessionEnd(session);
+	});
+	ctx.on("session/event", (session, event) => {
+		if (event.type !== "turn/end") return;
+		service.sessionChangeManager.noteTurnEnd(session, event.data.turn);
+	});
 	const typert = ctx.typert;
 	if (typert !== void 0) ctx.effect(() => typert.register(ROLLBACK_HOST_TYPERT), "rollback: typert host contribution");
 	else host.logger.warn("rollback: typert service unavailable; Remote methods may use the SRC fallback");
@@ -4495,7 +5326,8 @@ function apply(ctx, options = {}) {
 			host.logger.warn("rollback call tracking skipped:", error);
 		}
 		if (payload.step === 1 && service.config.snapshotOnPreStep && !isSubagentSession(session)) try {
-			await service.snapshots.capture(session, payload.turn);
+			const manifest = await service.snapshots.capture(session, payload.turn);
+			if (manifest?.tree !== void 0) service.sessionChangeManager.noteTurnStart(session, payload.turn, manifest.tree);
 		} catch (error) {
 			host.logger.warn("rollback snapshot skipped:", error);
 		}
@@ -4507,9 +5339,15 @@ function apply(ctx, options = {}) {
 	});
 }
 /**
-* Per-call tracking listens to `fs/observed` only: the git-native model needs
-* no before-image, so the write/edit *intent* hooks (and their synchronous
-* whole-file read on the tool critical path) are gone.
+* Per-call tracking listens to `fs/observed` for the post-image and to the
+* write/edit *intents* for session-start pre-images.
+*
+* The intent hooks are prepended and transparent: they capture only the first
+* touch of a path the chain base tree cannot see (ignored files, excluded
+* nested paths) and then call `next()`, so the observation-policy guard — a
+* single-slot decision that does not call `next()` itself — is preserved.
+* Tracked files are an in-memory set lookup, which keeps the tool critical
+* path free of whole-file reads for the normal case.
 */
 function installTrackingListeners(ctx, service) {
 	const host = ctx;
@@ -4521,8 +5359,24 @@ function installTrackingListeners(ctx, service) {
 			host.logger.warn("rollback call tracking failed:", error);
 		}
 	});
+	const capturePreImage = async (target, actor) => {
+		if (!service.config.trackingEnabled) return;
+		try {
+			await service.tracker.capturePreImage(target, actor);
+		} catch (error) {
+			host.logger.warn("rollback pre-image capture failed:", error);
+		}
+	};
+	ctx.on("fs/write-intent", async (target, actor, next) => {
+		await capturePreImage(target, actor);
+		return next();
+	}, { prepend: true });
+	ctx.on("fs/edit-intent", async (target, actor, next) => {
+		await capturePreImage(target, actor);
+		return next();
+	}, { prepend: true });
 }
 //#endregion
-export { ACCEPTED_REF, AcceptBase, CHAIN_BASE_REF, CHAIN_HEAD_REF, CallTracker, DEFAULT_ROLLBACK_CONFIG, GitProvider, POINTS_PREFIX, RollbackService, SessionChangeManager, SnapshotManager, apply, applyHunkUndo, attachToolCalls, boundaryInfo, buildFileChange, changeLedgerRoot, diffGitPath, encodeSessionSegment, findPreviousTurnEnd, hunkFingerprint, inject, installTrackingListeners, isHash, journalsPath, locksDir, manifestsPath, name, parseDiffHunks, parseDiffTreeZ, patchFileViews, pointRef, projectDirKey, readJsonFile, replayPatches, resolveBoundary, resolveBoundaryForTurn, resolveDshHome, sessionDirFor, sessionSnapshotRepo, sessionStartTurn, spawnGit, splitDiffByPath, splitDiffSections, splitPatchFiles, summarize, unquoteGitPath, writeJsonFileAtomic };
+export { ACCEPTED_REF, AcceptBase, CHAIN_BASE_REF, CHAIN_HEAD_REF, CHAIN_PRE_REF, CallTracker, DEFAULT_ROLLBACK_CONFIG, GAP_DELETED_REF, GAP_REF, GitProvider, POINTS_PREFIX, RollbackService, SESSION_END_REF, SessionChangeManager, SnapshotManager, TURN_END_REF, apply, applyHunkUndo, attachToolCalls, boundaryInfo, buildFileChange, changeLedgerRoot, diffGitPath, encodeSessionSegment, findPreviousTurnEnd, hunkFingerprint, inject, installTrackingListeners, isHash, journalsPath, locksDir, manifestsPath, name, parseDiffHunks, parseDiffTreeZ, patchFileViews, pointRef, projectDirKey, readJsonFile, replayPatches, resolveBoundary, resolveBoundaryForTurn, resolveDshHome, sessionDirFor, sessionIdleEnd, sessionSnapshotRepo, sessionStartTurn, spawnGit, splitDiffByPath, splitDiffSections, splitPatchFiles, summarize, unquoteGitPath, writeJsonFileAtomic };
 
 //# sourceMappingURL=index.js.map

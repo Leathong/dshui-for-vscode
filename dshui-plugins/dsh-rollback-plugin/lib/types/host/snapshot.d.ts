@@ -40,6 +40,33 @@ export declare function readJsonFile<T>(file: string, fallback: T): Promise<T>;
 export declare function writeJsonFileAtomic<T>(file: string, value: T): Promise<void>;
 export declare const POINTS_PREFIX = "refs/dsh/points/";
 /**
+ * `refs/dsh/end`: worktree tree captured when the session is disposed. It is
+ * the boundary between changes made during the session and changes made after
+ * it, not a rollback target (the last turn point still predates the last
+ * turn's writes, so it cannot serve that purpose).
+ */
+export declare const SESSION_END_REF = "refs/dsh/end";
+/**
+ * `refs/dsh/turn-end`: worktree tree captured immediately after a `turn/end`.
+ * It is the per-turn boundary used to tell changes made while the turn was
+ * running (part of the session) from changes made after it ended. Only the
+ * latest turn is kept; each completed turn replaces it.
+ */
+export declare const TURN_END_REF = "refs/dsh/turn-end";
+/**
+ * `refs/dsh/gap`: cumulative tree of paths whose current content was last
+ * changed outside any turn (between two turns, or while the session was
+ * closed). `refs/dsh/gap-deleted` records paths whose last gap change was a
+ * deletion (presence only; blob content is the pre-deletion object).
+ *
+ * The gap trees are updated at every turn start by diffing the previous
+ * turn-end tree against the new turn-start tree. They let the modification
+ * list exclude changes that happened while no turn was running, without a
+ * per-path replay over every historic snapshot.
+ */
+export declare const GAP_REF = "refs/dsh/gap";
+export declare const GAP_DELETED_REF = "refs/dsh/gap-deleted";
+/**
  * Turn-start rollback points, stored as git commits
  * (docs/git-only-plan.md §2.1).
  *
@@ -59,8 +86,20 @@ export declare class SnapshotManager {
     private readonly dshHome;
     /** In-flight isolated repo inits, keyed by repo dir (dedupe across providers). */
     private readonly isolatedInit;
+    /**
+     * Per-session capture serialization. Turn-start, turn-end and session-end
+     * captures all reuse the provider's persistent scan index, so overlapping
+     * runs would interleave `add -A`/`write-tree` on one index file.
+     */
+    private readonly captureQueues;
     constructor(options: SnapshotManagerOptions, ctx?: RollbackCordisContext | undefined);
     get ledgerDir(): string;
+    /**
+     * Run `run` after any capture already queued for this session. A failed
+     * predecessor never blocks the next capture; the queue entry is dropped once
+     * the chain drains.
+     */
+    private queueCapture;
     /**
      * Provider bound to one session's isolated snapshot repo (kept inside the
      * session's own directory, so deleting the session removes the objects).
@@ -79,6 +118,62 @@ export declare class SnapshotManager {
     nestedRoots(cwd: string, provider: GitProvider): Promise<string[]>;
     /** Capture the turn-start point. Failures never block the agent. */
     capture(session: Session, turn: number): Promise<RollbackSnapshotManifest | undefined>;
+    private capturePoint;
+    /**
+     * Capture the worktree at session disposal into {@link SESSION_END_REF}.
+     *
+     * A turn point is taken at turn *start*, so the newest point of a session
+     * predates its last turn's writes and cannot mark the session's end. This is
+     * the fallback end boundary for a close that happened inside a turn (or
+     * before any turn ended); a normal turn end records {@link TURN_END_REF}
+     * instead, which is stricter about changes made after the last turn.
+     */
+    captureEnd(session: Session): Promise<string | undefined>;
+    /**
+     * Capture the worktree immediately after `turn/end` into {@link TURN_END_REF}.
+     * This is the per-turn boundary: changes made after the turn are excluded
+     * while the session stays idle, while everything the turn itself produced
+     * stays in the list.
+     */
+    captureTurnEnd(session: Session, turn: number): Promise<string | undefined>;
+    private captureBoundary;
+    /** Tree and capture time of the last session-end boundary, if one exists. */
+    endBoundary(cwd: string, sessionId: string): Promise<{
+        tree: string;
+        createdAt: number;
+    } | undefined>;
+    /** Tree and capture time of the latest turn-end boundary, if one exists. */
+    turnEndBoundary(cwd: string, sessionId: string): Promise<{
+        tree: string;
+        createdAt: number;
+    } | undefined>;
+    /** Wait for every capture queued for this session (turn start/end, gaps). */
+    waitForCaptures(cwd: string, sessionId: string): Promise<void>;
+    /**
+     * Record the changes made between the previous turn's end and this turn's
+     * start into the cumulative gap trees.
+     *
+     * `boundaryAt` is the previous `turn/end` event time; a stale turn-end ref
+     * (its capture time is older than that event) is not used. Entries touching a
+     * gitlink are skipped because their objects are not worktree blobs. The two
+     * trees are cumulative: a path updated here leaves the other tree.
+     */
+    recordGap(session: Session, turn: number, startTree: string, boundaryAt: number): Promise<void>;
+    private recordGapNow;
+    /** Cumulative gap trees for this session, if any gap was recorded. */
+    gapState(cwd: string, sessionId: string): Promise<{
+        gapTree?: string;
+        deletedTree?: string;
+    }>;
+    private treeForRef;
+    /**
+     * The capture time lets a reader reject a boundary left behind by an earlier
+     * lifecycle when the latest capture failed (a stale tree would misclassify
+     * changes that happened in between).
+     */
+    private refBoundary;
+    /** Whether this session ever created an isolated snapshot repository. */
+    hasRepository(cwd: string, sessionId: string): boolean;
     /** Exact point first, then the newest earlier point for the same session. */
     find(cwd: string, sessionId: string, targetTurn: number): Promise<{
         manifest: RollbackSnapshotManifest;

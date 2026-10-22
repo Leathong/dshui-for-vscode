@@ -28,6 +28,22 @@ export declare class AcceptBase {
     }): Promise<string | undefined>;
     /** The current accepted commit, when the baseline already exists. */
     ref(cwd: string, sessionId: string): Promise<string | undefined>;
+    /**
+     * Ensure the accepted baseline and fold in the session-start blobs of paths
+     * the chain base tree never captured (ignored files, paths excluded from
+     * `add -A` for commitless nested repositories).
+     *
+     * These entries describe the state *before* the session wrote the file, so
+     * they belong to the baseline exactly like the chain-base tree. Entries are
+     * only added when the accepted tree does not know the path yet, which keeps a
+     * user accept authoritative. Every write is a compare-and-swap and the
+     * common, fully merged case is one `cat-file --batch-check`.
+     */
+    ensureBaseline(cwd: string, sessionId: string, seedTree: string | undefined, preImages: ReadonlyMap<string, string>): Promise<{
+        commit?: string;
+        merged: string[];
+        skipped: string[];
+    }>;
     /** The accepted blob of one path (undefined = absent from the accepted tree). */
     acceptedBlob(cwd: string, sessionId: string, relPath: string): Promise<string | undefined>;
     /**

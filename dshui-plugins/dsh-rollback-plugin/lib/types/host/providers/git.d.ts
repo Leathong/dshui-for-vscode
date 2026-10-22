@@ -140,6 +140,12 @@ export declare class GitProvider {
     pathsInTree(tree: string, relPath?: string, signal?: AbortSignal): Promise<string[]>;
     blobHash(tree: string, relPath: string, signal?: AbortSignal): Promise<string | undefined>;
     /**
+     * Every blob in a tree-ish as `path → blob hash` (one `ls-tree` process).
+     * Reads `refs/dsh/pre`, the session-start contents `git add -A` refused to
+     * index (ignored paths).
+     */
+    treeBlobs(treeish: string, signal?: AbortSignal): Promise<Map<string, string>>;
+    /**
      * Resolve many `<treeish>:<path>` lookups in **one** process
      * (`cat-file --batch-check`), positionally. `undefined` means the spec does
      * not resolve (absent path, unresolvable treeish, or git unavailable).
