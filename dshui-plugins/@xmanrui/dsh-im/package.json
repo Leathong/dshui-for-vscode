@@ -1,7 +1,8 @@
 {
   "name": "@xmanrui/dsh-im",
-  "version": "4.28.0",
-  "description": "把十二种 IM 渠道和公网 AI Office 接入本机 DeepSeek Harness。 Connect twelve IM channels and a public AI Office to a local DeepSeek Harness.",
+  "version": "5.4.0",
+  "icon": "./assets/logo-plugin-message-link-gradient.webp",
+  "description": "把微信、飞书、企微、钉钉、QQ、Telegram、WhatsApp、Slack、Discord、Matrix接入DSH。 Connect Telegram, WhatsApp, Slack, Discord, Matrix, WeChat, Feishu, WeCom, DingTalk, and QQ to DSH.",
   "keywords": [
     "deepseek-harness",
     "dsh",
@@ -25,68 +26,6 @@
     "ai-office"
   ],
   "author": "xmanrui (https://github.com/xmanrui)",
-  "contributors": [
-    {
-      "name": "C3H3-AI",
-      "url": "https://github.com/C3H3-AI"
-    },
-    {
-      "name": "divingleee",
-      "url": "https://github.com/divingleee"
-    },
-    {
-      "name": "Chan-0312",
-      "url": "https://github.com/Chan-0312"
-    },
-    {
-      "name": "BuvkB",
-      "url": "https://github.com/BuvkB"
-    },
-    {
-      "name": "masucc",
-      "url": "https://github.com/masucc"
-    },
-    {
-      "name": "cherryFloris",
-      "url": "https://github.com/cherryFloris"
-    },
-    {
-      "name": "geekyfoxlab",
-      "url": "https://github.com/geekyfoxlab"
-    },
-    {
-      "name": "grloper",
-      "url": "https://github.com/grloper"
-    },
-    {
-      "name": "baijian",
-      "url": "https://github.com/baijian"
-    },
-    {
-      "name": "lyzhu86",
-      "url": "https://github.com/lyzhu86"
-    },
-    {
-      "name": "Librazy",
-      "url": "https://github.com/Librazy"
-    },
-    {
-      "name": "Johnslee1207",
-      "url": "https://github.com/johnslee1207-commits"
-    },
-    {
-      "name": "Dong09",
-      "url": "https://github.com/Dong09"
-    },
-    {
-      "name": "wings1848",
-      "url": "https://github.com/wings1848"
-    },
-    {
-      "name": "Zhe (Phil) Yang",
-      "url": "https://github.com/yangzhe1991"
-    }
-  ],
   "license": "MIT",
   "type": "module",
   "repository": {
@@ -107,13 +46,15 @@
   "exports": {
     ".": "./lib/index.js",
     "./client": "./lib/client.js",
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./locale/*.json": "./locale/*.json"
   },
   "files": [
     "assets",
     "bin",
     "cordis.patch.yml",
     "lib",
+    "locale/*.json",
     "plugin-src",
     "scripts/verify-interface-language.mjs",
     "scripts/verify-injected-context.mjs",
@@ -148,6 +89,7 @@
     "compatibility": {
       "dsh": "0.2.1-rc.2",
       "dshReleases": {
+        "0.2.0-rc.2": "compatible",
         "0.2.1-alpha.2": "compatible",
         "0.2.1-rc.2": "compatible"
       },
@@ -176,7 +118,7 @@
     "mailparser": "^3.9.28",
     "nodemailer": "^10.0.10",
     "qrcode": "1.5.4",
-    "undici": "7.29.0"
+    "undici": "7.29.1"
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "4.0.1",
@@ -196,6 +138,6 @@
   },
   "optionalDependencies": {
     "@tencent-qqmail/agently-cli": "^1.0.18",
-    "sharp": "0.35.4"
+    "sharp": "0.35.5"
   }
 }
