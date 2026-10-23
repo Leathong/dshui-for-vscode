@@ -137,6 +137,28 @@ export function installPlugins(
       if (fs.existsSync(bundlePatch)) {
         fs.copyFileSync(bundlePatch, path.join(target, 'cordis.patch.yml'))
       }
+      // Display resources: dsh-app-boot's readPluginMeta resolves the manifest's
+      // `icon` and `exports["./locale/*.json"]` against the *installed* package
+      // directory. Without the icon the plugin card reports a package metadata
+      // error; without locale it silently falls back to the raw manifest text.
+      const manifestPath = path.join(source, 'package.json')
+      if (fs.existsSync(manifestPath)) {
+        const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8')) as { icon?: unknown }
+        if (typeof manifest.icon === 'string') {
+          const icon = path.resolve(source, manifest.icon)
+          // Never follow a manifest pointer out of its own plugin package.
+          if (icon.startsWith(source + path.sep) && fs.existsSync(icon)) {
+            const iconTarget = path.resolve(target, manifest.icon)
+            fs.mkdirSync(path.dirname(iconTarget), { recursive: true })
+            fs.copyFileSync(icon, iconTarget)
+          }
+        }
+      }
+      const localeSource = path.join(source, 'locale')
+      if (fs.existsSync(localeSource)) {
+        fs.rmSync(path.join(target, 'locale'), { recursive: true, force: true })
+        fs.cpSync(localeSource, path.join(target, 'locale'), { recursive: true })
+      }
     }
     installed.push({ name, dir: path.join(targets[0], name) })
   }
