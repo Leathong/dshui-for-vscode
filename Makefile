@@ -83,6 +83,13 @@ DSH_BASE ?= 1f81c047fc48fa190a683e469daa699857e9afe8
 DSH_PATCH := patches/dshui-bundles.patch
 # DSH_PNPM — 包管理器，需要 pnpm 11.7.0、Node ^22.19 || >=24
 DSH_PNPM ?= pnpm
+# 客户端公共构建值。dsh 只有经 scripts/build.ts 调用时才会注入 DSH_CLIENT_*；这里直接
+# 调 tsdown / vite，必须自己传入。缺了它 process.env 会被定义成 {}，产物里的
+# process.env.DSH_CLIENT_VERSION 变成 undefined，账号登录等客户端功能会以
+# "client build carries no DSH_CLIENT_VERSION" 失败（界面提示“操作未完成，请重试”）。
+DSH_CLIENT_VERSION ?= $(shell node -p "require('./$(DSH_SRC)/package.json').version")
+DSH_CLIENT_COMMIT_HASH ?= $(shell git -C $(DSH_SRC) rev-parse HEAD 2>/dev/null | cut -c1-7)
+DSH_CLIENT_ENV := DSH_CLIENT_VERSION=$(DSH_CLIENT_VERSION) DSH_CLIENT_COMMIT_HASH=$(DSH_CLIENT_COMMIT_HASH)
 
 # 从 dsh 源码全新构建：clone/切基提交/套补丁 → pnpm install → build host+client+web →
 # gen-client-catalog（槽目录）→ copy-clients（客户端 bundle 拷入 dshui-plugins/）→
@@ -91,12 +98,16 @@ DSH_PNPM ?= pnpm
 # ui-primitives …），漏掉它会让新版客户端插件全部加载失败（Failed to load plugins）。
 dsh-build:
 	cd $(DSH_SRC) && $(DSH_PNPM) clean && $(DSH_PNPM) install
-	cd $(DSH_SRC) && $(DSH_PNPM) run build:lib:host
+	cd $(DSH_SRC) && $(DSH_CLIENT_ENV) $(DSH_PNPM) run build:lib:host
 	# gen-client-catalog 必须排在 build:lib:client 之前：它重写的 slot-catalog.ts 是
 	# cordis-client-runner 的浏览器产物输入（运行时「槽目录」数据），生成后再构建才进得去。
 	cd $(DSH_SRC) && $(DSH_PNPM) run gen-client-catalog
-	cd $(DSH_SRC) && $(DSH_PNPM) run build:lib:client
-	cd $(DSH_SRC) && $(DSH_PNPM) run build:web
+	cd $(DSH_SRC) && $(DSH_CLIENT_ENV) $(DSH_PNPM) run build:lib:client
+	cd $(DSH_SRC) && $(DSH_CLIENT_ENV) $(DSH_PNPM) run build:web
+	@if grep -rqs '{}[.]DSH_CLIENT_VERSION' $(DSH_SRC)/packages/client/*/lib/client.js; then \
+		echo "错误：客户端构建未注入 DSH_CLIENT_VERSION（产物仍含 {}.DSH_CLIENT_VERSION），账号登录会失败"; \
+		exit 1; \
+	fi
 	npm run sync:dsh
 	node scripts/copy-clients.mjs
 	@echo ""
