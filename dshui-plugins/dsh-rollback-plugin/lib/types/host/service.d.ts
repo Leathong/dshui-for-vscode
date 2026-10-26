@@ -44,6 +44,11 @@ export declare class RollbackService extends TypertRemoteService {
     status(sessionId: string, _signal?: AbortSignal): Promise<RollbackStatusResult>;
     prepareTurn(sessionId: string, turn: number, _signal?: AbortSignal): Promise<RollbackPrepareTurnResult>;
     sessionChanges(sessionId: string, _signal?: AbortSignal): Promise<RollbackSessionChangesResult>;
+    /**
+     * Explicit refresh: capture the worktree first when a turn is running, so
+     * bash-created files show up now instead of at the next turn boundary.
+     */
+    refreshChanges(sessionId: string, _signal?: AbortSignal): Promise<RollbackSessionChangesResult>;
     acceptAll(request: RollbackAcceptAllRequest, _signal?: AbortSignal): Promise<RollbackAcceptAllResult>;
     acceptFile(request: RollbackAcceptFileRequest, _signal?: AbortSignal): Promise<RollbackAcceptResult>;
     acceptModification(request: RollbackAcceptModificationRequest, _signal?: AbortSignal): Promise<RollbackAcceptResult>;

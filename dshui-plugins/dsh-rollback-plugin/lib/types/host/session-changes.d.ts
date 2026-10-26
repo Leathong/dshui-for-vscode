@@ -66,6 +66,15 @@ export declare class SessionChangeManager {
      */
     noteSessionEnd(session: Session): Promise<unknown> | undefined;
     sessionChanges(sessionId: string): Promise<RollbackSessionChangesResult>;
+    /**
+     * Manual refresh: while a turn is running, take a fresh full-worktree
+     * capture first (`refs/dsh/progress`) so files created by bash/scripts
+     * since the last boundary become discoverable immediately. An idle session
+     * already has a turn-end/session-end capture covering its current state, so
+     * it is listed without another O(worktree) scan. The capture is best-effort:
+     * a failure leaves the previous capture in place and the list still loads.
+     */
+    refreshSessionChanges(sessionId: string): Promise<RollbackSessionChangesResult>;
     acceptFile(request: RollbackAcceptFileRequest): Promise<RollbackAcceptResult>;
     acceptModification(request: RollbackAcceptModificationRequest): Promise<RollbackAcceptResult>;
     acceptAll(request: RollbackAcceptAllRequest): Promise<RollbackAcceptResult>;
@@ -143,6 +152,18 @@ export declare class SessionChangeManager {
      * authoritative, and guessing wrong would either hide a row or duplicate it.
      */
     private acceptedRows;
+    /**
+     * Paths present in the newest full-worktree capture but absent from the
+     * accepted baseline. These are files created without a write/edit call —
+     * typically by a bash script — so no tracked call can stage them; the capture
+     * tree can. They are only staged (visibility), never treated as owned: the
+     * attribution step still marks them `foreign` and the idle-boundary filter
+     * still drops a rewrite that happened after the turn/session ended.
+     *
+     * A failed comparison only costs these rows (and adds a warning); a stale
+     * capture can under-report but never invent a path.
+     */
+    private pathsAddedSinceCapture;
     private nestedRoots;
     /**
      * Per-call patches of the session chain, with hunks and accept state. A

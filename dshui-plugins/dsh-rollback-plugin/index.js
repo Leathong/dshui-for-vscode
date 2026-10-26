@@ -2562,12 +2562,15 @@ var SessionChangeManager = class {
 		}
 		if (seeded.skipped.length > 0) warnings.push(`the session-start content of ${summarize(seeded.skipped)} could not be folded into the baseline; those files are listed as newly created`);
 		for (const rel of pre.oversized) warnings.push(`"${rel}" is in an ignored path and exceeds maxBlobBytes; its session-start content was not captured, so the whole file is listed`);
+		const acceptedTree = await provider.treeOf(accepted).catch(() => void 0);
 		const calls = await this.tracker.loadCalls(cwd, sessionId);
 		const trackedPaths = [...new Set(calls.map((call) => call.path))];
+		const capturedPaths = await this.pathsAddedSinceCapture(provider, acceptedTree, cwd, sessionId, new Set(trackedPaths), warnings);
+		const stagedPaths = [...new Set([...trackedPaths, ...capturedPaths])];
 		const nestedRoots = await this.nestedRoots(provider);
 		const isNestedPath = (rel) => nestedRoots.some((root) => rel === root || rel.startsWith(`${root}/`));
-		const nestedPaths = trackedPaths.filter(isNestedPath);
-		const plainPaths = trackedPaths.filter((rel) => !isNestedPath(rel));
+		const nestedPaths = stagedPaths.filter(isNestedPath);
+		const plainPaths = stagedPaths.filter((rel) => !isNestedPath(rel));
 		const views = patchFileViews(await provider.withScratch(async (scratch) => {
 			await provider.readTree(scratch, accepted);
 			await provider.stagePaths(scratch, plainPaths);
@@ -2610,7 +2613,7 @@ var SessionChangeManager = class {
 		}
 		const modifications = (await this.modifications(provider, accepted, calls, baselineTree, pre.blobs)).filter((item) => !hidden.has(item.path));
 		const pending = new Set([...changes.map((change) => change.path), ...hidden]);
-		const acceptedRows = await this.acceptedRows(provider, baselineTree, accepted, pending, warnings);
+		const acceptedRows = await this.acceptedRows(provider, baselineTree, accepted, pending, warnings, acceptedTree);
 		attachToolCalls(changes, modifications);
 		for (const rel of this.tracker.oversizedPaths(sessionId)) if (!probe.has(rel)) warnings.push(`"${rel}" exceeds maxBlobBytes and is only rollback-able at turn granularity`);
 		if (this.tracker.baseDegraded(sessionId)) warnings.push("the call chain baseline was captured after the session started; the first write to each path has no caller-level patch");
@@ -2646,6 +2649,19 @@ var SessionChangeManager = class {
 			acceptedModifications: modifications.filter((item) => item.accepted === true).map((item) => item.modificationId),
 			warnings: [...new Set(warnings)]
 		});
+	}
+	/**
+	* Manual refresh: while a turn is running, take a fresh full-worktree
+	* capture first (`refs/dsh/progress`) so files created by bash/scripts
+	* since the last boundary become discoverable immediately. An idle session
+	* already has a turn-end/session-end capture covering its current state, so
+	* it is listed without another O(worktree) scan. The capture is best-effort:
+	* a failure leaves the previous capture in place and the list still loads.
+	*/
+	async refreshSessionChanges(sessionId) {
+		const live = this.liveSession(sessionId);
+		if (live.ok && !isSubagentSession(live.value) && sessionIdleEnd(live.value) === void 0) await this.snapshots.captureProgress(live.value, currentTurn(live.value)).catch(() => void 0);
+		return this.sessionChanges(sessionId);
 	}
 	async acceptFile(request) {
 		const bound = this.requireBound(request.listId, request.sessionId);
@@ -3119,9 +3135,9 @@ var SessionChangeManager = class {
 	* appears twice. No authorship is inferred — the tracked chain is not
 	* authoritative, and guessing wrong would either hide a row or duplicate it.
 	*/
-	async acceptedRows(provider, sessionBase, accepted, pending, warnings) {
+	async acceptedRows(provider, sessionBase, accepted, pending, warnings, knownTree) {
 		if (sessionBase === void 0) return [];
-		const acceptedTree = await provider.treeOf(accepted).catch(() => void 0);
+		const acceptedTree = knownTree ?? await provider.treeOf(accepted).catch(() => void 0);
 		if (acceptedTree === void 0) {
 			warnings.push("the accepted baseline tree could not be read; already-accepted files are not listed");
 			return [];
@@ -3140,6 +3156,28 @@ var SessionChangeManager = class {
 			restorable: true,
 			accepted: true
 		}));
+	}
+	/**
+	* Paths present in the newest full-worktree capture but absent from the
+	* accepted baseline. These are files created without a write/edit call —
+	* typically by a bash script — so no tracked call can stage them; the capture
+	* tree can. They are only staged (visibility), never treated as owned: the
+	* attribution step still marks them `foreign` and the idle-boundary filter
+	* still drops a rewrite that happened after the turn/session ended.
+	*
+	* A failed comparison only costs these rows (and adds a warning); a stale
+	* capture can under-report but never invent a path.
+	*/
+	async pathsAddedSinceCapture(provider, acceptedTree, cwd, sessionId, known, warnings) {
+		const capture = await this.snapshots.latestCapture(cwd, sessionId).catch(() => void 0);
+		if (capture === void 0) return [];
+		if (acceptedTree === void 0 || acceptedTree === capture.tree) return [];
+		const entries = await provider.diffEntries(acceptedTree, capture.tree).catch(() => void 0);
+		if (entries === void 0) {
+			warnings.push("files created outside the write/edit tool chain could not be discovered from the newest session capture");
+			return [];
+		}
+		return entries.filter((entry) => entry.status === "A").map((entry) => entry.path).filter((rel) => !known.has(rel));
 	}
 	async nestedRoots(provider) {
 		return this.snapshots.nestedRoots(provider.cwd, provider);
@@ -3385,6 +3423,12 @@ function attachToolCalls(changes, modifications) {
 /** The turn the session started at (first `turn/start`). */
 function sessionStartTurn(session) {
 	return (session.snapshotEvents().find((item) => item.type === "turn/start")?.data)?.turn ?? 0;
+}
+/** The newest `turn/start` turn, for the progress-capture commit message. */
+function currentTurn(session) {
+	let turn;
+	for (const event of session.snapshotEvents()) if (event.type === "turn/start") turn = event.data.turn;
+	return turn;
 }
 function sessionIdleEnd(session) {
 	const events = session.snapshotEvents();
@@ -4058,6 +4102,14 @@ const SESSION_END_REF = "refs/dsh/end";
 */
 const TURN_END_REF = "refs/dsh/turn-end";
 /**
+* `refs/dsh/progress`: on-demand full-worktree capture taken while a turn is
+* running (the modification dock's refresh button). It is **not** a boundary:
+* the modification list uses it as the newest capture so files created by a
+* bash script mid-turn become visible immediately, instead of waiting for the
+* next `turn/end`. Only the latest capture is kept.
+*/
+const PROGRESS_REF = "refs/dsh/progress";
+/**
 * `refs/dsh/gap`: cumulative tree of paths whose current content was last
 * changed outside any turn (between two turns, or while the session was
 * closed). `refs/dsh/gap-deleted` records paths whose last gap change was a
@@ -4235,6 +4287,18 @@ var SnapshotManager = class {
 		if (cwd === void 0 || cwd === "") return void 0;
 		return this.queueCapture(cwd, session.id, () => this.captureBoundary(session, TURN_END_REF, "turn end", turn));
 	}
+	/**
+	* Capture the worktree on demand into {@link PROGRESS_REF}. Called by the
+	* explicit refresh action while a turn is running: it closes the window in
+	* which a bash-created file exists but no capture has recorded it yet. The
+	* capture is serialized with turn-start/turn-end captures, so it can never
+	* interleave with them on the persistent scan index.
+	*/
+	async captureProgress(session, turn) {
+		const cwd = session.header.cwd;
+		if (cwd === void 0 || cwd === "") return void 0;
+		return this.queueCapture(cwd, session.id, () => this.captureBoundary(session, PROGRESS_REF, "progress", turn));
+	}
 	async captureBoundary(session, ref, label, turn) {
 		const cwd = session.header.cwd;
 		if (cwd === void 0 || cwd === "") return void 0;
@@ -4264,6 +4328,44 @@ var SnapshotManager = class {
 	/** Tree and capture time of the latest turn-end boundary, if one exists. */
 	async turnEndBoundary(cwd, sessionId) {
 		return this.refBoundary(cwd, sessionId, TURN_END_REF);
+	}
+	/**
+	* The newest full-worktree capture of this session: a turn point, the
+	* turn-end boundary, the session-end boundary or an on-demand progress
+	* capture. All four are `add -A` trees (they honor .gitignore), so a path
+	* they contain was present in the worktree at capture time no matter who
+	* created it.
+	*
+	* The modification list uses this tree to discover files created by bash or
+	* another external process: such a path has no write/edit call, so staging it
+	* from the capture is the only way to make it appear in `git diff
+	* <accepted>` (git never lists an untracked path). It is a visibility aid,
+	* not a boundary: post-turn filtering still compares against
+	* {@link turnEndBoundary} / {@link endBoundary} only.
+	*
+	* Commit times have second resolution, while two captures (a turn point and a
+	* progress capture, say) can share one second; the capture commit message
+	* records `created=<ms>`, so use it to order them precisely.
+	*/
+	async latestCapture(cwd, sessionId) {
+		const provider = this.providerFor(cwd, sessionId);
+		if (!await provider.available().catch(() => false)) return void 0;
+		const entries = await provider.listRefsWithMeta("refs/dsh/").catch(() => []);
+		let latest;
+		for (const entry of entries) {
+			if (entry.tree === "") continue;
+			if (entry.ref !== "refs/dsh/turn-end" && entry.ref !== "refs/dsh/end" && entry.ref !== "refs/dsh/progress" && !entry.ref.startsWith("refs/dsh/points/")) continue;
+			const recorded = /(?:^|\n)created=(\d+)/.exec(entry.contents);
+			const precise = recorded === null ? NaN : Number(recorded[1]);
+			const createdAt = Number.isFinite(precise) && precise > 0 ? precise : entry.createdAt * 1e3;
+			if (createdAt <= 0) continue;
+			if (latest === void 0 || createdAt > latest.createdAt) latest = {
+				ref: entry.ref,
+				tree: entry.tree,
+				createdAt
+			};
+		}
+		return latest;
 	}
 	/** Wait for every capture queued for this session (turn start/end, gaps). */
 	async waitForCaptures(cwd, sessionId) {
@@ -4804,6 +4906,7 @@ let RollbackService = (() => {
 	let _status_decorators;
 	let _prepareTurn_decorators;
 	let _sessionChanges_decorators;
+	let _refreshChanges_decorators;
 	let _acceptAll_decorators;
 	let _acceptFile_decorators;
 	let _acceptModification_decorators;
@@ -4820,6 +4923,7 @@ let RollbackService = (() => {
 			_status_decorators = [Remote];
 			_prepareTurn_decorators = [Remote];
 			_sessionChanges_decorators = [Remote];
+			_refreshChanges_decorators = [Remote];
 			_acceptAll_decorators = [Remote];
 			_acceptFile_decorators = [Remote];
 			_acceptModification_decorators = [Remote];
@@ -4890,6 +4994,17 @@ let RollbackService = (() => {
 				access: {
 					has: (obj) => "sessionChanges" in obj,
 					get: (obj) => obj.sessionChanges
+				},
+				metadata: _metadata
+			}, null, _instanceExtraInitializers);
+			__esDecorate(this, null, _refreshChanges_decorators, {
+				kind: "method",
+				name: "refreshChanges",
+				static: false,
+				private: false,
+				access: {
+					has: (obj) => "refreshChanges" in obj,
+					get: (obj) => obj.refreshChanges
 				},
 				metadata: _metadata
 			}, null, _instanceExtraInitializers);
@@ -5046,6 +5161,13 @@ let RollbackService = (() => {
 		sessionChanges(sessionId, _signal) {
 			return this.sessionChangeManager.sessionChanges(sessionId);
 		}
+		/**
+		* Explicit refresh: capture the worktree first when a turn is running, so
+		* bash-created files show up now instead of at the next turn boundary.
+		*/
+		refreshChanges(sessionId, _signal) {
+			return this.sessionChangeManager.refreshSessionChanges(sessionId);
+		}
 		acceptAll(request, _signal) {
 			return this.sessionChangeManager.acceptAll(request);
 		}
@@ -5157,6 +5279,11 @@ const ROLLBACK_HOST_TYPERT = {
 				},
 				{
 					kind: "method",
+					name: "refreshChanges",
+					signature: "@Remote refreshChanges(sessionId: string, signal?: AbortSignal): Promise<RollbackSessionChangesResult>"
+				},
+				{
+					kind: "method",
 					name: "acceptFile",
 					signature: "@Remote acceptFile(request: RollbackAcceptFileRequest, signal?: AbortSignal): Promise<RollbackAcceptResult>"
 				},
@@ -5255,6 +5382,12 @@ const ROLLBACK_HOST_TYPERT = {
 			codec: jsonCodec("dsh-rollback-plugin#JsonValue")
 		}], true),
 		invocation("sessionChanges", [{
+			name: "sessionId",
+			wire: "sessionId",
+			source: "json",
+			codec: jsonCodec("dsh-rollback-plugin#JsonValue")
+		}], true),
+		invocation("refreshChanges", [{
 			name: "sessionId",
 			wire: "sessionId",
 			source: "json",
@@ -5377,6 +5510,6 @@ function installTrackingListeners(ctx, service) {
 	}, { prepend: true });
 }
 //#endregion
-export { ACCEPTED_REF, AcceptBase, CHAIN_BASE_REF, CHAIN_HEAD_REF, CHAIN_PRE_REF, CallTracker, DEFAULT_ROLLBACK_CONFIG, GAP_DELETED_REF, GAP_REF, GitProvider, POINTS_PREFIX, RollbackService, SESSION_END_REF, SessionChangeManager, SnapshotManager, TURN_END_REF, apply, applyHunkUndo, attachToolCalls, boundaryInfo, buildFileChange, changeLedgerRoot, diffGitPath, encodeSessionSegment, findPreviousTurnEnd, hunkFingerprint, inject, installTrackingListeners, isHash, journalsPath, locksDir, manifestsPath, name, parseDiffHunks, parseDiffTreeZ, patchFileViews, pointRef, projectDirKey, readJsonFile, replayPatches, resolveBoundary, resolveBoundaryForTurn, resolveDshHome, sessionDirFor, sessionIdleEnd, sessionSnapshotRepo, sessionStartTurn, spawnGit, splitDiffByPath, splitDiffSections, splitPatchFiles, summarize, unquoteGitPath, writeJsonFileAtomic };
+export { ACCEPTED_REF, AcceptBase, CHAIN_BASE_REF, CHAIN_HEAD_REF, CHAIN_PRE_REF, CallTracker, DEFAULT_ROLLBACK_CONFIG, GAP_DELETED_REF, GAP_REF, GitProvider, POINTS_PREFIX, PROGRESS_REF, RollbackService, SESSION_END_REF, SessionChangeManager, SnapshotManager, TURN_END_REF, apply, applyHunkUndo, attachToolCalls, boundaryInfo, buildFileChange, changeLedgerRoot, diffGitPath, encodeSessionSegment, findPreviousTurnEnd, hunkFingerprint, inject, installTrackingListeners, isHash, journalsPath, locksDir, manifestsPath, name, parseDiffHunks, parseDiffTreeZ, patchFileViews, pointRef, projectDirKey, readJsonFile, replayPatches, resolveBoundary, resolveBoundaryForTurn, resolveDshHome, sessionDirFor, sessionIdleEnd, sessionSnapshotRepo, sessionStartTurn, spawnGit, splitDiffByPath, splitDiffSections, splitPatchFiles, summarize, unquoteGitPath, writeJsonFileAtomic };
 
 //# sourceMappingURL=index.js.map

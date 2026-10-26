@@ -261,6 +261,16 @@ window.__ModuleLoader__.load({
 					result: jsonCodec("dsh-rollback-plugin#RemoteResult")
 				},
 				{
+					id: `${packageName}#rollback/refreshChanges`,
+					service: "rollback",
+					namespace: "rollback",
+					method: "refreshChanges",
+					invocation: { kind: "direct" },
+					parameters: [parameter("sessionId")],
+					cancellation: { parameter: "signal" },
+					result: jsonCodec("dsh-rollback-plugin#RemoteResult")
+				},
+				{
 					id: `${packageName}#rollback/acceptFile`,
 					service: "rollback",
 					namespace: "rollback",
@@ -400,7 +410,7 @@ window.__ModuleLoader__.load({
 			return false;
 		}
 		function ModificationDock(props) {
-			const { session, t, sessionEvents, sessionChanges, acceptAll, undoAll, acceptFile, acceptModification, undoFile, undoModification, undoHunks, openAt } = props;
+			const { session, t, sessionEvents, sessionChanges, refreshChanges, acceptAll, undoAll, acceptFile, acceptModification, undoFile, undoModification, undoHunks, openAt } = props;
 			const [data, setData] = (0, react.useState)(null);
 			const [loading, setLoading] = (0, react.useState)(false);
 			const [error, setError] = (0, react.useState)(null);
@@ -423,17 +433,22 @@ window.__ModuleLoader__.load({
 			const dataRef = (0, react.useRef)(null);
 			dataRef.current = data;
 			const loadingRef = (0, react.useRef)(false);
-			const queuedRef = (0, react.useRef)(false);
-			const load = async (background = false) => {
+			/** A load requested while one was in flight; keeps its capture/foreground intent. */
+			const queuedRef = (0, react.useRef)(null);
+			const load = async (background = false, refresh = false) => {
 				if (loadingRef.current) {
-					queuedRef.current = true;
+					const previous = queuedRef.current;
+					queuedRef.current = {
+						refresh: refresh || previous?.refresh === true,
+						background: background && (previous?.background ?? true)
+					};
 					return;
 				}
 				loadingRef.current = true;
 				if (!background) setLoading(true);
 				const version = optimisticVersion.current;
 				try {
-					const remote = await sessionChanges().catch((loadError) => {
+					const remote = await (refresh ? refreshChanges() : sessionChanges()).catch((loadError) => {
 						setError(loadError instanceof Error ? loadError.message : String(loadError));
 						return null;
 					});
@@ -450,10 +465,9 @@ window.__ModuleLoader__.load({
 				} finally {
 					loadingRef.current = false;
 					if (!background) setLoading(false);
-					if (queuedRef.current) {
-						queuedRef.current = false;
-						load(background);
-					}
+					const queued = queuedRef.current;
+					queuedRef.current = null;
+					if (queued !== null) load(queued.background, queued.refresh);
 				}
 			};
 			const mounted = (0, react.useRef)(false);
@@ -813,7 +827,7 @@ window.__ModuleLoader__.load({
 										type: "button",
 										className: "dsh-mod-tool",
 										onClick: () => {
-											load();
+											load(false, true);
 										},
 										"aria-label": t("dock.refresh"),
 										children: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconRefreshOutlineRegular, {})
@@ -1529,6 +1543,7 @@ window.__ModuleLoader__.load({
 					locale: NS,
 					inject: (sessionId) => ({
 						sessionChanges: () => rollback.sessionChanges(sessionId),
+						refreshChanges: () => rollback.refreshChanges(sessionId),
 						acceptAll: (listId) => rollback.acceptAll({
 							sessionId,
 							listId

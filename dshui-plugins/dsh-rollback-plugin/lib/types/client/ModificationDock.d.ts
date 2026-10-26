@@ -5,6 +5,11 @@ import type { RemoteResult } from '@deepseek-ai/dsh-typert-protocol';
 import type { OpenAtResult, RollbackAcceptResult, RollbackSessionChangesResult, RollbackUndoFileResult, RollbackUndoHunksResult, RollbackUndoModificationResult } from '../shared/types.ts';
 export interface ModificationDockInjected {
     sessionChanges: () => Promise<RemoteResult<RollbackSessionChangesResult>>;
+    /**
+     * Explicit refresh: the host captures the worktree first when a turn is
+     * running (so bash/script-created files appear immediately), then lists.
+     */
+    refreshChanges: () => Promise<RemoteResult<RollbackSessionChangesResult>>;
     acceptAll: (listId: string) => Promise<RemoteResult<RollbackAcceptResult>>;
     undoAll: (listId: string) => Promise<RemoteResult<RollbackUndoFileResult>>;
     acceptFile: (path: string, listId: string) => Promise<RemoteResult<RollbackAcceptResult>>;

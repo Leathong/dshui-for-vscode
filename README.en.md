@@ -557,8 +557,8 @@ workflow below.
 
 The extension binds three dsh versions together, and all must be aligned on upgrade:
 
-1. **CLI runtime:** `dependencies["@deepseek-ai/dsh"]` in `package.json` (currently `0.2.1-rc.2`).
-2. **Client bundle source:** the `.dsh-src` checkout (currently `dsh-v0.2.1-rc.2` with the dshui
+1. **CLI runtime:** `dependencies["@deepseek-ai/dsh"]` in `package.json` (currently `0.2.1-rc.3`).
+2. **Client bundle source:** the `.dsh-src` checkout (currently `dsh-v0.2.1-rc.3` with the dshui
    client patch re-applied — since 0.1.2 the session/chat clients were restructured, so re-apply the
    patch to the new structure per `scripts/verify-patches.mjs`; since the repo's master may lag behind
    the npm release, align by checking each package's version in its `package.json` and confirm with
@@ -623,7 +623,7 @@ node scripts/verify-patches.mjs      # each file flagged as missing needs its pa
 #    - ui-chat/src/client/chat/MessageItem.tsx         UserMessageNodeView / SteeringMessageNodeView split, user-actions child slot, markdown link projection
 #    - ui-chat/src/client/chat/register-node-renderers.ts  user declares the user-actions child; steering uses the strip-free renderer
 #    - ui-chat/src/client/contract/slots.ts            UserActionOwnerProps and the conversation.chat.user-actions slot
-#    - packages/client/tsdown.client.ts                workspaceManifest resolves dshui-client-* ids by package directory (rc.1 validates by package name)
+#    - packages/client/tsdown.client.ts                workspaceManifest resolves dshui-client-* ids by package directory (rc.2 resolves them from the package directory, not the package name)
 #    - packages/util/native-command/src/path-opener.ts  darwin bridge/CLI/vscode://file branch + dshuiOrigin/dshuiLine (line travels as the bridge line param)
 #    - packages/client/connection/src/browser-auth.ts   both index 303 redirects (token exchange / authenticated token mismatch) keep dshui query params
 #    - packages/api/session-controller/src/{index,types}.ts  openWorkspacePath threads dshuiOrigin/dshuiLine; verifyDesktopPath expands ~ via dshuiHomePath
@@ -676,7 +676,7 @@ Other drift-prone spots to check after every upgrade:
   (`git apply` errors) — just rewrite it for the new source; when the bridge is unavailable the opener
   automatically falls back to `vscode://file`.
 - **Re-exporting the patch requires `--binary`, and the base commit must move with it:** the patch is
-  pinned to dsh `0.2.1-rc.2` (`687f282e…`, see `patches/README.md` and Makefile's `DSH_BASE`) and is
+  pinned to dsh `0.2.1-rc.3` (`1f81c047…`, see `patches/README.md` and Makefile's `DSH_BASE`) and is
   exported with `git -C .dsh-src diff --binary <base commit> > patches/dshui-bundles.patch` (`make
   dsh-gen-patch` already does this). Both halves have bitten us: without `--binary`, `git diff` writes
   only a `Binary files ... differ` placeholder (no content) for the PNG/ICO assets the base snapshot

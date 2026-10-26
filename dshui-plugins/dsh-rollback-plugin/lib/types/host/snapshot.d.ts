@@ -54,6 +54,14 @@ export declare const SESSION_END_REF = "refs/dsh/end";
  */
 export declare const TURN_END_REF = "refs/dsh/turn-end";
 /**
+ * `refs/dsh/progress`: on-demand full-worktree capture taken while a turn is
+ * running (the modification dock's refresh button). It is **not** a boundary:
+ * the modification list uses it as the newest capture so files created by a
+ * bash script mid-turn become visible immediately, instead of waiting for the
+ * next `turn/end`. Only the latest capture is kept.
+ */
+export declare const PROGRESS_REF = "refs/dsh/progress";
+/**
  * `refs/dsh/gap`: cumulative tree of paths whose current content was last
  * changed outside any turn (between two turns, or while the session was
  * closed). `refs/dsh/gap-deleted` records paths whose last gap change was a
@@ -136,6 +144,14 @@ export declare class SnapshotManager {
      * stays in the list.
      */
     captureTurnEnd(session: Session, turn: number): Promise<string | undefined>;
+    /**
+     * Capture the worktree on demand into {@link PROGRESS_REF}. Called by the
+     * explicit refresh action while a turn is running: it closes the window in
+     * which a bash-created file exists but no capture has recorded it yet. The
+     * capture is serialized with turn-start/turn-end captures, so it can never
+     * interleave with them on the persistent scan index.
+     */
+    captureProgress(session: Session, turn?: number): Promise<string | undefined>;
     private captureBoundary;
     /** Tree and capture time of the last session-end boundary, if one exists. */
     endBoundary(cwd: string, sessionId: string): Promise<{
@@ -144,6 +160,29 @@ export declare class SnapshotManager {
     } | undefined>;
     /** Tree and capture time of the latest turn-end boundary, if one exists. */
     turnEndBoundary(cwd: string, sessionId: string): Promise<{
+        tree: string;
+        createdAt: number;
+    } | undefined>;
+    /**
+     * The newest full-worktree capture of this session: a turn point, the
+     * turn-end boundary, the session-end boundary or an on-demand progress
+     * capture. All four are `add -A` trees (they honor .gitignore), so a path
+     * they contain was present in the worktree at capture time no matter who
+     * created it.
+     *
+     * The modification list uses this tree to discover files created by bash or
+     * another external process: such a path has no write/edit call, so staging it
+     * from the capture is the only way to make it appear in `git diff
+     * <accepted>` (git never lists an untracked path). It is a visibility aid,
+     * not a boundary: post-turn filtering still compares against
+     * {@link turnEndBoundary} / {@link endBoundary} only.
+     *
+     * Commit times have second resolution, while two captures (a turn point and a
+     * progress capture, say) can share one second; the capture commit message
+     * records `created=<ms>`, so use it to order them precisely.
+     */
+    latestCapture(cwd: string, sessionId: string): Promise<{
+        ref: string;
         tree: string;
         createdAt: number;
     } | undefined>;

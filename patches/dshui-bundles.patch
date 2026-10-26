@@ -1590,10 +1590,10 @@ index 0000000000..0af010e164
 +  })
 +})
 diff --git a/packages/client/ui-conversation/src/client/apply.ts b/packages/client/ui-conversation/src/client/apply.ts
-index e567bd1a50..d0c9aaa31c 100644
+index 6594c95812..407dcbfda7 100644
 --- a/packages/client/ui-conversation/src/client/apply.ts
 +++ b/packages/client/ui-conversation/src/client/apply.ts
-@@ -142,10 +142,8 @@ function scopedConversation(sessions: ISessions, id: SessionId): IConversation {
+@@ -143,10 +143,8 @@ function scopedConversation(sessions: ISessions, id: SessionId): IConversation {
  }
  
  /** Resolve package-internal attachment operations from the public service. */
@@ -1606,7 +1606,7 @@ index e567bd1a50..d0c9aaa31c 100644
  }
  
  /**
-@@ -365,7 +363,11 @@ export function apply(ctx: Context, config: Config = Config({})): void {
+@@ -371,7 +369,11 @@ export function apply(ctx: Context, config: Config = Config({})): void {
              if (sessions.binding(nextId) === undefined) {
                throw new Error(`ui-conversation: session "${nextId}" resolved no binding`)
              }
@@ -1619,7 +1619,7 @@ index e567bd1a50..d0c9aaa31c 100644
              if (draft.text !== '') {
                next.setDraft(draft)
                from.setDraft('')
-@@ -460,26 +462,33 @@ export function apply(ctx: Context, config: Config = Config({})): void {
+@@ -468,26 +470,33 @@ export function apply(ctx: Context, config: Config = Config({})): void {
        'conversation.composer.dock': { kind: 'list', scope: 'session' },
      },
      inject: (sessionId: SessionId | undefined): ComposerBarInjected => {
@@ -1792,10 +1792,10 @@ index 674b644a9f..5fcd20627a 100644
        {renderFactorySlot('conversation.content', {
          variant: 'main',
 diff --git a/packages/client/ui-conversation/src/client/skeleton/ConversationRoot.module.css b/packages/client/ui-conversation/src/client/skeleton/ConversationRoot.module.css
-index 070cb94a75..d376a34b3e 100644
+index 29a4d5e74e..b37217b43b 100644
 --- a/packages/client/ui-conversation/src/client/skeleton/ConversationRoot.module.css
 +++ b/packages/client/ui-conversation/src/client/skeleton/ConversationRoot.module.css
-@@ -551,9 +551,26 @@ button.crumb:hover {
+@@ -590,9 +590,26 @@ button.crumb:hover {
    overflow-y: auto;
  }
  
@@ -2206,7 +2206,7 @@ index 0214ab995f..bef193c3eb 100644
    'menu.unarchiveSession': 'Unarchive session',
    'menu.pinSession': 'Pin session',
 diff --git a/packages/client/ui-workspace/src/client/navigation.ts b/packages/client/ui-workspace/src/client/navigation.ts
-index 9c8fa97760..9aea870822 100644
+index 55e03054ce..73471457d7 100644
 --- a/packages/client/ui-workspace/src/client/navigation.ts
 +++ b/packages/client/ui-workspace/src/client/navigation.ts
 @@ -23,6 +23,7 @@ import type { DraftInitializationOptions } from '@deepseek-ai/dsh-client-ui-conv
@@ -2217,7 +2217,7 @@ index 9c8fa97760..9aea870822 100644
  
  interface MainSelection {
    readonly sessionId?: SessionId
-@@ -331,7 +332,11 @@ class UiWorkspaceService extends Service implements UiWorkspace {
+@@ -334,7 +335,11 @@ class UiWorkspaceService extends Service implements UiWorkspace {
      const recent = workspace.phase === 'ready' && sessions.phase === 'ready'
        ? recentWorkspace(workspace.items, sessions.byId)
        : undefined
@@ -2230,7 +2230,7 @@ index 9c8fa97760..9aea870822 100644
      if (target === undefined) {
        if (initializeDraft) {
          this.notify({ kind: 'createFailed', message: this.ctx.locale.bind('workspace')('draft.workspaceRequired') })
-@@ -409,7 +414,10 @@ class UiWorkspaceService extends Service implements UiWorkspace {
+@@ -410,7 +415,10 @@ class UiWorkspaceService extends Service implements UiWorkspace {
      let initial: 'waiting' | 'connecting' | 'done' = 'waiting'
      const reconcile = (): void => {
        if (this.lifetime.signal.aborted) return
@@ -2242,7 +2242,7 @@ index 9c8fa97760..9aea870822 100644
        if (initial !== 'waiting') return
        const workspace = this.workspaces.list.getSnapshot()
        const sessions = this.sessions.list.getSnapshot()
-@@ -418,6 +426,15 @@ class UiWorkspaceService extends Service implements UiWorkspace {
+@@ -419,6 +427,15 @@ class UiWorkspaceService extends Service implements UiWorkspace {
          initial = 'done'
          return
        }
@@ -2258,7 +2258,7 @@ index 9c8fa97760..9aea870822 100644
        initial = 'connecting'
        void this.restoreSelection(workspace, sessions).then(
          () => { initial = 'done' },
-@@ -458,7 +475,11 @@ class UiWorkspaceService extends Service implements UiWorkspace {
+@@ -459,7 +476,11 @@ class UiWorkspaceService extends Service implements UiWorkspace {
        && !workspaces.archivedSessionIds.includes(summary.id)) {
        sessionId = await this.restoreBlank(workspace.workspaceId, summary.id)
      }
@@ -2271,7 +2271,7 @@ index 9c8fa97760..9aea870822 100644
      if (target === undefined && workspaces.items.length === 0 && sessions.ids.length === 0) {
        const prepared = await this.initializeDefaultWorkspace(navigation)
        if (navigation.aborted) return
-@@ -571,4 +592,15 @@ function recentWorkspace(
+@@ -572,4 +593,15 @@ function recentWorkspace(
    return selected
  }
  
@@ -2838,7 +2838,7 @@ index 7aa03cebc1..7f3b261154 100644
 +  pluginId: 'dshui-client-ui-workspace',
 +})
 diff --git a/packages/extensions/cordis-client-runner/src/client/slot-catalog.ts b/packages/extensions/cordis-client-runner/src/client/slot-catalog.ts
-index 50bcbe529a..df70bc0c7a 100644
+index 33794f1a71..2a2dca1e38 100644
 --- a/packages/extensions/cordis-client-runner/src/client/slot-catalog.ts
 +++ b/packages/extensions/cordis-client-runner/src/client/slot-catalog.ts
 @@ -182,7 +182,7 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
@@ -2983,7 +2983,7 @@ index 50bcbe529a..df70bc0c7a 100644
    },
    {
      key: 'conversation.composer',
-@@ -1916,11 +1977,12 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
+@@ -1970,11 +2031,12 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
        'useAccess: (action: RemoteEndpoint) => boolean',
        'useTrajectory: UseTrajectory',
      ],
@@ -2997,7 +2997,7 @@ index 50bcbe529a..df70bc0c7a 100644
        'client-ui-conversation PlainUserText key \'text\'',
        'client-ui-conversation SessionReference key \'session\'',
        'client-ui-goal GoalCommandReference key \'command\'',
-@@ -3444,7 +3506,7 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
+@@ -3498,7 +3560,7 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
      ],
      replaceRisk: 'none',
      example: 'return {\n  inject: [\'slots\'],\n  apply(ctx) {\n    ctx.slots.inject(\'shell.quota-notice\', () => ctx.slots.register(\n      { name: \'shell.quota-notice\', select: owner => null },\n      () => React.createElement(\'div\', null, \'hello\'),\n    ))\n  },\n}',
@@ -3006,7 +3006,7 @@ index 50bcbe529a..df70bc0c7a 100644
    },
    {
      key: 'sidebar',
-@@ -4583,6 +4645,7 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
+@@ -4745,6 +4807,7 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
        'client-ui-workspace ForkSessionMenuItem id \'fork\'',
        'client-ui-workspace ArchiveSessionMenuItem id \'archive\'',
        'client-ui-workspace SessionIdMenuItem id \'session-id\'',
@@ -3014,7 +3014,7 @@ index 50bcbe529a..df70bc0c7a 100644
      ],
      replaceRisk: 'none',
      example: 'return {\n  inject: [\'slots\'],\n  apply(ctx) {\n    const copyLabel = \'Copy session title\' // Localize in the contributing package.\n    ctx.slots.inject(\'sidebar.workspaces.session.menu.item\', () => ctx.slots.register(\n      { name: \'sidebar.workspaces.session.menu.item\', id: \'copy-session-title\', order: 500 },\n      ({ displayTitle, useMenuOpenState }) => {\n        const [, setMenuOpen] = useMenuOpenState()\n        return React.createElement(\n          \'button\',\n          {\n            type: \'button\', role: \'menuitem\',\n            onClick: () => { setMenuOpen(false); void navigator.clipboard.writeText(displayTitle) },\n          },\n          copyLabel,\n        )\n      },\n    ))\n  },\n}',
-@@ -4638,6 +4701,7 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
+@@ -4800,6 +4863,7 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
      occupants: [
        'client-ui-workspace ArchiveSessionRowButton id \'archive\'',
        'client-ui-workspace PinSessionRowButton id \'pin\'',

@@ -7,6 +7,7 @@ export interface RollbackRemote {
     status(sessionId: string): Promise<RemoteResult<RollbackStatusResult>>;
     prepareTurn(sessionId: string, turn: number): Promise<RemoteResult<RollbackPrepareTurnResult>>;
     sessionChanges(sessionId: string): Promise<RemoteResult<RollbackSessionChangesResult>>;
+    refreshChanges(sessionId: string): Promise<RemoteResult<RollbackSessionChangesResult>>;
     acceptAll(request: RollbackAcceptAllRequest): Promise<RemoteResult<RollbackAcceptAllResult>>;
     undoAll(request: RollbackUndoAllRequest): Promise<RemoteResult<RollbackUndoAllResult>>;
     acceptFile(request: RollbackAcceptFileRequest): Promise<RemoteResult<RollbackAcceptResult>>;
@@ -23,6 +24,7 @@ declare module '@deepseek-ai/dsh-typert-protocol' {
         'rollback/status'(sessionId: string): Promise<RemoteResult<RollbackStatusResult>>;
         'rollback/prepareTurn'(sessionId: string, turn: number): Promise<RemoteResult<RollbackPrepareTurnResult>>;
         'rollback/sessionChanges'(sessionId: string): Promise<RemoteResult<RollbackSessionChangesResult>>;
+        'rollback/refreshChanges'(sessionId: string): Promise<RemoteResult<RollbackSessionChangesResult>>;
         'rollback/acceptAll'(request: RollbackAcceptAllRequest): Promise<RemoteResult<RollbackAcceptAllResult>>;
         'rollback/undoAll'(request: RollbackUndoAllRequest): Promise<RemoteResult<RollbackUndoAllResult>>;
         'rollback/acceptFile'(request: RollbackAcceptFileRequest): Promise<RemoteResult<RollbackAcceptResult>>;
