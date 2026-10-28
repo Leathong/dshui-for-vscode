@@ -213,6 +213,12 @@ export declare class SnapshotManager {
     private refBoundary;
     /** Whether this session ever created an isolated snapshot repository. */
     hasRepository(cwd: string, sessionId: string): boolean;
+    /**
+     * The exact turn-start point of one turn, without the earlier-point
+     * fallback `find` applies. The modification list must bound a gap with the
+     * very snapshot taken at that turn's start, never with an older point.
+     */
+    findExact(cwd: string, sessionId: string, turn: number): Promise<RollbackSnapshotManifest | undefined>;
     /** Exact point first, then the newest earlier point for the same session. */
     find(cwd: string, sessionId: string, targetTurn: number): Promise<{
         manifest: RollbackSnapshotManifest;

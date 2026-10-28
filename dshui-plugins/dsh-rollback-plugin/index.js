@@ -2455,6 +2455,14 @@ var SessionChangeManager = class {
 	/** Last effective baseline tree per session, keyed by chain base + pre-image paths. */
 	baselineTrees = /* @__PURE__ */ new Map();
 	/**
+	* In-flight turn-start pipelines (worktree point capture + gap recording).
+	* A list read awaits the pending one, so the interval that just ended is
+	* already in the gap trees when the dock refreshes at the new turn.
+	*/
+	startingTurns = /* @__PURE__ */ new Map();
+	/** Turn starts whose gap was already recorded (or proven not applicable). */
+	recordedGaps = /* @__PURE__ */ new Set();
+	/**
 	* In-flight boundary captures are tracked inside SnapshotManager's per-session
 	* capture queue; the list awaits `waitForCaptures()` before reading a
 	* boundary so it never uses a tree whose capture is still running.
@@ -2476,6 +2484,7 @@ var SessionChangeManager = class {
 	* their main session.
 	*/
 	noteTurnEnd(session, turn) {
+		this.finishTurnStart(session.id);
 		if (isSubagentSession(session)) return void 0;
 		const cwd = session.header.cwd;
 		if (cwd === void 0 || cwd === "") return void 0;
@@ -2483,38 +2492,94 @@ var SessionChangeManager = class {
 		return this.snapshots.captureTurnEnd(session, turn).catch(() => void 0);
 	}
 	/**
-	* Record the gap between the previous turn's end and this turn's start.
+	* Register the turn-start pipeline before its worktree capture begins.
 	*
-	* Only a transition whose previous event is a completed `turn/end` (after
-	* skipping restore markers) is safe: for an aborted/mid-turn close the
-	* previous boundary would include that turn's work as "gap". A fork seed
-	* marker is also rejected (its parent boundary is not this session's turn).
+	* The dock refreshes as soon as `turn/start` is appended, which can be
+	* before the capture and its gap recording finish. A list read awaits this
+	* promise, so the first refresh of the new turn already excludes the
+	* out-of-turn changes of the interval that just ended. The returned settle
+	* function is idempotent, so callers can put it in a `finally`.
+	*/
+	beginTurnStart(session, turn) {
+		if (isSubagentSession(session)) return () => {};
+		const existing = this.startingTurns.get(session.id);
+		if (existing !== void 0 && existing.turn === turn) return existing.settle;
+		if (existing !== void 0) this.finishTurnStart(session.id);
+		let resolve;
+		const settled = new Promise((done) => {
+			resolve = done;
+		});
+		let done = false;
+		const settle = () => {
+			if (done) return;
+			done = true;
+			if (this.startingTurns.get(session.id)?.settled === settled) this.startingTurns.delete(session.id);
+			resolve();
+		};
+		this.startingTurns.set(session.id, {
+			turn,
+			settled,
+			settle
+		});
+		return settle;
+	}
+	/** Release a pending turn-start wait (the turn ended before its pipeline did). */
+	finishTurnStart(sessionId) {
+		this.startingTurns.get(sessionId)?.settle();
+	}
+	/**
+	* Record the gap between the previous completed turn and this turn's start.
+	*
+	* The boundary is the nearest `turn/end` before this turn's `turn/start`,
+	* not literally the immediately preceding event: the runtime appends
+	* bookkeeping events between turns (`agent/inbox/spliced` when the next
+	* message is queued, title generation, persistence receipts), and requiring
+	* an adjacent `turn/end` silently disabled gap recording after the first
+	* turn. Restore markers are skipped; an aborted/mid-turn close (nearest
+	* turn event is a `turn/start`) and a fork seed marker are still rejected,
+	* because their previous boundary would include work that is not a gap.
 	*/
 	noteTurnStart(session, turn, startTree) {
 		if (isSubagentSession(session)) return void 0;
 		const cwd = session.header.cwd;
 		if (cwd === void 0 || cwd === "") return void 0;
 		if (!this.snapshots.hasRepository(cwd, session.id)) return void 0;
-		const events = session.snapshotEvents();
-		let start = -1;
-		for (let index = events.length - 1; index >= 0; index -= 1) {
-			const event = events[index];
-			if (event.type === "turn/start" && event.data.turn === turn) {
-				start = index;
-				break;
-			}
-		}
-		if (start < 0) return void 0;
-		let index = start - 1;
-		while (index >= 0) {
-			const event = events[index];
-			if (event.type !== "session/end-seed") break;
-			if (event.data.inherited === true) return void 0;
-			index -= 1;
-		}
-		const previous = index >= 0 ? events[index] : void 0;
-		if (previous?.type !== "turn/end") return void 0;
-		return this.snapshots.recordGap(session, turn, startTree, previous.time).catch(() => void 0);
+		const previous = previousTurnEnd(session, turn);
+		if (previous === void 0) return void 0;
+		return this.recordStartGap(session, turn, startTree, previous.time);
+	}
+	/**
+	* Apply one turn-start gap at most once. The cumulative gap trees make a
+	* repeated application idempotent, but the guard keeps every refresh from
+	* re-running the tree diff.
+	*/
+	recordStartGap(session, turn, startTree, boundaryAt) {
+		const key = gapKey(session.id, turn);
+		if (this.recordedGaps.has(key)) return void 0;
+		this.recordedGaps.add(key);
+		return this.snapshots.recordGap(session, turn, startTree, boundaryAt).catch(() => void 0);
+	}
+	/**
+	* Record the current turn's start gap when the eager pre-step pipeline did
+	* not (a refresh that raced its registration, or a host restart in the
+	* middle of a turn). Only a *running* turn is eligible: once it has ended,
+	* `refs/dsh/turn-end` belongs to this turn, so it can no longer bound the
+	* interval before it — using it would record this turn's own work as an
+	* out-of-turn gap.
+	*/
+	async ensureStartGap(session) {
+		if (isSubagentSession(session) || sessionIdleEnd(session) !== void 0) return;
+		const cwd = session.header.cwd;
+		if (cwd === void 0 || cwd === "") return;
+		const turn = currentTurn(session);
+		if (turn === void 0) return;
+		const key = gapKey(session.id, turn);
+		if (this.recordedGaps.has(key)) return;
+		const previous = previousTurnEnd(session, turn);
+		if (previous === void 0) return;
+		const tree = (await this.snapshots.findExact(cwd, session.id, turn).catch(() => void 0))?.tree;
+		if (tree === void 0) return;
+		await this.recordStartGap(session, turn, tree, previous.time);
 	}
 	/**
 	* Record the session's end boundary when it is disposed (closed, or the
@@ -2543,6 +2608,8 @@ var SessionChangeManager = class {
 		const session = live.value;
 		const cwd = session.header.cwd ?? "";
 		if (cwd === "") return failure("session-not-live", `session "${sessionId}" has no workspace cwd`, { sessionId });
+		const starting = this.startingTurns.get(sessionId);
+		if (starting !== void 0) await starting.settled;
 		const warnings = [];
 		const provider = this.snapshots.providerFor(cwd, sessionId);
 		if (!await provider.available().catch(() => false)) return failure("rollback-failed", "the isolated git snapshot repository is unavailable for this workspace", { sessionId });
@@ -2602,6 +2669,7 @@ var SessionChangeManager = class {
 		const foreign = await foreignPaths(provider, calls, changes.map((change) => change.path), probe);
 		for (const change of changes) if (foreign.has(change.path)) change.foreign = true;
 		await this.snapshots.waitForCaptures(cwd, sessionId);
+		await this.ensureStartGap(session);
 		const gapState = await this.snapshots.gapState(cwd, sessionId).catch(() => ({}));
 		const hidden = await this.dropGapChanges(provider, changes, probe, gapState, warnings);
 		const idle = sessionIdleEnd(session);
@@ -3429,6 +3497,43 @@ function currentTurn(session) {
 	let turn;
 	for (const event of session.snapshotEvents()) if (event.type === "turn/start") turn = event.data.turn;
 	return turn;
+}
+/** Stable key for one turn's start gap. */
+function gapKey(sessionId, turn) {
+	return `${sessionId}\u0000${turn}`;
+}
+/**
+* The nearest turn boundary before `turn`'s `turn/start`: a completed
+* `turn/end`, or undefined when the turn did not follow one (aborted or
+* mid-turn close, fork seed, or no earlier turn).
+*
+* Bookkeeping events between turns — `agent/inbox/spliced` when the next
+* message is queued, title generation, persistence receipts — are skipped
+* instead of disqualifying the boundary. They do not run a turn, and the
+* runtime appends the inbox splice between every `turn/end` and the next
+* `turn/start`, so requiring adjacency silently disabled gap recording from
+* turn 2 on.
+*/
+function previousTurnEnd(session, turn) {
+	const events = session.snapshotEvents();
+	let start = -1;
+	for (let index = events.length - 1; index >= 0; index -= 1) {
+		const event = events[index];
+		if (event.type === "turn/start" && event.data.turn === turn) {
+			start = index;
+			break;
+		}
+	}
+	if (start < 0) return void 0;
+	for (let index = start - 1; index >= 0; index -= 1) {
+		const event = events[index];
+		if (event.type === "session/end-seed") {
+			if (event.data.inherited === true) return void 0;
+			continue;
+		}
+		if (event.type === "turn/start") return void 0;
+		if (event.type === "turn/end") return event;
+	}
 }
 function sessionIdleEnd(session) {
 	const events = session.snapshotEvents();
@@ -4476,6 +4581,16 @@ var SnapshotManager = class {
 	hasRepository(cwd, sessionId) {
 		return fs.existsSync(sessionSnapshotRepo(this.dshHome, cwd, sessionId));
 	}
+	/**
+	* The exact turn-start point of one turn, without the earlier-point
+	* fallback `find` applies. The modification list must bound a gap with the
+	* very snapshot taken at that turn's start, never with an older point.
+	*/
+	async findExact(cwd, sessionId, turn) {
+		const provider = this.providerFor(cwd, sessionId);
+		if (!await provider.available().catch(() => false)) return void 0;
+		return this.manifestAt(cwd, sessionId, turn, provider);
+	}
 	/** Exact point first, then the newest earlier point for the same session. */
 	async find(cwd, sessionId, targetTurn) {
 		const provider = this.providerFor(cwd, sessionId);
@@ -5443,6 +5558,10 @@ function apply(ctx, options = {}) {
 		service.sessionChangeManager.noteSessionEnd(session);
 	});
 	ctx.on("session/event", (session, event) => {
+		if (event.type === "turn/start") {
+			if (service.config.snapshotOnPreStep) service.sessionChangeManager.beginTurnStart(session, event.data.turn);
+			return;
+		}
 		if (event.type !== "turn/end") return;
 		service.sessionChangeManager.noteTurnEnd(session, event.data.turn);
 	});
@@ -5458,11 +5577,19 @@ function apply(ctx, options = {}) {
 		} catch (error) {
 			host.logger.warn("rollback call tracking skipped:", error);
 		}
-		if (payload.step === 1 && service.config.snapshotOnPreStep && !isSubagentSession(session)) try {
-			const manifest = await service.snapshots.capture(session, payload.turn);
-			if (manifest?.tree !== void 0) service.sessionChangeManager.noteTurnStart(session, payload.turn, manifest.tree);
-		} catch (error) {
-			host.logger.warn("rollback snapshot skipped:", error);
+		if (payload.step === 1 && service.config.snapshotOnPreStep && !isSubagentSession(session)) {
+			const settle = service.sessionChangeManager.beginTurnStart(session, payload.turn);
+			try {
+				const manifest = await service.snapshots.capture(session, payload.turn);
+				if (manifest?.tree !== void 0) {
+					const gap = service.sessionChangeManager.noteTurnStart(session, payload.turn, manifest.tree);
+					if (gap === void 0) settle();
+					else gap.finally(settle);
+				} else settle();
+			} catch (error) {
+				host.logger.warn("rollback snapshot skipped:", error);
+				settle();
+			}
 		}
 		return next();
 	}, { prepend: true });

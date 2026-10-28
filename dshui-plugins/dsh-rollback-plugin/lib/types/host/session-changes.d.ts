@@ -34,6 +34,14 @@ export declare class SessionChangeManager {
     /** Last effective baseline tree per session, keyed by chain base + pre-image paths. */
     private readonly baselineTrees;
     /**
+     * In-flight turn-start pipelines (worktree point capture + gap recording).
+     * A list read awaits the pending one, so the interval that just ended is
+     * already in the gap trees when the dock refreshes at the new turn.
+     */
+    private readonly startingTurns;
+    /** Turn starts whose gap was already recorded (or proven not applicable). */
+    private readonly recordedGaps;
+    /**
      * In-flight boundary captures are tracked inside SnapshotManager's per-session
      * capture queue; the list awaits `waitForCaptures()` before reading a
      * boundary so it never uses a tree whose capture is still running.
@@ -49,14 +57,45 @@ export declare class SessionChangeManager {
      */
     noteTurnEnd(session: Session, turn: number): Promise<unknown> | undefined;
     /**
-     * Record the gap between the previous turn's end and this turn's start.
+     * Register the turn-start pipeline before its worktree capture begins.
      *
-     * Only a transition whose previous event is a completed `turn/end` (after
-     * skipping restore markers) is safe: for an aborted/mid-turn close the
-     * previous boundary would include that turn's work as "gap". A fork seed
-     * marker is also rejected (its parent boundary is not this session's turn).
+     * The dock refreshes as soon as `turn/start` is appended, which can be
+     * before the capture and its gap recording finish. A list read awaits this
+     * promise, so the first refresh of the new turn already excludes the
+     * out-of-turn changes of the interval that just ended. The returned settle
+     * function is idempotent, so callers can put it in a `finally`.
+     */
+    beginTurnStart(session: Session, turn: number): () => void;
+    /** Release a pending turn-start wait (the turn ended before its pipeline did). */
+    private finishTurnStart;
+    /**
+     * Record the gap between the previous completed turn and this turn's start.
+     *
+     * The boundary is the nearest `turn/end` before this turn's `turn/start`,
+     * not literally the immediately preceding event: the runtime appends
+     * bookkeeping events between turns (`agent/inbox/spliced` when the next
+     * message is queued, title generation, persistence receipts), and requiring
+     * an adjacent `turn/end` silently disabled gap recording after the first
+     * turn. Restore markers are skipped; an aborted/mid-turn close (nearest
+     * turn event is a `turn/start`) and a fork seed marker are still rejected,
+     * because their previous boundary would include work that is not a gap.
      */
     noteTurnStart(session: Session, turn: number, startTree: string): Promise<unknown> | undefined;
+    /**
+     * Apply one turn-start gap at most once. The cumulative gap trees make a
+     * repeated application idempotent, but the guard keeps every refresh from
+     * re-running the tree diff.
+     */
+    private recordStartGap;
+    /**
+     * Record the current turn's start gap when the eager pre-step pipeline did
+     * not (a refresh that raced its registration, or a host restart in the
+     * middle of a turn). Only a *running* turn is eligible: once it has ended,
+     * `refs/dsh/turn-end` belongs to this turn, so it can no longer bound the
+     * interval before it — using it would record this turn's own work as an
+     * out-of-turn gap.
+     */
+    private ensureStartGap;
     /**
      * Record the session's end boundary when it is disposed (closed, or the
      * host shuts down). This is the fallback for a close that happened inside a
