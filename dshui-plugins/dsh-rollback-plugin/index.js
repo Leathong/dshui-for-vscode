@@ -470,7 +470,10 @@ function spawnGit(cwd, args, env, timeoutMs, signal, gitDir, workTree, input) {
 			],
 			windowsHide: true
 		});
-		child.stdin.end(input ?? "");
+		child.stdin.on("error", () => {});
+		try {
+			child.stdin.end(input ?? "");
+		} catch {}
 		let stderr = "";
 		let settled = false;
 		const chunks = [];
