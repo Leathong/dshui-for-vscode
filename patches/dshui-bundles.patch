@@ -1,8 +1,8 @@
 diff --git a/packages/api/session-controller/src/commands.ts b/packages/api/session-controller/src/commands.ts
-index 8dd38573c8..65f4376e7a 100644
+index 5309872331..7329e29995 100644
 --- a/packages/api/session-controller/src/commands.ts
 +++ b/packages/api/session-controller/src/commands.ts
-@@ -273,7 +273,7 @@ export class SessionCommandController {
+@@ -259,7 +259,7 @@ export class SessionCommandController {
      const composition = await this.agents.composeAgent(this.agents.presetForObservation(source))
      try {
        const { provider, model } = this.ctx.agentDefaultModel.currentSelection()
@@ -11,7 +11,7 @@ index 8dd38573c8..65f4376e7a 100644
          sessionId: childId,
          seed,
          inheritedEventCount: SessionLogOffset(boundary + 1),
-@@ -288,6 +288,12 @@ export class SessionCommandController {
+@@ -273,6 +273,12 @@ export class SessionCommandController {
          agentOptions: { provider, model },
          setup: composition.setup,
        })
@@ -25,7 +25,7 @@ index 8dd38573c8..65f4376e7a 100644
        throw new RemoteError(
          'gateway/internal',
 diff --git a/packages/api/session-controller/src/index.ts b/packages/api/session-controller/src/index.ts
-index 2362bce21c..868a12d825 100644
+index 94d08c77e3..5752e13664 100644
 --- a/packages/api/session-controller/src/index.ts
 +++ b/packages/api/session-controller/src/index.ts
 @@ -1,14 +1,15 @@
@@ -38,16 +38,16 @@ index 2362bce21c..868a12d825 100644
 +import { join, resolve } from 'node:path'
  import type { Agent } from '@deepseek-ai/dsh-agent'
  import type {} from '@deepseek-ai/dsh-fs'
- import { Context } from '@deepseek-ai/cordis'
+ import { Context, Service } from '@deepseek-ai/cordis'
  import z from '@deepseek-ai/schemastery'
  import { errorChain, ReasoningEffortId, type MessageSource } from '@deepseek-ai/dsh-llm'
  import type {} from '@deepseek-ai/dsh-client-file-upload'
 -import { canOpenNativePath, nativeFileManager, nativeFileApplications, openNativeFileApplication, openNativeAssociatedPath, revealNativePath } from '@deepseek-ai/dsh-native-command'
 +import { canOpenNativePath, nativeFileManager, nativeFileApplications, openNativeFileApplication, openNativeAssociatedPath, revealNativePath, type PathOpenerInternals } from '@deepseek-ai/dsh-native-command'
  import type { SessionId } from '@deepseek-ai/dsh-session'
- import type { SessionInspection } from '@deepseek-ai/dsh-session-persistence'
  import type {} from '@deepseek-ai/dsh-session-projection-cache'
-@@ -115,6 +116,41 @@ export interface SessionControllerInternals {
+ import type { SessionObservation } from '@deepseek-ai/dsh-session-query'
+@@ -131,6 +132,41 @@ export interface SessionControllerInternals {
    readonly canOpenPath?: () => boolean
  }
  
@@ -89,16 +89,16 @@ index 2362bce21c..868a12d825 100644
  /** Host service backing the generated `ctx.remote.session` namespace. */
  export class SessionController extends TypertRemoteService {
    static inject = [
-@@ -142,7 +178,7 @@ export class SessionController extends TypertRemoteService {
-   private readonly controlState: SessionControlController
-   private readonly history: SessionHistoryController
-   private readonly listState: ApiSessionList
+@@ -162,7 +198,7 @@ export class SessionController extends TypertRemoteService {
+   private commands!: SessionCommandController
+   private controlState!: SessionControlController
+   private listState!: ApiSessionList
 -  private readonly openPath: (path: string, signal: AbortSignal) => Promise<void>
 +  private readonly openPath: (path: string, signal: AbortSignal, internals?: PathOpenerInternals) => Promise<void>
    private readonly fileApplications: typeof nativeFileApplications
    private readonly openFileApplication: typeof openNativeFileApplication
    private readonly revealPath: (path: string, signal: AbortSignal) => Promise<void>
-@@ -371,9 +407,19 @@ export class SessionController extends TypertRemoteService {
+@@ -374,9 +410,19 @@ export class SessionController extends TypertRemoteService {
    ): Promise<SessionOpenWorkspacePathValue> {
      try {
        const path = await this.verifyDesktopPath(request.path, signal)
@@ -119,7 +119,7 @@ index 2362bce21c..868a12d825 100644
        return { opened: true }
      } catch (error: unknown) {
        if (signal.aborted) throw new RemoteError('gateway/cancelled', 'path open was aborted', {})
-@@ -412,10 +458,17 @@ export class SessionController extends TypertRemoteService {
+@@ -415,10 +461,17 @@ export class SessionController extends TypertRemoteService {
    private async verifyDesktopPath(path: string, signal: AbortSignal): Promise<string> {
      if (path.length === 0) throw new RemoteError('gateway/bad-request', 'A non-empty file path is required', {})
      signal.throwIfAborted()
@@ -140,10 +140,10 @@ index 2362bce21c..868a12d825 100644
      }
      signal.throwIfAborted()
 diff --git a/packages/api/session-controller/src/types.ts b/packages/api/session-controller/src/types.ts
-index c0b2b9a573..47ce9f6cb5 100644
+index 9e399d8f3b..84e25a71ef 100644
 --- a/packages/api/session-controller/src/types.ts
 +++ b/packages/api/session-controller/src/types.ts
-@@ -398,6 +398,19 @@ export interface SessionOpenWorkspacePathRequest {
+@@ -377,6 +377,19 @@ export interface SessionOpenWorkspacePathRequest {
    readonly application?: string
    /** Path after best-effort Session workspace resolution, in Host filesystem syntax. */
    readonly path: string
@@ -164,10 +164,10 @@ index c0b2b9a573..47ce9f6cb5 100644
  
  /** Confirmation that the Host handed a workspace path to its native opener. */
 diff --git a/packages/api/session-controller/tests/commands-create-fork.host.spec.ts b/packages/api/session-controller/tests/commands-create-fork.host.spec.ts
-index f43ce3f116..cafea22254 100644
+index eb2093ea18..b8a30bc9d6 100644
 --- a/packages/api/session-controller/tests/commands-create-fork.host.spec.ts
 +++ b/packages/api/session-controller/tests/commands-create-fork.host.spec.ts
-@@ -4,6 +4,7 @@ import type { Agent, AgentHandle, CreateAgentOptions } from '@deepseek-ai/dsh-ag
+@@ -5,6 +5,7 @@ import type { Agent, AgentHandle, CreateAgentOptions } from '@deepseek-ai/dsh-ag
  import type {} from '@deepseek-ai/dsh-agent-preset-registry'
  import { createUserMessage } from '@deepseek-ai/dsh-llm'
  import SessionStore, { SessionId } from '@deepseek-ai/dsh-session'
@@ -175,7 +175,7 @@ index f43ce3f116..cafea22254 100644
  import { RemoteError } from '@deepseek-ai/dsh-typert-protocol'
  import TypertRegistry from '@deepseek-ai/dsh-typert-registry'
  import type { Workspace, WorkspaceId } from '@deepseek-ai/dsh-workspace'
-@@ -176,7 +177,7 @@ function completedSession(
+@@ -178,7 +179,7 @@ function completedSession(
  
  function resolvedHandle(ctx: Context, sessionId: SessionId): AgentHandle {
    return {
@@ -185,12 +185,12 @@ index f43ce3f116..cafea22254 100644
    }
  }
 diff --git a/packages/api/session-controller/tests/session-fork.host.spec.ts b/packages/api/session-controller/tests/session-fork.host.spec.ts
-index e6ba8321ce..c7bc4c32b8 100644
+index 72b21aa31e..65dc2fccb1 100644
 --- a/packages/api/session-controller/tests/session-fork.host.spec.ts
 +++ b/packages/api/session-controller/tests/session-fork.host.spec.ts
-@@ -4,7 +4,8 @@ import { describe, expect, it, vi } from 'vitest'
+@@ -5,7 +5,8 @@ import { describe, expect, it, onTestFinished, vi } from 'vitest'
  import { Context } from '@deepseek-ai/cordis'
- import AgentRegistry, { agentEvents } from '@deepseek-ai/dsh-agent'
+ import AgentRegistry from '@deepseek-ai/dsh-agent'
  import type { Agent, AgentHandle, CreateAgentOptions } from '@deepseek-ai/dsh-agent'
 -import { mountAgentLoopTestDependencies, mountAgentLoopTestHarness } from '@deepseek-ai/dsh-agent-loop-testkit'
 +import { createInboxStub, mountAgentLoopTestDependencies, mountAgentLoopTestHarness } from '@deepseek-ai/dsh-agent-loop-testkit'
@@ -198,7 +198,7 @@ index e6ba8321ce..c7bc4c32b8 100644
  import { BasicCompactionEngine } from '@deepseek-ai/dsh-compaction-basic'
  import { MockAdapter, textResponse } from '../../../core/agent-loop/tests/mock-adapter.ts'
  import { ToolCallId, createMessage, createUserMessage, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
-@@ -46,7 +47,7 @@ async function composed(workspaces: readonly Workspace[] = []): Promise<Context>
+@@ -47,7 +48,7 @@ async function composed(workspaces: readonly Workspace[] = []): Promise<Context>
        })
        const agent = {} as Agent
        const agentCtx = ownerCtx
@@ -207,7 +207,7 @@ index e6ba8321ce..c7bc4c32b8 100644
        await options.setup?.(agentCtx, agent)
        await ctx.agents.register(agent)
        return { agent, dispose: () => Promise.resolve() }
-@@ -90,6 +91,21 @@ async function liveAgent(
+@@ -91,6 +92,21 @@ async function liveAgent(
    return session
  }
  
@@ -226,12 +226,12 @@ index e6ba8321ce..c7bc4c32b8 100644
 +  return { ctx, loop }
 +}
 +
- const remote = (ctx: Context) => createSessionTestRemote(ctx, {
+ const remote = async (ctx: Context) => await createSessionTestRemote(ctx, {
    defaultModelSelection: () => ({ provider: 'default-provider', model: 'default-model' }),
    cwd: '/tmp',
-@@ -677,4 +693,36 @@ describe('sessions.fork', () => {
+@@ -674,4 +690,36 @@ describe('sessions.fork', () => {
+       provider: 'inherited-provider', model: 'inherited-model', reasoningEffort: 'high',
      })
-     await ctx.fiber.dispose()
    })
 +
 +  it('starts the child with an empty inbox instead of the source pending input', async () => {
@@ -251,7 +251,7 @@ index e6ba8321ce..c7bc4c32b8 100644
 +    })
 +    source.inbox.append('next-turn', queued)
 +
-+    const response = await remote(ctx).fork(request({ sessionId: source.id }))
++    const response = await (await remote(ctx)).fork(request({ sessionId: source.id }))
 +
 +    expect(source.inbox.nextTurn).toEqual([queued])
 +    expect(response.ok).toBe(true)
@@ -267,7 +267,7 @@ index e6ba8321ce..c7bc4c32b8 100644
 +  })
  })
 diff --git a/packages/api/session-controller/tests/session-open-workspace-path.host.spec.ts b/packages/api/session-controller/tests/session-open-workspace-path.host.spec.ts
-index e8216b5214..9008839074 100644
+index 157d6202bb..0b1c34619c 100644
 --- a/packages/api/session-controller/tests/session-open-workspace-path.host.spec.ts
 +++ b/packages/api/session-controller/tests/session-open-workspace-path.host.spec.ts
 @@ -1,4 +1,6 @@
@@ -278,7 +278,7 @@ index e8216b5214..9008839074 100644
  import * as nativeCommand from '@deepseek-ai/dsh-native-command'
  import { Context } from '@deepseek-ai/cordis'
  import AgentRegistry from '@deepseek-ai/dsh-agent'
-@@ -66,10 +68,48 @@ describe('session/openWorkspacePath', () => {
+@@ -68,10 +70,48 @@ describe('session/openWorkspacePath', () => {
  
      await expect(remote.openWorkspacePath({ path: '/workspace/project/src/a.ts' }, signal))
        .resolves.toEqual({ ok: true, value: { opened: true } })
@@ -290,7 +290,7 @@ index e8216b5214..9008839074 100644
 +  it('threads the dshui click origin into the opener internals', async () => {
 +    const ctx = await context()
 +    const openPath = vi.fn((_path: string, _signal: AbortSignal) => Promise.resolve())
-+    const remote = createSessionTestRemote(ctx, {
++    const remote = await createSessionTestRemote(ctx, {
 +      defaultModelSelection: () => ({ provider: 'p', model: 'm' }),
 +      cwd: '/default',
 +      openPath,
@@ -307,7 +307,7 @@ index e8216b5214..9008839074 100644
 +  it('threads the dshui requested line into the opener internals', async () => {
 +    const ctx = await context()
 +    const openPath = vi.fn((_path: string, _signal: AbortSignal) => Promise.resolve())
-+    const remote = createSessionTestRemote(ctx, {
++    const remote = await createSessionTestRemote(ctx, {
 +      defaultModelSelection: () => ({ provider: 'p', model: 'm' }),
 +      cwd: '/default',
 +      openPath,
@@ -328,14 +328,14 @@ index e8216b5214..9008839074 100644
    it('normalizes relative and absolute Host-resolvable paths', async () => {
      const ctx = await context()
      const openPath = vi.fn((_path: string, _signal: AbortSignal) => Promise.resolve())
-@@ -84,6 +124,48 @@ describe('session/openWorkspacePath', () => {
+@@ -86,6 +126,48 @@ describe('session/openWorkspacePath', () => {
      expect(openPath.mock.calls.map(call => call[0])).toEqual([resolve('/workspace/result.html'), resolve('result.html')])
    })
  
 +  it('expands a home-relative Client path before handing it to the opener', async () => {
 +    const ctx = await context()
 +    const openPath = vi.fn((_path: string, _signal: AbortSignal) => Promise.resolve())
-+    const remote = createSessionTestRemote(ctx, {
++    const remote = await createSessionTestRemote(ctx, {
 +      defaultModelSelection: () => ({ provider: 'p', model: 'm' }),
 +      cwd: '/default',
 +      openPath,
@@ -354,7 +354,7 @@ index e8216b5214..9008839074 100644
 +  it('opens a path spelled through a symlinked directory', async () => {
 +    const ctx = await context()
 +    const openPath = vi.fn((_path: string, _signal: AbortSignal) => Promise.resolve())
-+    const remote = createSessionTestRemote(ctx, {
++    const remote = await createSessionTestRemote(ctx, {
 +      defaultModelSelection: () => ({ provider: 'p', model: 'm' }),
 +      cwd: '/default',
 +      openPath,
@@ -377,7 +377,7 @@ index e8216b5214..9008839074 100644
    it('rejects empty paths before opening anything', async () => {
      const ctx = await context()
      const openPath = vi.fn((_path: string, _signal: AbortSignal) => Promise.resolve())
-@@ -214,7 +296,7 @@ it('dispatches default-app opening to the association adapter', async () => {
+@@ -216,7 +298,7 @@ it('dispatches default-app opening to the association adapter', async () => {
    })
    const signal = new AbortController().signal
    await controller.openWorkspacePath({ path: '/report.html' }, signal)
@@ -675,16 +675,17 @@ index 7af762a1cd..4ed6d67c94 100644
      const auth = await createAuth(new RecordCredentials())
      const mounted = new URL(auth.authenticatedUrl('https://gateway.example/tools/dsh/'))
 diff --git a/packages/client/tsdown.client.ts b/packages/client/tsdown.client.ts
-index 90b26c196e..c481ecc2cc 100644
+index ca7bbc4154..f9755ed7b3 100644
 --- a/packages/client/tsdown.client.ts
 +++ b/packages/client/tsdown.client.ts
-@@ -122,7 +122,13 @@ export function clientBundle(
+@@ -140,7 +140,14 @@ export function clientBundle(
    return ({ env }) => {
      const face = buildFace(env?.DSH_BUILD_FACE)
      const clientEntry = face === undefined ? 'src/client/index.ts' : 'lib/types/client/index.js'
--    const client = clientConfig(manifest, clientEntry, options.clientBanner, options.dualClient === true)
+-    const client = clientConfig(manifest, packageDir, clientEntry, options.clientBanner, options.dualClient === true)
 +    const client = clientConfig(
 +      manifest,
++      packageDir,
 +      clientEntry,
 +      options.clientBanner,
 +      options.dualClient === true,
@@ -693,7 +694,7 @@ index 90b26c196e..c481ecc2cc 100644
      const node = [lib, ...(options.companions ?? [])]
      const clientFaces = options.dualClient === true
        ? [nodeClientConfig(manifest, clientEntry), client]
-@@ -223,6 +229,13 @@ interface ClientBundleOptions {
+@@ -241,6 +248,13 @@ interface ClientBundleOptions {
    readonly lib?: UserConfig
    /** Optional legal or attribution text selected by emitted client filename. */
    readonly clientBanner?: (fileName: string) => string | undefined
@@ -707,7 +708,7 @@ index 90b26c196e..c481ecc2cc 100644
  }
  
  type BuildFace = 'host' | 'client' | undefined
-@@ -501,8 +514,9 @@ function clientConfig(
+@@ -776,8 +790,9 @@ function clientConfig(
    entry: string,
    clientBanner?: (fileName: string) => string | undefined,
    dualClient = false,
@@ -719,18 +720,18 @@ index 90b26c196e..c481ecc2cc 100644
    const isRequested = (specifier: string): boolean => (requested ??= clientExternals(manifest)).has(specifier)
    const isolation = clientInputIsolation(id)
 diff --git a/packages/client/ui-chat/src/client/apply.ts b/packages/client/ui-chat/src/client/apply.ts
-index 8aa63aa1f7..655de3acb5 100644
+index fbabf95903..4a53228de8 100644
 --- a/packages/client/ui-chat/src/client/apply.ts
 +++ b/packages/client/ui-chat/src/client/apply.ts
-@@ -12,7 +12,6 @@ import type {} from '@deepseek-ai/dsh-client-ui-sidebar-browser/client'
+@@ -13,7 +13,6 @@ import type {} from '@deepseek-ai/dsh-client-ui-sidebar-browser/client'
  import type {} from '@deepseek-ai/dsh-client-ui-input-trigger/client'
  // The `file` entry of `SidebarRightResourceParamsMap`, which types `{ params: { line } }` below.
  import type {} from '@deepseek-ai/dsh-client-ui-sidebar-documentpreview/client'
--import { fileAddressFor } from '@deepseek-ai/dsh-util-workspace-path'
+-import { fileAddressFor, resolveWorkspacePath } from '@deepseek-ai/dsh-util-workspace-path'
  // Type-only service and declaration merges used by the apply world.
  import type {} from '@deepseek-ai/dsh-client-locale/client'
  import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
-@@ -47,6 +46,8 @@ import { PerformanceUsagePolicy } from './performance-usage.ts'
+@@ -49,6 +48,8 @@ import { PerformanceUsagePolicy } from './performance-usage.ts'
  import { useTurnDataValue } from './chat/use-turn-data.ts'
  import { bindDisclosure } from './chat/use-disclosure.ts'
  import { useFlowHidden, useMotionHidden } from './chat/flow-motion.ts'
@@ -739,7 +740,7 @@ index 8aa63aa1f7..655de3acb5 100644
  
  /** Bind group and header visibility to the viewport of one flow render. */
  export const CHAT_FLOW_INJECT: ChatFlowInjected = {
-@@ -170,6 +171,7 @@ export function apply(ctx: Context): void {
+@@ -172,6 +173,7 @@ export function apply(ctx: Context): void {
    ctx.effect(() => () => { transcriptView.dispose(); performancePolicy.dispose() })
    const performanceUsage = performancePolicy.mode
    registerChatNodeRenderers(ctx, performanceUsage, presentation)
@@ -747,18 +748,20 @@ index 8aa63aa1f7..655de3acb5 100644
    ctx.slots.registerFactory({
      name: 'conversation.chat.user.content', scope: 'session', locale: NS,
      children: { 'conversation.chat.user.images': { kind: 'single', scope: 'session' } },
-@@ -243,24 +245,28 @@ export function apply(ctx: Context): void {
-         return {
-           ...nodeSources(binding),
+@@ -254,27 +256,33 @@ export function apply(ctx: Context): void {
+           hooks: { presentation, interactionIds: ctx.uiConversation.interactions },
+           dispatchInteraction: gesture => ctx.uiConversation.interactions.dispatch(sessionId, gesture),
            fileMentions: (owner: TurnTailOwnerProps) => ctx.get('chatFileMentions')?.forClosing(owner, sessionId),
 -          // Files open in the right Sidebar, not in a desktop application: the
 -          // content stays in the product, beside the conversation that produced
--          // it. A relative path, or an absolute one inside the session's
--          // workspace, is addressed under this session's scope,
--          // `dsh-resource://file/session/<id>/<path>`; an absolute path
--          // elsewhere keeps its absolute spelling in the same Session's address.
--          // Which tab type claims the
--          // address is the Sidebar's decision, not this call site's.
+-          // it. A relative path resolves from the Session's working directory
+-          // at click time, which a directory change can move away from the
+-          // workspace root; links from earlier Turns follow later changes. A
+-          // path inside the workspace is addressed under this
+-          // session's scope, `dsh-resource://file/session/<id>/<path>`; an
+-          // absolute path elsewhere keeps its absolute spelling in the same
+-          // Session's address. Which tab type claims the address is the
+-          // Sidebar's decision, not this call site's.
 -          // A line travels as a navigation parameter, not as part of the
 -          // address: the file is one piece of content whether it is opened at
 -          // its top or at line 400, so the same tab is revealed and told where
@@ -768,7 +771,11 @@ index 8aa63aa1f7..655de3acb5 100644
 +          // addressed with a `dsh-resource://file/session/<id>/<path>` URL.
            openFile: async (path, options) => {
              const cwd = ctx.sessions.list.getSnapshot().byId[sessionId]?.cwd
--            const url = fileAddressFor(sessionId, cwd, path)
++            // A relative destination resolves from the Session's current working
++            // directory, which a directory change can move away from the
++            // workspace root; links from earlier Turns follow later changes.
+             const current = session.projections.faceOf('workingDirectory').getSnapshot() as string | null | undefined
+-            const url = fileAddressFor(sessionId, cwd, resolveWorkspacePath(current ?? undefined, path))
 -            if (options?.line === undefined) ctx.sidebarRight.openResource(url)
 -            else ctx.sidebarRight.openResource(url, { params: { line: options.line } })
 -            await Promise.resolve()
@@ -777,14 +784,15 @@ index 8aa63aa1f7..655de3acb5 100644
 +            // The Host (extension) opens the path in the VS Code editor via the
 +            // local open bridge, ahead of workspace-ownership routing.
 +            // `dshuiOpenPath` decides the Host-facing spelling: workspace
-+            // relative against the Session cwd, home relative as `~`.
++            // relative against the current working directory, home relative as
++            // `~`.
 +            // The upstream `OpenFileOptions.line` travels beside the path (the
 +            // Sidebar used it as a navigation parameter; the bridge receives it
 +            // as `dshuiLine`), so a `#L10` link lands on its line instead of
 +            // the file top.
 +            const dshuiOrigin = dshuiClickOrigin()
 +            const result = await ctx.remote.session.openWorkspacePath({
-+              path: dshuiOpenPath(cwd, path),
++              path: dshuiOpenPath(current ?? cwd, path),
 +              ...(dshuiOrigin === undefined ? {} : { dshuiOrigin }),
 +              ...(options?.line === undefined ? {} : { dshuiLine: options.line }),
 +            })
@@ -793,10 +801,10 @@ index 8aa63aa1f7..655de3acb5 100644
            openExternalLink: (url) => {
              if (linkOpening.getSnapshot() === 'sidebar' && ctx.get('sidebarRightTabs')?.get('browser') !== undefined) {
 diff --git a/packages/client/ui-chat/src/client/chat/MessageItem.module.css b/packages/client/ui-chat/src/client/chat/MessageItem.module.css
-index 3bacafab47..05c1065baa 100644
+index 5e0e99b0d3..f19c4340e4 100644
 --- a/packages/client/ui-chat/src/client/chat/MessageItem.module.css
 +++ b/packages/client/ui-chat/src/client/chat/MessageItem.module.css
-@@ -362,3 +362,23 @@
+@@ -358,3 +358,28 @@
    font-size: 12px;
    line-height: 15px;
  }
@@ -816,52 +824,54 @@ index 3bacafab47..05c1065baa 100644
 +  cursor: pointer;
 +}
 +
-+.link:hover,
++@media (hover: hover) {
++  .link:hover {
++    text-decoration: underline;
++  }
++}
++
 +.link:focus-visible {
 +  text-decoration: underline;
 +}
 diff --git a/packages/client/ui-chat/src/client/chat/MessageItem.tsx b/packages/client/ui-chat/src/client/chat/MessageItem.tsx
-index 0d2f4c22fd..b594a9b3cd 100644
+index f9551a8698..d45fefa010 100644
 --- a/packages/client/ui-chat/src/client/chat/MessageItem.tsx
 +++ b/packages/client/ui-chat/src/client/chat/MessageItem.tsx
-@@ -1,7 +1,7 @@
- import { memo, useEffect, useMemo, useState } from 'react'
- import type { ReactNode } from 'react'
- import type { PendingSubmission } from '@deepseek-ai/dsh-api-session-controller/client'
--import type { PropsRenderFactories } from '@deepseek-ai/dsh-client-ui-slots'
-+import type { PropsRenderFactories, PropsRenderSlots } from '@deepseek-ai/dsh-client-ui-slots'
- import type { UserTextFacts } from '@deepseek-ai/dsh-client-ui-conversation/client'
- import { JsonBlock, StateDot, TextShimmer } from '@deepseek-ai/dsh-client-ui-primitives'
- import type {
-@@ -294,10 +294,23 @@ export function PendingSubmissionBubble({ submission, loadImage, renderFactorySl
-   )
+@@ -323,17 +323,24 @@ export function PendingSubmissionBubble({ submission, loadImage, renderFactorySl
  }
  
--/** User and admitted-steering keyed Chat renderer. */
--export const UserMessageNodeView = memo(function UserMessageNodeView({
--  node, renderFactorySlot, loadImage, t,
--}: ChatNodeViewProps<'user' | 'steering'>) {
-+/**
+ /**
+- * Official user and admitted-steering keyed Chat renderer.
 + * Shared body of the user and steering rows.
-+ *
+  *
+- * Renders the durable-message chain seat directly above the bubble. The seat is
+- * declared by the `user` registration alone, so a steering row renders the same
+- * bubble without asking for it.
 + * dshui overlay: `userActions` is the `conversation.chat.user-actions` strip.
 + * The user renderer fills it from the child slot its registration declares
 + * (the extension hangs per-message rollback there, anchored to the enclosing
-+ * Turn); a steering row is admitted mid-turn and carries no strip.
-+ */
++ * Turn); a steering row is admitted mid-turn and carries no strip. The
++ * message-source seat above the bubble is declared by the `user` registration
++ * alone, so a steering row passes the source-less occupant.
+  */
+-export const UserMessageNodeView = memo(function UserMessageNodeView({
+-  node, renderFactorySlot, loadImage, renderSlotChain, t,
+-}: ChatNodeViewProps<'user' | 'steering'> & {
+-  /** Bound by the `user` keyed registration, the only entry that declares the seat. */
+-  renderSlotChain: PropsRenderSlots<'conversation.chat.user.before'>['renderSlotChain']
 +function UserStyleNodeView({
-+  node, renderFactorySlot, loadImage, t, userActions,
++  node, renderFactorySlot, loadImage, renderSlotChain, t, userActions,
 +}: {
 +  readonly node: ChatNodeViewProps<'user' | 'steering'>['node']
 +  readonly renderFactorySlot: ChatNodeViewProps['renderFactorySlot']
 +  readonly loadImage: ChatNodeViewProps['loadImage']
++  readonly renderSlotChain: PropsRenderSlots<'conversation.chat.user.before'>['renderSlotChain']
 +  readonly t: ChatNodeViewProps['t']
 +  readonly userActions: ReactNode
-+}) {
+ }) {
    const data = node.data
    return (
-     <UserStyleBubble
-@@ -313,11 +326,48 @@ export const UserMessageNodeView = memo(function UserMessageNodeView({
+@@ -353,11 +360,53 @@ export const UserMessageNodeView = memo(function UserMessageNodeView({
            time={data.time}
            clock="start"
            className={css.actions}
@@ -875,8 +885,11 @@ index 0d2f4c22fd..b594a9b3cd 100644
 +
 +/** User keyed Chat renderer; declares the per-message action strip. */
 +export const UserMessageNodeView = memo(function UserMessageNodeView({
-+  node, renderFactorySlot, renderSlot, loadImage, t,
-+}: ChatNodeViewProps<'user' | 'steering'> & PropsRenderSlots<'conversation.chat.user-actions'>) {
++  node, renderFactorySlot, renderSlot, renderSlotChain, loadImage, t,
++}: ChatNodeViewProps<'user' | 'steering'> & PropsRenderSlots<'conversation.chat.user-actions'> & {
++  /** Bound by the `user` keyed registration, the only entry that declares the seat. */
++  renderSlotChain: PropsRenderSlots<'conversation.chat.user.before'>['renderSlotChain']
++}) {
 +  const turn = node.location.kind === 'turn' || node.location.kind === 'step'
 +    ? node.location.turn
 +    : undefined
@@ -887,6 +900,7 @@ index 0d2f4c22fd..b594a9b3cd 100644
 +    <UserStyleNodeView
 +      node={node}
 +      renderFactorySlot={renderFactorySlot}
++      renderSlotChain={renderSlotChain}
 +      loadImage={loadImage}
 +      t={t}
 +      userActions={userActions}
@@ -902,6 +916,7 @@ index 0d2f4c22fd..b594a9b3cd 100644
 +    <UserStyleNodeView
 +      node={node}
 +      renderFactorySlot={renderFactorySlot}
++      renderSlotChain={NO_MESSAGE_SOURCE}
 +      loadImage={loadImage}
 +      t={t}
 +      userActions={null}
@@ -978,7 +993,7 @@ index 0000000000..c74723d413
 +    : <span>{label}</span>
 +}
 diff --git a/packages/client/ui-chat/src/client/chat/register-node-renderers.ts b/packages/client/ui-chat/src/client/chat/register-node-renderers.ts
-index 7e58223287..0e46996eeb 100644
+index d634e30b00..6215d9ff32 100644
 --- a/packages/client/ui-chat/src/client/chat/register-node-renderers.ts
 +++ b/packages/client/ui-chat/src/client/chat/register-node-renderers.ts
 @@ -6,8 +6,8 @@ import { NS } from '../locale.ts'
@@ -992,33 +1007,40 @@ index 7e58223287..0e46996eeb 100644
  } from './MessageItem.tsx'
  import { DefaultReasoningBody, ReasoningContent } from './ReasoningContent.tsx'
  import { SystemPromptNodeView } from './SystemPromptRow.tsx'
-@@ -37,10 +37,17 @@ export function registerChatNodeRenderers(
+@@ -37,15 +37,20 @@ export function registerChatNodeRenderers(
      name: 'conversation.chat.reasoning.body',
      priority: 100,
    }, DefaultReasoningBody))
 +  // dshui: the user renderer declares the `conversation.chat.user-actions`
-+  // strip (the extension's rollback action hangs there); steering rows use the
-+  // strip-free renderer.
-+  ctx.slots.inject('conversation.chat.node', () => ctx.slots.register({
++  // strip (the extension's rollback action hangs there) beside the upstream
++  // message-source seat; steering rows use the strip- and seat-free renderer.
+   ctx.slots.inject('conversation.chat.node', () => ctx.slots.register({
+-    name: 'conversation.chat.node', key: 'user', locale: NS,
+-    children: { 'conversation.chat.user.before': { kind: 'chain', scope: 'session' } },
+-  }, UserMessageNodeView))
+-  // Steering rows share the renderer without owning the message-source seat.
+-  ctx.slots.inject('conversation.chat.node', () => ctx.slots.register({
+-    name: 'conversation.chat.node', key: 'steering', locale: NS,
+-    inject: () => ({ renderSlotChain: () => null }),
 +    name: 'conversation.chat.node',
 +    key: 'user',
 +    locale: NS,
-+    children: { 'conversation.chat.user-actions': { kind: 'list', scope: 'session' } },
-+  }, UserMessageNodeView))
-   ctx.slots.inject('conversation.chat.node', () => ctx.slots.register(
--    { name: 'conversation.chat.node', key: 'user', locale: NS }, UserMessageNodeView))
--  ctx.slots.inject('conversation.chat.node', () => ctx.slots.register(
--    { name: 'conversation.chat.node', key: 'steering', locale: NS }, UserMessageNodeView))
++    children: {
++      'conversation.chat.user.before': { kind: 'chain', scope: 'session' },
++      'conversation.chat.user-actions': { kind: 'list', scope: 'session' },
++    },
+   }, UserMessageNodeView))
++  ctx.slots.inject('conversation.chat.node', () => ctx.slots.register(
 +    { name: 'conversation.chat.node', key: 'steering', locale: NS }, SteeringMessageNodeView))
    ctx.slots.inject('conversation.chat.node', () => ctx.slots.register(
      { name: 'conversation.chat.node', key: 'context', locale: NS }, ContextMessageNodeView))
    ctx.slots.inject('conversation.chat.node', () => ctx.slots.register(
 diff --git a/packages/client/ui-chat/src/client/chat/register-user-links.ts b/packages/client/ui-chat/src/client/chat/register-user-links.ts
 new file mode 100644
-index 0000000000..0b1d04cc16
+index 0000000000..447daf2701
 --- /dev/null
 +++ b/packages/client/ui-chat/src/client/chat/register-user-links.ts
-@@ -0,0 +1,45 @@
+@@ -0,0 +1,49 @@
 +/**
 + * dshui overlay: install the user-text link rule and its inline renderer.
 + *
@@ -1049,9 +1071,13 @@ index 0000000000..0b1d04cc16
 +      inject: (sessionId: UserTextNodeProps<'link'>['sessionId']): UserLinkInjected => ({
 +        openFile: (path, line) => {
 +          const cwd = ctx.sessions.list.getSnapshot().byId[sessionId]?.cwd
++          // A relative destination resolves from the Session's current working
++          // directory, matching the Chat file-open seat.
++          const session = ctx.sessions.binding(sessionId)?.session
++          const current = session?.projections.faceOf('workingDirectory').getSnapshot() as string | null | undefined
 +          const origin = dshuiClickOrigin()
 +          ctx.remote.session.openWorkspacePath({
-+            path: dshuiOpenPath(cwd, path),
++            path: dshuiOpenPath(current ?? cwd, path),
 +            ...(origin === undefined ? {} : { dshuiOrigin: origin }),
 +            ...(line === undefined ? {} : { dshuiLine: line }),
 +          }).then((result) => {
@@ -1160,10 +1186,10 @@ index 0000000000..48f880129a
 +  },
 +}
 diff --git a/packages/client/ui-chat/src/client/contract/slots.ts b/packages/client/ui-chat/src/client/contract/slots.ts
-index a85e28798d..e2c28c3865 100644
+index 96028b0ffd..74a2226b60 100644
 --- a/packages/client/ui-chat/src/client/contract/slots.ts
 +++ b/packages/client/ui-chat/src/client/contract/slots.ts
-@@ -128,6 +128,17 @@ export type QuotaNoticeHostProps =
+@@ -130,6 +130,17 @@ export type QuotaNoticeHostProps =
    & PropsRenderSlots<'shell.quota-notice'>
    & InjectFace<QuotaNoticeInjected>
  
@@ -1181,7 +1207,7 @@ index a85e28798d..e2c28c3865 100644
  /** Optional prose file-mention provider consumed by Chat. */
  export interface ChatFileMentions {
    /**
-@@ -447,5 +458,13 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
+@@ -488,5 +499,13 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
       * survives switching or closing the panel that reported it.
       */
      'shell.quota-notice': { kind: 'chain'; scope: 'root'; owner: QuotaNoticeOwnerProps }
@@ -1248,10 +1274,10 @@ index 0000000000..61e170079e
 +  return resolveWorkspacePath(cwd, path)
 +}
 diff --git a/packages/client/ui-chat/tests/apply-inject.client.spec.tsx b/packages/client/ui-chat/tests/apply-inject.client.spec.tsx
-index 2898fab578..c5c8add53a 100644
+index 9687743249..18a67088ea 100644
 --- a/packages/client/ui-chat/tests/apply-inject.client.spec.tsx
 +++ b/packages/client/ui-chat/tests/apply-inject.client.spec.tsx
-@@ -237,26 +237,58 @@ describe('Chat inject API', () => {
+@@ -288,26 +288,58 @@ describe('Chat inject API', () => {
      await b.runtime.dispose()
    })
  
@@ -1320,7 +1346,35 @@ index 2898fab578..c5c8add53a 100644
      await b.runtime.dispose()
    })
  
-@@ -410,13 +442,49 @@ describe('Chat inject API', () => {
+@@ -315,18 +347,21 @@ describe('Chat inject API', () => {
+     const b = await bench()
+     const { injected } = b.chatViewApi(b.rootReference)
+     await b.runtime.sessions.setProjection(ROOT, 'workingDirectory', '/proj/.agents/worktrees/w')
++    // dshui patch: the resolved path still leaves through `openWorkspacePath`;
++    // the working-directory projection decides a relative destination, exactly
++    // as it does for the stock Sidebar address.
+     await injected.openFile('src/a.ts')
+-    expect(b.sidebarRight.openResource).toHaveBeenLastCalledWith('dsh-resource://file/session/root-1/.agents/worktrees/w/src/a.ts')
+-    // A leading `./` names the same file, so the Sidebar reuses its tab.
++    expect(b.openWorkspacePath).toHaveBeenLastCalledWith({ path: '/proj/.agents/worktrees/w/src/a.ts' })
+     await injected.openFile('./src/a.ts')
+-    expect(b.sidebarRight.openResource).toHaveBeenLastCalledWith('dsh-resource://file/session/root-1/.agents/worktrees/w/src/a.ts')
++    expect(b.openWorkspacePath).toHaveBeenLastCalledWith({ path: '/proj/.agents/worktrees/w/src/a.ts' })
+     await injected.openFile('/proj/src/a.ts')
+-    expect(b.sidebarRight.openResource).toHaveBeenLastCalledWith('dsh-resource://file/session/root-1/src/a.ts')
++    expect(b.openWorkspacePath).toHaveBeenLastCalledWith({ path: '/proj/src/a.ts' })
+ 
+-    // Outside the workspace, the address carries the absolute path after the Session id.
++    // Outside the workspace, an absolute destination is passed through as-is.
+     await b.runtime.sessions.setProjection(ROOT, 'workingDirectory', '/elsewhere')
+     await injected.openFile('src/a.ts')
+-    expect(b.sidebarRight.openResource).toHaveBeenLastCalledWith('dsh-resource://file/session/root-1//elsewhere/src/a.ts')
++    expect(b.openWorkspacePath).toHaveBeenLastCalledWith({ path: '/elsewhere/src/a.ts' })
++    expect(b.sidebarRight.openResource).not.toHaveBeenCalled()
+     await b.runtime.dispose()
+   })
+ 
+@@ -480,13 +515,49 @@ describe('Chat inject API', () => {
      // The Host resolves the relative path against the root it holds for the
      // Session; the Client need not know it.
      await injected.openFile('src/a.ts')
@@ -1374,7 +1428,7 @@ index 2898fab578..c5c8add53a 100644
      const b = await bench()
      const entry = b.runtime.slots.entries('conversation.view')[0]!
 diff --git a/packages/client/ui-chat/tests/chat-branch-tails.client.spec.tsx b/packages/client/ui-chat/tests/chat-branch-tails.client.spec.tsx
-index fa922ee1e1..1e3de27de6 100644
+index 574fe82df9..05552e5d3f 100644
 --- a/packages/client/ui-chat/tests/chat-branch-tails.client.spec.tsx
 +++ b/packages/client/ui-chat/tests/chat-branch-tails.client.spec.tsx
 @@ -1,6 +1,7 @@
@@ -1384,8 +1438,8 @@ index fa922ee1e1..1e3de27de6 100644
 +import type { ComponentProps } from 'react'
  import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
  import { bindSnapshotSelector, makeTranslate } from '@deepseek-ai/dsh-client-test-runtime'
- import { zh as commonZh } from '@deepseek-ai/dsh-client-locale/src/locales/zh.ts'
-@@ -12,8 +13,8 @@ import {
+ import type { PropsRenderSlots } from '@deepseek-ai/dsh-client-ui-slots'
+@@ -13,8 +14,8 @@ import {
    formatMessageClock, msUntilNextLocalMidnight, startOfLocalDay,
  } from '../src/client/chat/message-chrome.ts'
  import {
@@ -1396,8 +1450,8 @@ index fa922ee1e1..1e3de27de6 100644
  } from '../src/client/chat/MessageItem.tsx'
  import { AssistantMarkdown } from '../src/client/chat/AssistantMarkdown.tsx'
  import { useDetailedPresentation } from './presentation-fixture.client.ts'
-@@ -35,6 +36,8 @@ const t: ChatNodeViewProps['t'] = makeTranslate(zh, commonZh)
- const renderUserImages: Parameters<ReturnType<typeof createUserContentFixture>>[1] = () => null
+@@ -41,6 +42,8 @@ const userSlots: PropsRenderSlots<'conversation.chat.user.before'> = {
+ }
  let renderUserContent: ReturnType<typeof createUserContentFixture>
  beforeEach(() => { renderUserContent = createUserContentFixture() })
 +/** dshui: the user-actions child slot is unopened in these arms; stub it out. */
@@ -1405,26 +1459,27 @@ index fa922ee1e1..1e3de27de6 100644
  const RETRY_ID = 'retry-fixture' as Extract<ConversationNode, { kind: 'model-retry' }>['retryId']
  
  // Recency scans the whole transcript; a detached fixture is its own latest row.
-@@ -81,8 +84,13 @@ function MessageItem({ node, t: translate, referenceLabels, skillNames }: Messag
+@@ -87,9 +90,13 @@ function MessageItem({ node, t: translate, referenceLabels, skillNames }: Messag
    }
    switch (node.kind) {
      case 'user':
+-      return <UserMessageNodeView {...props as ChatNodeViewProps<'user'>} {...userSlots} />
 +      return (
 +        <UserMessageNodeView
-+          {...{ ...props, renderSlot: renderUserActionsSlot } as unknown as ComponentProps<typeof UserMessageNodeView>}
++          {...{ ...props, ...userSlots, renderSlot: renderUserActionsSlot } as unknown as ComponentProps<typeof UserMessageNodeView>}
 +        />
 +      )
      case 'steering':
--      return <UserMessageNodeView {...props as ChatNodeViewProps<'user' | 'steering'>} />
+-      return <UserMessageNodeView {...props as ChatNodeViewProps<'steering'>} renderSlotChain={() => null} />
 +      return <SteeringMessageNodeView {...props as ChatNodeViewProps<'user' | 'steering'>} />
      case 'context':
        return <ContextMessageNodeView {...props as ChatNodeViewProps<'context'>} />
      case 'compaction':
 diff --git a/packages/client/ui-chat/tests/chat-view.client.spec.tsx b/packages/client/ui-chat/tests/chat-view.client.spec.tsx
-index 241a0a2048..ee371ac801 100644
+index 5f8de03ab8..9b8197b8cc 100644
 --- a/packages/client/ui-chat/tests/chat-view.client.spec.tsx
 +++ b/packages/client/ui-chat/tests/chat-view.client.spec.tsx
-@@ -42,7 +42,7 @@ import { en, zh } from '../src/client/locale.ts'
+@@ -43,7 +43,7 @@ import { en, zh, pt } from '../src/client/locale.ts'
  import { AssistantNodeView } from '../src/client/chat/AssistantNodeView.tsx'
  import { CommandNodeView, ManualCompactionNodeView } from '../src/client/chat/CommandNodeView.tsx'
  import {
@@ -1433,7 +1488,7 @@ index 241a0a2048..ee371ac801 100644
    TurnMaxTokensNodeView, UnknownNodeView, UserMessageNodeView,
  } from '../src/client/chat/MessageItem.tsx'
  import { TurnTailNodeView } from '../src/client/chat/TurnTailNodeView.tsx'
-@@ -279,6 +279,10 @@ type ToolOwner = Pick<ChatNodeOwnerProps, 'openFile' | 'inspectCall'> & {
+@@ -283,6 +283,10 @@ type ToolOwner = Pick<ChatNodeOwnerProps, 'openFile' | 'inspectCall'> & {
  const renderCommandSlot: React.ComponentProps<typeof CommandNodeView>['renderSlot'] =
    (_key, _owner, opts) => opts?.fallback ?? null
  const renderTurnTailSlot: React.ComponentProps<typeof TurnTailNodeView>['renderSlot'] = () => null
@@ -1442,16 +1497,16 @@ index 241a0a2048..ee371ac801 100644
 +const renderUserActionsSlot: React.ComponentProps<typeof UserMessageNodeView>['renderSlot'] =
 +  (_key, _owner, opts) => opts?.fallback ?? null
  
- function HarnessChatFlow({ standard, owner, hookContext, renderSlot }: {
+ function HarnessChatFlow({ standard, owner, hookContext, renderSlot, useConnectionState }: {
    readonly standard: HarnessStandardProps
-@@ -312,9 +316,9 @@ function HarnessChatNode({ standard, owner, hookContext, usePerformanceUsage, to
+@@ -330,9 +334,9 @@ function HarnessChatNode({
    const nodeProps = { ...shared, ...owner, ...hooks }
    switch (owner.node.kind) {
      case 'user':
--      return <UserMessageNodeView {...nodeProps} node={owner.node} />
-+      return <UserMessageNodeView {...nodeProps} node={owner.node} renderSlot={renderUserActionsSlot} />
+-      return <UserMessageNodeView {...nodeProps} node={owner.node} renderSlotChain={renderUserChain} />
++      return <UserMessageNodeView {...nodeProps} node={owner.node} renderSlot={renderUserActionsSlot} renderSlotChain={renderUserChain} />
      case 'steering':
--      return <UserMessageNodeView {...nodeProps} node={owner.node} />
+-      return <UserMessageNodeView {...nodeProps} node={owner.node} renderSlotChain={() => null} />
 +      return <SteeringMessageNodeView {...nodeProps} node={owner.node} />
      case 'context':
        return <ContextMessageNodeView {...nodeProps} node={owner.node} />
@@ -1589,8 +1644,109 @@ index 0000000000..0af010e164
 +    expect(dshuiOpenPath('/work/repo', './~/.dsh/config.yml')).toBe('~/.dsh/config.yml')
 +  })
 +})
+diff --git a/packages/client/ui-chat/tests/user-origin-slot.client.spec.tsx b/packages/client/ui-chat/tests/user-origin-slot.client.spec.tsx
+index 7a522be8ed..9607b65a30 100644
+--- a/packages/client/ui-chat/tests/user-origin-slot.client.spec.tsx
++++ b/packages/client/ui-chat/tests/user-origin-slot.client.spec.tsx
+@@ -5,16 +5,16 @@
+  * existing message content and actions.
+  */
+ 
++import type { ComponentProps } from 'react'
+ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+ import { cleanup, render } from '@testing-library/react'
+ import { makeTranslate } from '@deepseek-ai/dsh-client-test-runtime'
+-import type { PropsRenderSlots } from '@deepseek-ai/dsh-client-ui-slots'
+ import { zh as commonZh } from '@deepseek-ai/dsh-client-locale/src/locales/zh.ts'
+ import type {
+   ChatConversationViewNode, SteeringMessageNode, UserMessageNode,
+ } from '@deepseek-ai/dsh-client-ui-chat/client'
+ import type { ChatNodeViewProps, UserContentInput } from '../src/client/contract/slots.ts'
+-import { UserMessageNodeView } from '../src/client/chat/MessageItem.tsx'
++import { SteeringMessageNodeView, UserMessageNodeView } from '../src/client/chat/MessageItem.tsx'
+ import { zh } from '../src/client/locale.ts'
+ import { createUserContentFixture } from './user-content-component-fixture.tsx'
+ import { unusedImageLoader } from './reasoning-component-fixture.tsx'
+@@ -22,13 +22,6 @@ import { unusedImageLoader } from './reasoning-component-fixture.tsx'
+ afterEach(cleanup)
+ 
+ const t: ChatNodeViewProps['t'] = makeTranslate(zh, commonZh)
+-type UserSlots = PropsRenderSlots<'conversation.chat.user.before'>
+-const userSlots: UserSlots = {
+-  renderSlot: () => null,
+-  renderSlotChain: (_key, _owner, opts) => opts?.fallback ?? null,
+-  SessionProvider: ({ children }) => <>{children}</>,
+-}
+-
+ /** One durable source, unread by Chat itself. */
+ const SHARED = { kind: 'user', principal: { kind: 'share-viewer', shareId: 'share-1', actor: { subjectId: 'subject-42' } } }
+ 
+@@ -40,8 +33,6 @@ const renderUserFactory: ChatNodeViewProps['renderFactorySlot'] = (name, input)
+   return renderUserContent(input as UserContentInput, () => null, t)
+ }
+ 
+-function viewProps(data: UserMessageNode): ChatNodeViewProps<'user'>
+-function viewProps(data: SteeringMessageNode): ChatNodeViewProps<'steering'>
+ function viewProps(data: UserMessageNode | SteeringMessageNode): ChatNodeViewProps<'user' | 'steering'> {
+   const node = {
+     key: `fixture:${data.kind}:${String(data.seq)}`,
+@@ -59,6 +50,16 @@ function viewProps(data: UserMessageNode | SteeringMessageNode): ChatNodeViewPro
+   return props as ChatNodeViewProps<'user' | 'steering'>
+ }
+ 
++/**
++ * dshui: the user renderer also owns the per-message action strip, so its props
++ * add the `conversation.chat.user-actions` seat to the upstream origin seat.
++ * The fixture builds the shared node props first; this adapts them for the row.
++ */
++const userRowProps = (
++  props: ChatNodeViewProps<'user' | 'steering'>,
++  renderSlotChain: ComponentProps<typeof UserMessageNodeView>['renderSlotChain'],
++) => ({ ...props, renderSlot: () => null, renderSlotChain }) as unknown as ComponentProps<typeof UserMessageNodeView>
++
+ const userData: UserMessageNode = {
+   kind: 'user',
+   seq: 7,
+@@ -79,7 +80,7 @@ const steeringData: SteeringMessageNode = {
+ describe('official user renderer origin seat', () => {
+   it('renders the source chain above the bubble and passes the durable source', () => {
+     const renderSlotChain = vi.fn(() => <span data-test-origin="">来自会话分享</span>)
+-    const view = render(<UserMessageNodeView {...viewProps(userData)} {...userSlots} renderSlotChain={renderSlotChain} />)
++    const view = render(<UserMessageNodeView {...userRowProps(viewProps(userData), renderSlotChain)} />)
+     const row = view.container.firstElementChild as HTMLElement
+     const origin = row.querySelector('[data-test-origin]')
+     const bubble = row.querySelector('[data-message-bubble]')
+@@ -98,7 +99,7 @@ describe('official user renderer origin seat', () => {
+     const absent = vi.fn(() => null)
+     const occupied = vi.fn(() => <span data-test-origin="">来自会话分享</span>)
+     const empty = vi.fn(() => null)
+-    const view = render(<UserMessageNodeView {...props} {...userSlots} renderSlotChain={absent} />)
++    const view = render(<UserMessageNodeView {...userRowProps(props, absent)} />)
+     const row = view.container.firstElementChild
+     const bubble = view.container.querySelector('[data-message-bubble]')
+     const text = view.getByText('hello').firstChild
+@@ -110,7 +111,7 @@ describe('official user renderer origin seat', () => {
+     expect(view.container.querySelector('[data-test-origin]')).toBeNull()
+ 
+     for (const renderSlotChain of [occupied, empty, absent]) {
+-      view.rerender(<UserMessageNodeView {...props} {...userSlots} renderSlotChain={renderSlotChain} />)
++      view.rerender(<UserMessageNodeView {...userRowProps(props, renderSlotChain)} />)
+       expect(view.container.firstElementChild).toBe(row)
+       expect(view.container.querySelector('[data-message-bubble]')).toBe(bubble)
+       expect(view.getByText('hello').firstChild).toBe(text)
+@@ -123,8 +124,8 @@ describe('official user renderer origin seat', () => {
+   it('asks the chain only for the user row beside a steering row', () => {
+     const renderSlotChain = vi.fn(() => <span data-test-origin="" />)
+     const view = render(<>
+-      <UserMessageNodeView {...viewProps(userData)} {...userSlots} renderSlotChain={renderSlotChain} />
+-      <UserMessageNodeView {...viewProps(steeringData)} renderSlotChain={() => null} />
++      <UserMessageNodeView {...userRowProps(viewProps(userData), renderSlotChain)} />
++      <SteeringMessageNodeView {...viewProps(steeringData)} />
+     </>)
+     const steeringRow = view.container.lastElementChild!
+     expect(steeringRow.textContent).toContain('steer')
 diff --git a/packages/client/ui-conversation/src/client/apply.ts b/packages/client/ui-conversation/src/client/apply.ts
-index 6594c95812..407dcbfda7 100644
+index b3c0d3bcd0..d6f61eafcc 100644
 --- a/packages/client/ui-conversation/src/client/apply.ts
 +++ b/packages/client/ui-conversation/src/client/apply.ts
 @@ -143,10 +143,8 @@ function scopedConversation(sessions: ISessions, id: SessionId): IConversation {
@@ -1606,20 +1762,22 @@ index 6594c95812..407dcbfda7 100644
  }
  
  /**
-@@ -371,7 +369,11 @@ export function apply(ctx: Context, config: Config = Config({})): void {
-             if (sessions.binding(nextId) === undefined) {
+@@ -374,9 +372,13 @@ export function apply(ctx: Context, config: Config = Config({})): void {
+             if (binding === undefined) {
                throw new Error(`ui-conversation: session "${nextId}" resolved no binding`)
              }
--            concreteConversation(ctx).rebindDraftFiles(nextId, attachmentIds)
 +            const conversation = concreteConversation(ctx)
 +            if (conversation === undefined) {
 +              throw new Error(`ui-conversation: session "${nextId}" resolved no conversation controller`)
 +            }
-+            conversation.rebindDraftFiles(nextId, attachmentIds)
+             // The same rule as intake: only an ordinary Session stages image uploads.
+             const ordinary = binding.session.getSnapshot().subagent === null
+-            concreteConversation(ctx).rebindDraftFiles(nextId, attachmentIds, ordinary)
++            conversation.rebindDraftFiles(nextId, attachmentIds, ordinary)
              if (draft.text !== '') {
                next.setDraft(draft)
                from.setDraft('')
-@@ -468,26 +470,33 @@ export function apply(ctx: Context, config: Config = Config({})): void {
+@@ -473,26 +475,33 @@ export function apply(ctx: Context, config: Config = Config({})): void {
        'conversation.composer.dock': { kind: 'list', scope: 'session' },
      },
      inject: (sessionId: SessionId | undefined): ComposerBarInjected => {
@@ -1792,10 +1950,10 @@ index 674b644a9f..5fcd20627a 100644
        {renderFactorySlot('conversation.content', {
          variant: 'main',
 diff --git a/packages/client/ui-conversation/src/client/skeleton/ConversationRoot.module.css b/packages/client/ui-conversation/src/client/skeleton/ConversationRoot.module.css
-index 29a4d5e74e..b37217b43b 100644
+index ac6cb69f70..7f047dc99b 100644
 --- a/packages/client/ui-conversation/src/client/skeleton/ConversationRoot.module.css
 +++ b/packages/client/ui-conversation/src/client/skeleton/ConversationRoot.module.css
-@@ -590,9 +590,26 @@ button.crumb:hover {
+@@ -622,9 +622,26 @@
    overflow-y: auto;
  }
  
@@ -1823,7 +1981,7 @@ index 29a4d5e74e..b37217b43b 100644
 +  pointer-events: none;
 +}
 diff --git a/packages/client/ui-conversation/src/client/skeleton/EmptyHero.tsx b/packages/client/ui-conversation/src/client/skeleton/EmptyHero.tsx
-index 40df87269b..6a937d3141 100644
+index b46db926da..9c60cb7794 100644
 --- a/packages/client/ui-conversation/src/client/skeleton/EmptyHero.tsx
 +++ b/packages/client/ui-conversation/src/client/skeleton/EmptyHero.tsx
 @@ -29,19 +29,32 @@ export function workspaceLabel(cwd: string): string {
@@ -1872,10 +2030,10 @@ index 40df87269b..6a937d3141 100644
      </button>
    )
 diff --git a/packages/client/ui-conversation/src/client/skeleton/HeroShell.module.css b/packages/client/ui-conversation/src/client/skeleton/HeroShell.module.css
-index aac6a5cf61..5b1d74dc93 100644
+index 7d42d3c5bb..0ba9220205 100644
 --- a/packages/client/ui-conversation/src/client/skeleton/HeroShell.module.css
 +++ b/packages/client/ui-conversation/src/client/skeleton/HeroShell.module.css
-@@ -177,6 +177,23 @@
+@@ -182,6 +182,23 @@
    cursor: default;
  }
  
@@ -2042,19 +2200,19 @@ index 6bcc3d662e..f572287347 100644
  
    it('marks absent or failed metadata unavailable without opening anything', async () => {
 diff --git a/packages/client/ui-tool/tests/chat-ptc-subcalls.client.spec.tsx b/packages/client/ui-tool/tests/chat-ptc-subcalls.client.spec.tsx
-index ce1f5b957e..24fedfdea1 100644
+index 15f6af1525..d3dd3106f8 100644
 --- a/packages/client/ui-tool/tests/chat-ptc-subcalls.client.spec.tsx
 +++ b/packages/client/ui-tool/tests/chat-ptc-subcalls.client.spec.tsx
-@@ -14,6 +14,7 @@ import {
-   ConversationEventRegistry, ConversationViewRegistry, EMPTY_CONVERSATION_SNAPSHOT, type ConvViewOwnerProps,
+@@ -15,6 +15,7 @@ import {
  } from '@deepseek-ai/dsh-client-ui-conversation/client'
+ import { ConversationInteractionRegistry } from '@deepseek-ai/dsh-client-ui-conversation/src/client/conversation/interaction-registry.ts'
  import { en as conversationEn, NS as CONVERSATION_NS, zh as conversationZh } from '@deepseek-ai/dsh-client-ui-conversation/src/client/locales.ts'
 +import { UserTextRegistry } from '@deepseek-ai/dsh-client-ui-conversation/src/client/conversation/user-text-registry.ts'
  import { apply as applyChat, inject as injectChat } from '@deepseek-ai/dsh-client-ui-chat/client'
  import { PartialArguments } from '@deepseek-ai/dsh-util-values'
  import { apply as applyTool, inject as injectTool } from '../src/client/apply.ts'
-@@ -114,6 +115,8 @@ async function bench(snapshot: ChatSnapshot) {
-     views,
+@@ -118,6 +119,8 @@ async function bench(snapshot: ChatSnapshot) {
+     interactions: new ConversationInteractionRegistry(ctx),
      groups: { register: () => () => {} },
      binding: () => ({ target: () => chat, snapshot: conversation }),
 +    // dshui's Chat apply registers its user-text link rule on this service.
@@ -2063,10 +2221,10 @@ index ce1f5b957e..24fedfdea1 100644
    ctx.uiSession.provide({
      hooks: ['conversation'],
 diff --git a/packages/client/ui-workspace/src/client/contract/slots.ts b/packages/client/ui-workspace/src/client/contract/slots.ts
-index d00b3658d8..8351069c44 100644
+index dbdab7f08e..19afcb8bc9 100644
 --- a/packages/client/ui-workspace/src/client/contract/slots.ts
 +++ b/packages/client/ui-workspace/src/client/contract/slots.ts
-@@ -228,6 +228,12 @@ export type WorkspaceBrowserInjected = {
+@@ -244,6 +244,12 @@ export type WorkspaceBrowserInjected = {
      hostInfo: HostObservable<RemoteHostFacts>
      workspaceShortcuts: HostObservable<WorkspaceShortcutState>
      shortcuts: HostObservable<readonly ShortcutCatalogEntry[]>
@@ -2079,7 +2237,7 @@ index d00b3658d8..8351069c44 100644
    }
    /** Open the browser search and focus its input. */
    requestSearch: () => void
-@@ -353,6 +359,17 @@ export interface ArchiveSessionInjected {
+@@ -369,6 +375,17 @@ export interface ArchiveSessionInjected {
    unarchiveSession: (sessionId: SessionId) => void
  }
  
@@ -2098,7 +2256,7 @@ index d00b3658d8..8351069c44 100644
   * A stop-and-archive confirmation the archive action asked for: the Host
   * refused the plain archive because this work still runs.
 diff --git a/packages/client/ui-workspace/src/client/index.ts b/packages/client/ui-workspace/src/client/index.ts
-index cc9da072c9..59d03b6162 100644
+index 56985d0872..3a51b06059 100644
 --- a/packages/client/ui-workspace/src/client/index.ts
 +++ b/packages/client/ui-workspace/src/client/index.ts
 @@ -38,8 +38,8 @@ import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
@@ -2168,7 +2326,7 @@ index cc9da072c9..59d03b6162 100644
    })
    const pickerInjected = (): WorkspacePickerInjected => ({
      createWorkspace: input => workspaces.create(input),
-@@ -319,10 +352,14 @@ export function apply(ctx: Context): void {
+@@ -320,10 +353,14 @@ export function apply(ctx: Context): void {
      yield ctx.slots.register({ name: 'sidebar.workspaces.session.menu.item', id: 'fork', order: 300, locale: NS, inject: forkInjected }, ForkSessionMenuItem)
      yield ctx.slots.register({ name: 'sidebar.workspaces.session.menu.item', id: 'archive', order: 400, locale: NS, inject: archiveInjected }, ArchiveSessionMenuItem)
      yield ctx.slots.register({ name: 'sidebar.workspaces.session.menu.item', id: 'session-id', order: 450, locale: NS, inject: sessionIdInjected }, SessionIdMenuItem)
@@ -2184,7 +2342,7 @@ index cc9da072c9..59d03b6162 100644
    // The surfaces the actions raise live in the frame-wide layer: they must
    // outlive the row menu the action sat in.
 diff --git a/packages/client/ui-workspace/src/client/locales.ts b/packages/client/ui-workspace/src/client/locales.ts
-index 0214ab995f..bef193c3eb 100644
+index 7420f4547b..8627a7782f 100644
 --- a/packages/client/ui-workspace/src/client/locales.ts
 +++ b/packages/client/ui-workspace/src/client/locales.ts
 @@ -59,6 +59,8 @@ export const zh = {
@@ -2205,11 +2363,65 @@ index 0214ab995f..bef193c3eb 100644
    'menu.archiveSession': 'Archive session',
    'menu.unarchiveSession': 'Unarchive session',
    'menu.pinSession': 'Pin session',
+@@ -308,6 +312,8 @@ export const ja = {
+   'delete.desc': '「{name}」をワークスペース一覧から削除します。フォルダとセッションログは保持されます。このワークスペースのセッションは「未分類」に表示されます。',
+   'delete.pending': 'ワークスペースを削除中…',
+   'menu.fork': 'セッションをフォーク',
++  'menu.deleteSession': 'セッションを削除',
++  'actions.delete': '削除',
+   'menu.archiveSession': 'セッションをアーカイブ',
+   'menu.unarchiveSession': 'セッションのアーカイブを解除',
+   'menu.pinSession': 'セッションをピン留め',
+@@ -431,6 +437,8 @@ export const es = {
+   'delete.desc': 'Esto elimina "{name}" de la lista de espacios de trabajo. Se conservarán los registros de carpetas y sesiones. Sus sesiones aparecerán en Desagrupadas.',
+   'delete.pending': 'Eliminando espacio de trabajo…',
+   'menu.fork': 'Crear una bifurcación de la sesión',
++  'menu.deleteSession': 'Eliminar sesión',
++  'actions.delete': 'Eliminar',
+   'menu.archiveSession': 'Sesión de archivo',
+   'menu.unarchiveSession': 'Desarchivar sesión',
+   'menu.pinSession': 'Fijar sesión',
+@@ -554,6 +562,8 @@ export const fr = {
+   'delete.desc': 'Cela supprime « {name} » de la liste des espaces de travail. Les journaux de dossiers et de sessions seront conservés. Ses sessions apparaîtront sous Non groupées.',
+   'delete.pending': "Suppression de l'espace de travail…",
+   'menu.fork': 'Créer une branche de la session',
++  'menu.deleteSession': 'Supprimer la session',
++  'actions.delete': 'Supprimer',
+   'menu.archiveSession': "Séance d'archivage",
+   'menu.unarchiveSession': 'Session de désarchivage',
+   'menu.pinSession': 'Épingler la session',
+@@ -677,6 +687,8 @@ export const de = {
+   'delete.desc': 'Dadurch wird „{name}“ aus der Arbeitsbereichsliste entfernt. Die Ordner- und Sitzungsprotokolle werden aufbewahrt. Seine Sitzungen werden unter „Nicht gruppiert“ angezeigt.',
+   'delete.pending': 'Arbeitsbereich wird gelöscht…',
+   'menu.fork': 'Sitzung abzweigen',
++  'menu.deleteSession': 'Sitzung löschen',
++  'actions.delete': 'Löschen',
+   'menu.archiveSession': 'Archivsitzung',
+   'menu.unarchiveSession': 'Sitzung dearchivieren',
+   'menu.pinSession': 'Sitzung anheften',
+@@ -800,6 +812,8 @@ export const ru = {
+   'delete.desc': 'Это удалит «{name}» из списка рабочей области. Журналы папок и сеансов будут сохранены. Его сеансы появятся в разделе «Разгруппировано».',
+   'delete.pending': 'Удаление рабочей области…',
+   'menu.fork': 'Создать ответвление сеанса',
++  'menu.deleteSession': 'Удалить сеанс',
++  'actions.delete': 'Удалить',
+   'menu.archiveSession': 'Архив сеанса',
+   'menu.unarchiveSession': 'Разархивировать сеанс',
+   'menu.pinSession': 'Закрепить сеанс',
+@@ -923,6 +937,8 @@ export const pt = {
+   'delete.desc': 'Isso remove “{name}” da lista de espaços de trabalho. A pasta e os logs de sessão serão mantidos. Suas sessões aparecerão em Desagrupado.',
+   'delete.pending': 'Excluindo espaço de trabalho…',
+   'menu.fork': 'Bifurcar sessão',
++  'menu.deleteSession': 'Excluir sessão',
++  'actions.delete': 'Excluir',
+   'menu.archiveSession': 'Sessão de arquivamento',
+   'menu.unarchiveSession': 'Desarquivar sessão',
+   'menu.pinSession': 'Fixar sessão',
 diff --git a/packages/client/ui-workspace/src/client/navigation.ts b/packages/client/ui-workspace/src/client/navigation.ts
-index 55e03054ce..73471457d7 100644
+index 42265f1af6..0acb4d89e5 100644
 --- a/packages/client/ui-workspace/src/client/navigation.ts
 +++ b/packages/client/ui-workspace/src/client/navigation.ts
-@@ -23,6 +23,7 @@ import type { DraftInitializationOptions } from '@deepseek-ai/dsh-client-ui-conv
+@@ -24,6 +24,7 @@ import type { DraftInitializationOptions } from '@deepseek-ai/dsh-client-ui-conv
  import type { RowToast } from './contract/slots.ts'
  import { pinOrderAccounts, pinOrderSource } from './pin-order.ts'
  import type { WorkspaceViewStoreActions } from './stores.ts'
@@ -2217,7 +2429,7 @@ index 55e03054ce..73471457d7 100644
  
  interface MainSelection {
    readonly sessionId?: SessionId
-@@ -334,7 +335,11 @@ class UiWorkspaceService extends Service implements UiWorkspace {
+@@ -348,7 +349,11 @@ class UiWorkspaceService extends Service implements UiWorkspace {
      const recent = workspace.phase === 'ready' && sessions.phase === 'ready'
        ? recentWorkspace(workspace.items, sessions.byId)
        : undefined
@@ -2230,7 +2442,7 @@ index 55e03054ce..73471457d7 100644
      if (target === undefined) {
        if (initializeDraft) {
          this.notify({ kind: 'createFailed', message: this.ctx.locale.bind('workspace')('draft.workspaceRequired') })
-@@ -410,7 +415,10 @@ class UiWorkspaceService extends Service implements UiWorkspace {
+@@ -432,7 +437,10 @@ class UiWorkspaceService extends Service implements UiWorkspace {
      let initial: 'waiting' | 'connecting' | 'done' = 'waiting'
      const reconcile = (): void => {
        if (this.lifetime.signal.aborted) return
@@ -2239,10 +2451,10 @@ index 55e03054ce..73471457d7 100644
 +        initial = 'waiting'
 +        return
 +      }
-       if (initial !== 'waiting') return
+       if (initial !== 'waiting' || this.restorationNavigation?.aborted === true) return
        const workspace = this.workspaces.list.getSnapshot()
        const sessions = this.sessions.list.getSnapshot()
-@@ -419,6 +427,15 @@ class UiWorkspaceService extends Service implements UiWorkspace {
+@@ -441,6 +449,15 @@ class UiWorkspaceService extends Service implements UiWorkspace {
          initial = 'done'
          return
        }
@@ -2258,7 +2470,7 @@ index 55e03054ce..73471457d7 100644
        initial = 'connecting'
        void this.restoreSelection(workspace, sessions).then(
          () => { initial = 'done' },
-@@ -459,7 +476,11 @@ class UiWorkspaceService extends Service implements UiWorkspace {
+@@ -482,7 +499,11 @@ class UiWorkspaceService extends Service implements UiWorkspace {
        && !workspaces.archivedSessionIds.includes(summary.id)) {
        sessionId = await this.restoreBlank(workspace.workspaceId, summary.id)
      }
@@ -2271,7 +2483,7 @@ index 55e03054ce..73471457d7 100644
      if (target === undefined && workspaces.items.length === 0 && sessions.ids.length === 0) {
        const prepared = await this.initializeDefaultWorkspace(navigation)
        if (navigation.aborted) return
-@@ -572,4 +593,15 @@ function recentWorkspace(
+@@ -595,4 +616,15 @@ function recentWorkspace(
    return selected
  }
  
@@ -2288,20 +2500,24 @@ index 55e03054ce..73471457d7 100644
 +
  export { UiWorkspaceService }
 diff --git a/packages/client/ui-workspace/src/client/rows/Rows.tsx b/packages/client/ui-workspace/src/client/rows/Rows.tsx
-index 216a6fc00f..ca5e4fbb5e 100644
+index 116cab1800..e35b22c4ec 100644
 --- a/packages/client/ui-workspace/src/client/rows/Rows.tsx
 +++ b/packages/client/ui-workspace/src/client/rows/Rows.tsx
-@@ -645,7 +645,7 @@ export function SessionNodeItem({
+@@ -744,8 +744,10 @@ export function SessionNodeItem({
+       >
+         {title}
        </span>
-       {/* A blank New Session row is a provisional placeholder: nothing has
-           happened in it yet, so a "now" timestamp and the row verbs
--          (rename/fork/archive) would all act on content that does not
+-      {/* Blank rows have no first prompt, so neither trailing details nor
+-          actions for existing content are available. */}
++      {/* A blank New Session row is a provisional placeholder: nothing has
++          happened in it yet, so a "now" timestamp and the row verbs
 +          (rename/fork/delete) would all act on content that does not
-           exist — both trailing cells stay off until the first prompt. */}
++          exist — both trailing cells stay off until the first prompt. */}
        {!row.blank && (
-         <span
+         <span className={css.rowResting}>
+           <span
 diff --git a/packages/client/ui-workspace/src/client/rows/WorkspaceBrowser.tsx b/packages/client/ui-workspace/src/client/rows/WorkspaceBrowser.tsx
-index df871654ee..e25cd37f61 100644
+index d7738c2a53..5cf5d4a153 100644
 --- a/packages/client/ui-workspace/src/client/rows/WorkspaceBrowser.tsx
 +++ b/packages/client/ui-workspace/src/client/rows/WorkspaceBrowser.tsx
 @@ -34,7 +34,7 @@ import type { WorkspaceBrowserProps } from '../contract/slots.ts'
@@ -2312,8 +2528,8 @@ index df871654ee..e25cd37f61 100644
 +  pinCurrentBlank, reconcileManualOrder, scopedWorkspacePath, sessionMemberIds, UNGROUPED_KEY,
  } from '../tree.ts'
  import { ProjectRowItem, SearchResultItem, SessionNodeItem } from './Rows.tsx'
- import { AnimatedRows } from './AnimatedRows.tsx'
-@@ -291,6 +291,10 @@ type SessionTreeProps = Pick<
+ import { FLAT_SESSION_ORDER_KEY, type SessionGroupBy } from '../stores.ts'
+@@ -292,6 +292,10 @@ type SessionTreeProps = Pick<
    onDeleteRequest: (workspaceId: WorkspaceId, currentTitle: string) => void
    /** Open the rename dialog from a row title double-click. */
    onSessionRenameRequest: (sessionId: SessionNode['id'], currentTitle: string) => void
@@ -2324,7 +2540,7 @@ index df871654ee..e25cd37f61 100644
    /** One Session chosen from search that must be exposed and scrolled into view. */
    revealSessionId?: SessionId | undefined
    /** Acknowledge that the chosen Session row has been revealed. */
-@@ -322,7 +326,7 @@ function SessionTree({
+@@ -323,7 +327,7 @@ function SessionTree({
    renderSlot,
    insertWorkspaceBefore,
    nestWorkspaces, groupExpansion, setGroupExpanded,
@@ -2333,7 +2549,7 @@ index df871654ee..e25cd37f61 100644
    revealSessionId, onSessionRevealed, shortcuts,
  }: SessionTreeProps) {
    const panelActive = usePanelInfo(info => info.activePanelId !== null)
-@@ -376,8 +380,8 @@ function SessionTree({
+@@ -377,8 +381,8 @@ function SessionTree({
      () => deriveGroups(list, workspaces, rowState, statuses, {
        expandedGroups,
        ungroupedOrder: ungroupedSessionIds,
@@ -2344,15 +2560,15 @@ index df871654ee..e25cd37f61 100644
    )
    useEffect(() => {
      for (let key = revealGroup; key !== undefined; key = parents.get(key)) {
-@@ -689,6 +693,7 @@ function SessionTree({
+@@ -695,6 +699,7 @@ function SessionTree({
  function FlatList({
-   list, sessionIds, rowState, onLeaveArchivedOnly, useSessionStatus, open, onSessionRenameRequest,
+   list, sessionIds, rowState, onLeaveArchivedOnly, useSessionStatus, useSessionAccess, open, onSessionRenameRequest,
    usePanelInfo, setSessionOrder, workspaceReady, animationResetKey,
 +  scope, deletedSessionIds,
-   revealSessionId, onSessionRevealed, renderSlot, t,
+   revealSessionId, onSessionRevealed, renderSlot, home, t,
  }: Pick<
    SessionTreeProps,
-@@ -696,6 +701,8 @@ function FlatList({
+@@ -703,6 +708,8 @@ function FlatList({
    | 'open'
    | 'onSessionRenameRequest'
    | 'renderSlot'
@@ -2361,7 +2577,7 @@ index df871654ee..e25cd37f61 100644
    | 'usePanelInfo'
    | 'setSessionOrder'
    | 'workspaceReady'
-@@ -712,8 +719,8 @@ function FlatList({
+@@ -720,8 +727,8 @@ function FlatList({
    const panelActive = usePanelInfo(info => info.activePanelId !== null)
    const statuses = useSessionStatus(s => s)
    const rows = useMemo(
@@ -2372,7 +2588,7 @@ index df871654ee..e25cd37f61 100644
    )
    const [drag, setDrag] = useState<DragState | null>(null)
    const dropCommitted = useRef(false)
-@@ -804,6 +811,8 @@ function SearchResults({
+@@ -815,6 +822,8 @@ function SearchResults({
    workspaces,
    archivedSessionIds,
    archivedFilter,
@@ -2381,7 +2597,7 @@ index df871654ee..e25cd37f61 100644
    query,
    remote,
    resultLimit,
-@@ -816,6 +825,10 @@ function SearchResults({
+@@ -828,6 +837,10 @@ function SearchResults({
    archivedFilter: ArchivedFilter
    /** Unarchive an archived result row in place. */
    onUnarchive: (id: SessionNode['id']) => void
@@ -2392,7 +2608,7 @@ index df871654ee..e25cd37f61 100644
    query: string
    remote: RemoteSearchState
    resultLimit: number
-@@ -836,8 +849,10 @@ function SearchResults({
+@@ -848,8 +861,10 @@ function SearchResults({
        statuses,
        currentRemote,
        resultLimit,
@@ -2404,7 +2620,7 @@ index df871654ee..e25cd37f61 100644
    )
    const pending = currentRemote.status === 'loading'
    const currentId = panelActive
-@@ -921,6 +936,7 @@ export function WorkspaceBrowser({
+@@ -937,6 +952,7 @@ export function WorkspaceBrowser({
    requestAddWorkspace,
    closeAddWorkspace,
    setDirectoryBusy,
@@ -2412,7 +2628,7 @@ index df871654ee..e25cd37f61 100644
    renderSlot,
    t,
  }: WorkspaceBrowserProps) {
-@@ -946,6 +962,12 @@ export function WorkspaceBrowser({
+@@ -962,6 +978,12 @@ export function WorkspaceBrowser({
    const workspaceStreamState = useWorkspaces(state => state.state)
    const archivedSessionIds = useWorkspaces(state => state.archivedSessionIds)
    const pinnedSessionIds = useWorkspaces(state => state.pinnedSessionIds)
@@ -2425,7 +2641,7 @@ index df871654ee..e25cd37f61 100644
    // Live occupancy of this surface's directory-flow hole (the same source the
    // flow reads): a composition without a picking affordance can add nothing.
    const directoryFlowAvailable = useDirectoryFlow(occupied => occupied)
-@@ -1411,6 +1433,8 @@ export function WorkspaceBrowser({
+@@ -1442,6 +1464,8 @@ export function WorkspaceBrowser({
                workspaces={workspaces}
                archivedSessionIds={archivedSessionIds}
                archivedFilter={archivedFilter}
@@ -2434,7 +2650,7 @@ index df871654ee..e25cd37f61 100644
                query={normalizedQuery}
                remote={remoteSearch}
                resultLimit={searchResultLimit}
-@@ -1432,6 +1456,8 @@ export function WorkspaceBrowser({
+@@ -1464,6 +1488,8 @@ export function WorkspaceBrowser({
                  onSessionRenameRequest={requestSessionRename}
                  renderSlot={renderSlot}
                  setSessionOrder={saveSessionOrder}
@@ -2442,8 +2658,8 @@ index df871654ee..e25cd37f61 100644
 +                deletedSessionIds={deletedSessionIds}
                  revealSessionId={revealSessionId}
                  onSessionRevealed={acknowledgeSessionReveal}
-                 t={t}
-@@ -1450,6 +1476,8 @@ export function WorkspaceBrowser({
+                 home={home}
+@@ -1486,6 +1512,8 @@ export function WorkspaceBrowser({
                  workspaceReady={workspaceReady}
                  nestWorkspaces={groupBy === 'workspace-tree'}
                  animationResetKey={`${groupBy}/${orderBy}/${archivedFilter}`}
@@ -2519,7 +2735,7 @@ index 0000000000..93b1db4a2d
 +  )
 +}
 diff --git a/packages/client/ui-workspace/src/client/tree.ts b/packages/client/ui-workspace/src/client/tree.ts
-index eb67d0ebe3..f67fa7b46d 100644
+index 054c584d4b..8f7ebe699e 100644
 --- a/packages/client/ui-workspace/src/client/tree.ts
 +++ b/packages/client/ui-workspace/src/client/tree.ts
 @@ -31,6 +31,31 @@ export function owningGroupKey(
@@ -2554,7 +2770,7 @@ index eb67d0ebe3..f67fa7b46d 100644
  /** Pending interaction kinds with dedicated Workspace-row presentation. */
  export type SessionPendingInteractionStatus = 'approval' | 'plan-review' | 'question'
  type SessionStatuses = SessionStatusSnapshot
-@@ -233,14 +258,21 @@ export type ArchivedFilter = 'default' | 'show' | 'only'
+@@ -224,14 +249,21 @@ export type ArchivedFilter = 'default' | 'show' | 'only'
   * Ordinary sessions are visible; among blank sessions, only the current one
   * is visible. Subagent children use their parent header catalog; archived
   * sessions follow the archived filter, while their accounting slots remain
@@ -2577,7 +2793,7 @@ index eb67d0ebe3..f67fa7b46d 100644
    if (session.origin === 'subagent') return false
    if (session.blank && session.id !== current) return false
    switch (archivedFilter) {
-@@ -337,17 +369,21 @@ function groupByWorkspace(
+@@ -328,17 +360,21 @@ function groupByWorkspace(
    archived: ReadonlySet<SessionId>,
    archivedFilter: ArchivedFilter,
    ungroupedOrder: readonly string[] | undefined,
@@ -2600,7 +2816,7 @@ index eb67d0ebe3..f67fa7b46d 100644
        members.push(summary)
      }
      // The archived-only view lists archives, not the Workspace inventory, so
-@@ -361,7 +397,8 @@ function groupByWorkspace(
+@@ -352,7 +388,8 @@ function groupByWorkspace(
    const stray = list.ids
      .map(id => list.byId[id])
      .filter((s): s is SessionSummary =>
@@ -2610,7 +2826,7 @@ index eb67d0ebe3..f67fa7b46d 100644
    if (stray.length > 0) {
      groups.push(buildGroup(
        UNGROUPED_KEY,
-@@ -431,6 +468,8 @@ function sessionNode(
+@@ -423,6 +460,8 @@ function sessionNode(
   * @param rowState - registry-global pin and archive sets plus the archived filter.
   * @param statuses - unified UI status by Session.
   * @param view - local expansion arrays.
@@ -2619,7 +2835,7 @@ index eb67d0ebe3..f67fa7b46d 100644
   * @returns group sections in render order.
   */
  export function deriveGroups(
-@@ -439,16 +478,19 @@ export function deriveGroups(
+@@ -431,16 +470,19 @@ export function deriveGroups(
    rowState: SessionRowState,
    statuses: SessionStatuses,
    view: TreeView,
@@ -2640,7 +2856,7 @@ index eb67d0ebe3..f67fa7b46d 100644
      const expanded = expandedGroups.has(g.key)
      groups.push({
        key: g.key,
-@@ -473,8 +515,12 @@ export function deriveGroups(
+@@ -465,8 +507,12 @@ export function deriveGroups(
   * @param list - sessions list snapshot.
   * @returns known ordinary Session ids, including archives and only the current blank.
   */
@@ -2655,7 +2871,7 @@ index eb67d0ebe3..f67fa7b46d 100644
  }
  
  /**
-@@ -482,18 +528,23 @@ export function sessionMemberIds(list: SessionListState): SessionId[] {
+@@ -474,18 +520,23 @@ export function sessionMemberIds(list: SessionListState): SessionId[] {
   * @param list - sessions list snapshot.
   * @param archivedSessionIds - registry-global archive set.
   * @param archivedFilter - archived-row visibility choice.
@@ -2680,7 +2896,7 @@ index eb67d0ebe3..f67fa7b46d 100644
    })
  }
  
-@@ -504,6 +555,8 @@ export function visibleSessionIds(
+@@ -496,6 +547,8 @@ export function visibleSessionIds(
   * @param sessionIds - complete account members in the selected order, including hidden archives.
   * @param rowState - registry-global pin and archive sets plus the archived filter.
   * @param statuses - unified UI status by Session.
@@ -2689,7 +2905,7 @@ index eb67d0ebe3..f67fa7b46d 100644
   * @returns flat rows in sectioned order with current status indicators.
   */
  export function deriveFlat(
-@@ -511,13 +564,17 @@ export function deriveFlat(
+@@ -503,13 +556,17 @@ export function deriveFlat(
    sessionIds: readonly SessionId[],
    rowState: SessionRowState,
    statuses: SessionStatuses,
@@ -2708,7 +2924,7 @@ index eb67d0ebe3..f67fa7b46d 100644
        ? [session]
        : []
    })
-@@ -537,6 +594,8 @@ export function deriveFlat(
+@@ -529,6 +586,8 @@ export function deriveFlat(
   * @param statuses - unified UI status by Session.
   * @param content - ranked Host content-search page.
   * @param limit - protocol-owned maximum merged row count.
@@ -2717,7 +2933,7 @@ index eb67d0ebe3..f67fa7b46d 100644
   * @returns bounded deduplicated flat rows and a refine-query hint bit.
   */
  export function deriveSearchResults(
-@@ -548,10 +607,13 @@ export function deriveSearchResults(
+@@ -540,10 +599,13 @@ export function deriveSearchResults(
    statuses: SessionStatuses,
    content: { items: readonly SessionSearchResultItem[]; hasMore: boolean },
    limit: number,
@@ -2731,7 +2947,7 @@ index eb67d0ebe3..f67fa7b46d 100644
    const current = mainSessionId(list)
  
    const workspaceBySession = new Map<SessionId, string>()
-@@ -572,7 +634,8 @@ export function deriveSearchResults(
+@@ -564,7 +626,8 @@ export function deriveSearchResults(
      const summary = list.byId[id]
      // Blank placeholders never match a query (their canonical title displays
      // localized, so matching it would tie search to one language).
@@ -2741,7 +2957,7 @@ index eb67d0ebe3..f67fa7b46d 100644
      if (
        sessionTitle(summary).toLowerCase().includes(q)
        || labelOf(summary).toLowerCase().includes(q)
-@@ -594,7 +657,8 @@ export function deriveSearchResults(
+@@ -587,7 +650,8 @@ export function deriveSearchResults(
    for (const summary of orderedLocal) include(summary)
    for (const item of content.items) {
      const summary = list.byId[item.sessionId]
@@ -2752,7 +2968,7 @@ index eb67d0ebe3..f67fa7b46d 100644
  
    return {
 diff --git a/packages/client/ui-workspace/tests/apply.client.spec.ts b/packages/client/ui-workspace/tests/apply.client.spec.ts
-index 0d3278cdf0..f0fa5cc4c1 100644
+index bf5acfea6b..cec50e4bca 100644
 --- a/packages/client/ui-workspace/tests/apply.client.spec.ts
 +++ b/packages/client/ui-workspace/tests/apply.client.spec.ts
 @@ -21,6 +21,7 @@ import {
@@ -2763,7 +2979,7 @@ index 0d3278cdf0..f0fa5cc4c1 100644
  import { ForkSessionMenuItem } from '../src/client/session-actions/ForkSession.tsx'
  import { PinSessionMenuItem, PinSessionRowButton } from '../src/client/session-actions/PinSession.tsx'
  import { RenameSessionMenuItem, SessionRenameDialog } from '../src/client/session-actions/RenameSession.tsx'
-@@ -265,8 +266,9 @@ describe('ui-workspace apply', () => {
+@@ -287,8 +288,9 @@ describe('ui-workspace apply', () => {
      await Promise.resolve()
      expect(after.slots.entries('conversation.hero.workspace')[0]!.component).toBe(WorkspacePicker)
      // The row actions follow the browser's own declaration, whenever it lands.
@@ -2775,7 +2991,7 @@ index 0d3278cdf0..f0fa5cc4c1 100644
      expect(after.slots.entries('shell.overlay')).toHaveLength(3)
    })
  
-@@ -289,10 +291,12 @@ describe('ui-workspace apply', () => {
+@@ -313,10 +315,12 @@ describe('ui-workspace apply', () => {
        ['fork', 300, ForkSessionMenuItem, 'workspace'],
        ['archive', 400, ArchiveSessionMenuItem, 'workspace'],
        ['session-id', 450, SessionIdMenuItem, 'workspace'],
@@ -2788,7 +3004,7 @@ index 0d3278cdf0..f0fa5cc4c1 100644
      ])
      expect(rows('shell.overlay')).toEqual([
        ['workspace.session-rename', undefined, SessionRenameDialog, 'workspace'],
-@@ -876,8 +880,8 @@ describe('ui-workspace apply', () => {
+@@ -900,8 +904,8 @@ describe('ui-workspace apply', () => {
      declare(b.slots, 'sidebar.workspaces', 'conversation.hero.workspace', 'conversation.empty.workspace', 'shell.overlay')
      const fiber = b.ctx.plugin({ inject: [...inject], apply })
      await fiber.await()
@@ -2813,10 +3029,10 @@ index 274f595533..cdcecb9197 100644
      expect(view.getAllByRole('separator')).toHaveLength(1)
      const last = view.getByRole('menuitem', { name: 'Last action' })
 diff --git a/packages/client/ui-workspace/tests/workspace-browser.client.spec.tsx b/packages/client/ui-workspace/tests/workspace-browser.client.spec.tsx
-index 4b62826cbc..924ed74f42 100644
+index 014f53ba81..0168c6f80a 100644
 --- a/packages/client/ui-workspace/tests/workspace-browser.client.spec.tsx
 +++ b/packages/client/ui-workspace/tests/workspace-browser.client.spec.tsx
-@@ -137,6 +137,8 @@ function mount(overrides: Partial<WorkspaceBrowserProps> = {}) {
+@@ -139,6 +139,8 @@ function mount(overrides: Partial<WorkspaceBrowserProps> = {}) {
      createWorkspace: vi.fn(async () => workspace('created', [])),
      useDirectoryFlow: bindSnapshotSelector({ getSnapshot: () => true, subscribe: () => () => {} }),
      useHostInfo: selector => selector({ home: undefined, isLoopback: true }),
@@ -2838,15 +3054,15 @@ index 7aa03cebc1..7f3b261154 100644
 +  pluginId: 'dshui-client-ui-workspace',
 +})
 diff --git a/packages/extensions/cordis-client-runner/src/client/slot-catalog.ts b/packages/extensions/cordis-client-runner/src/client/slot-catalog.ts
-index 33794f1a71..2a2dca1e38 100644
+index 7341c2c743..1507e639b9 100644
 --- a/packages/extensions/cordis-client-runner/src/client/slot-catalog.ts
 +++ b/packages/extensions/cordis-client-runner/src/client/slot-catalog.ts
 @@ -182,7 +182,7 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
      ],
      replaceRisk: 'none',
      example: 'return {\n  inject: [\'slots\'],\n  apply(ctx) {\n    ctx.slots.inject(\'conversation.chat.assistant-actions\', () => ctx.slots.register(\n      { name: \'conversation.chat.assistant-actions\', id: \'my-entry\', order: 100, label: \'My entry\' },\n      () => React.createElement(\'div\', null, \'hello\'),\n    ))\n  },\n}',
--    source: 'packages/client/ui-chat/src/client/contract/slots.ts:441',
-+    source: 'packages/client/ui-chat/src/client/contract/slots.ts:452',
+-    source: 'packages/client/ui-chat/src/client/contract/slots.ts:482',
++    source: 'packages/client/ui-chat/src/client/contract/slots.ts:493',
    },
    {
      key: 'conversation.chat.commandview',
@@ -2854,8 +3070,8 @@ index 33794f1a71..2a2dca1e38 100644
      occupants: [],
      replaceRisk: 'none',
      example: 'return {\n  inject: [\'slots\'],\n  apply(ctx) {\n    ctx.slots.inject(\'conversation.chat.commandview\', () => ctx.slots.register(\n      { name: \'conversation.chat.commandview\', key: \'<one key the owner dispatches>\' },\n      () => React.createElement(\'div\', null, \'hello\'),\n    ))\n  },\n}',
--    source: 'packages/client/ui-chat/src/client/contract/slots.ts:423',
-+    source: 'packages/client/ui-chat/src/client/contract/slots.ts:434',
+-    source: 'packages/client/ui-chat/src/client/contract/slots.ts:464',
++    source: 'packages/client/ui-chat/src/client/contract/slots.ts:475',
    },
    {
      key: 'conversation.chat.flow',
@@ -2863,8 +3079,8 @@ index 33794f1a71..2a2dca1e38 100644
      ],
      replaceRisk: 'shadows-shipped-ui',
      example: 'return {\n  inject: [\'slots\'],\n  apply(ctx) {\n    ctx.slots.inject(\'conversation.chat.flow\', () => ctx.slots.register(\n      { name: \'conversation.chat.flow\' },\n      () => React.createElement(\'div\', null, \'hello\'),\n    ))\n  },\n}',
--    source: 'packages/client/ui-chat/src/client/contract/slots.ts:390',
-+    source: 'packages/client/ui-chat/src/client/contract/slots.ts:401',
+-    source: 'packages/client/ui-chat/src/client/contract/slots.ts:420',
++    source: 'packages/client/ui-chat/src/client/contract/slots.ts:431',
    },
    {
      key: 'conversation.chat.message.images',
@@ -2872,8 +3088,8 @@ index 33794f1a71..2a2dca1e38 100644
      ],
      replaceRisk: 'shadows-shipped-ui',
      example: 'return {\n  inject: [\'slots\'],\n  apply(ctx) {\n    ctx.slots.inject(\'conversation.chat.message.images\', () => ctx.slots.register(\n      { name: \'conversation.chat.message.images\' },\n      () => React.createElement(\'div\', null, \'hello\'),\n    ))\n  },\n}',
--    source: 'packages/client/ui-chat/src/client/contract/slots.ts:415',
-+    source: 'packages/client/ui-chat/src/client/contract/slots.ts:426',
+-    source: 'packages/client/ui-chat/src/client/contract/slots.ts:456',
++    source: 'packages/client/ui-chat/src/client/contract/slots.ts:467',
    },
    {
      key: 'conversation.chat.node',
@@ -2890,8 +3106,8 @@ index 33794f1a71..2a2dca1e38 100644
      ],
      replaceRisk: 'shadows-shipped-ui',
      example: 'return {\n  inject: [\'slots\'],\n  apply(ctx) {\n    ctx.slots.inject(\'conversation.chat.node\', () => ctx.slots.register(\n      { name: \'conversation.chat.node\', key: \'<one key the owner dispatches>\' },\n      () => React.createElement(\'div\', null, \'hello\'),\n    ))\n  },\n}',
--    source: 'packages/client/ui-chat/src/client/contract/slots.ts:402',
-+    source: 'packages/client/ui-chat/src/client/contract/slots.ts:413',
+-    source: 'packages/client/ui-chat/src/client/contract/slots.ts:432',
++    source: 'packages/client/ui-chat/src/client/contract/slots.ts:443',
    },
    {
      key: 'conversation.chat.reasoning.body',
@@ -2899,17 +3115,26 @@ index 33794f1a71..2a2dca1e38 100644
      ],
      replaceRisk: 'shadows-shipped-ui',
      example: 'return {\n  inject: [\'slots\'],\n  apply(ctx) {\n    ctx.slots.inject(\'conversation.chat.reasoning.body\', () => ctx.slots.register(\n      { name: \'conversation.chat.reasoning.body\' },\n      () => React.createElement(\'div\', null, \'hello\'),\n    ))\n  },\n}',
--    source: 'packages/client/ui-chat/src/client/contract/slots.ts:429',
-+    source: 'packages/client/ui-chat/src/client/contract/slots.ts:440',
+-    source: 'packages/client/ui-chat/src/client/contract/slots.ts:470',
++    source: 'packages/client/ui-chat/src/client/contract/slots.ts:481',
+   },
+   {
+     key: 'conversation.chat.text-interaction',
+@@ -492,7 +492,7 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
+     ],
+     replaceRisk: 'shadows-shipped-ui',
+     example: 'return {\n  inject: [\'slots\'],\n  apply(ctx) {\n    ctx.slots.inject(\'conversation.chat.text-interaction\', () => ctx.slots.register(\n      { name: \'conversation.chat.text-interaction\', key: \'<one key the owner dispatches>\' },\n      () => React.createElement(\'div\', null, \'hello\'),\n    ))\n  },\n}',
+-    source: 'packages/client/ui-chat/src/client/contract/slots.ts:417',
++    source: 'packages/client/ui-chat/src/client/contract/slots.ts:428',
    },
    {
      key: 'conversation.chat.turnTail',
-@@ -506,7 +506,68 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
+@@ -558,7 +558,68 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
      ],
      replaceRisk: 'none',
      example: 'return {\n  inject: [\'slots\'],\n  apply(ctx) {\n    ctx.slots.inject(\'conversation.chat.turnTail\', () => ctx.slots.register(\n      { name: \'conversation.chat.turnTail\', id: \'my-entry\', order: 100, label: \'My entry\' },\n      () => React.createElement(\'div\', null, \'hello\'),\n    ))\n  },\n}',
--    source: 'packages/client/ui-chat/src/client/contract/slots.ts:435',
-+    source: 'packages/client/ui-chat/src/client/contract/slots.ts:446',
+-    source: 'packages/client/ui-chat/src/client/contract/slots.ts:476',
++    source: 'packages/client/ui-chat/src/client/contract/slots.ts:487',
 +  },
 +  {
 +    key: 'conversation.chat.user-actions',
@@ -2970,25 +3195,34 @@ index 33794f1a71..2a2dca1e38 100644
 +    occupants: [],
 +    replaceRisk: 'none',
 +    example: 'return {\n  inject: [\'slots\'],\n  apply(ctx) {\n    ctx.slots.inject(\'conversation.chat.user-actions\', () => ctx.slots.register(\n      { name: \'conversation.chat.user-actions\', id: \'my-entry\', order: 100, label: \'My entry\' },\n      () => React.createElement(\'div\', null, \'hello\'),\n    ))\n  },\n}',
-+    source: 'packages/client/ui-chat/src/client/contract/slots.ts:468',
++    source: 'packages/client/ui-chat/src/client/contract/slots.ts:509',
+   },
+   {
+     key: 'conversation.chat.user.before',
+@@ -607,7 +668,7 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
+     ],
+     replaceRisk: 'none',
+     example: 'return {\n  inject: [\'slots\'],\n  apply(ctx) {\n    ctx.slots.inject(\'conversation.chat.user.before\', () => ctx.slots.register(\n      { name: \'conversation.chat.user.before\', select: owner => null },\n      () => React.createElement(\'div\', null, \'hello\'),\n    ))\n  },\n}',
+-    source: 'packages/client/ui-chat/src/client/contract/slots.ts:446',
++    source: 'packages/client/ui-chat/src/client/contract/slots.ts:457',
    },
    {
      key: 'conversation.chat.user.images',
-@@ -552,7 +613,7 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
+@@ -653,7 +714,7 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
      ],
      replaceRisk: 'shadows-shipped-ui',
      example: 'return {\n  inject: [\'slots\'],\n  apply(ctx) {\n    ctx.slots.inject(\'conversation.chat.user.images\', () => ctx.slots.register(\n      { name: \'conversation.chat.user.images\' },\n      () => React.createElement(\'div\', null, \'hello\'),\n    ))\n  },\n}',
--    source: 'packages/client/ui-chat/src/client/contract/slots.ts:417',
-+    source: 'packages/client/ui-chat/src/client/contract/slots.ts:428',
+-    source: 'packages/client/ui-chat/src/client/contract/slots.ts:458',
++    source: 'packages/client/ui-chat/src/client/contract/slots.ts:469',
    },
    {
      key: 'conversation.composer',
-@@ -1970,11 +2031,12 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
+@@ -2077,11 +2138,12 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
        'useAccess: (action: RemoteEndpoint) => boolean',
        'useTrajectory: UseTrajectory',
      ],
--    keyDomain: 'fixed by the owner\'s key table { [Id in UserTextId]: { node: UserTextNode<Id> } }, already taken: command, file, folder, secret, session, skill, text',
-+    keyDomain: 'fixed by the owner\'s key table { [Id in UserTextId]: { node: UserTextNode<Id> } }, already taken: command, file, folder, link, secret, session, skill, text',
+-    keyDomain: 'fixed by the owner\'s key table { [Id in UserTextId]: { node: UserTextNode<Id> } }, already taken: command, file, folder, quote, secret, session, skill, text',
++    keyDomain: 'fixed by the owner\'s key table { [Id in UserTextId]: { node: UserTextNode<Id> } }, already taken: command, file, folder, link, quote, secret, session, skill, text',
      hookContext: '',
      slotInject: '',
      declaredBy: 'factory \'conversation.user.text\' (client-ui-conversation), so it exists while that definition is registered',
@@ -2997,24 +3231,24 @@ index 33794f1a71..2a2dca1e38 100644
        'client-ui-conversation PlainUserText key \'text\'',
        'client-ui-conversation SessionReference key \'session\'',
        'client-ui-goal GoalCommandReference key \'command\'',
-@@ -3498,7 +3560,7 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
+@@ -3616,7 +3678,7 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
      ],
      replaceRisk: 'none',
      example: 'return {\n  inject: [\'slots\'],\n  apply(ctx) {\n    ctx.slots.inject(\'shell.quota-notice\', () => ctx.slots.register(\n      { name: \'shell.quota-notice\', select: owner => null },\n      () => React.createElement(\'div\', null, \'hello\'),\n    ))\n  },\n}',
--    source: 'packages/client/ui-chat/src/client/contract/slots.ts:449',
-+    source: 'packages/client/ui-chat/src/client/contract/slots.ts:460',
+-    source: 'packages/client/ui-chat/src/client/contract/slots.ts:490',
++    source: 'packages/client/ui-chat/src/client/contract/slots.ts:501',
    },
    {
      key: 'sidebar',
-@@ -4745,6 +4807,7 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
+@@ -4926,6 +4988,7 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
        'client-ui-workspace ForkSessionMenuItem id \'fork\'',
        'client-ui-workspace ArchiveSessionMenuItem id \'archive\'',
        'client-ui-workspace SessionIdMenuItem id \'session-id\'',
 +      'client-ui-workspace DeleteSessionMenuItem id \'delete\'',
+       'experimental-liveshare ViewerForkMenuItem id \'fork\'',
      ],
      replaceRisk: 'none',
-     example: 'return {\n  inject: [\'slots\'],\n  apply(ctx) {\n    const copyLabel = \'Copy session title\' // Localize in the contributing package.\n    ctx.slots.inject(\'sidebar.workspaces.session.menu.item\', () => ctx.slots.register(\n      { name: \'sidebar.workspaces.session.menu.item\', id: \'copy-session-title\', order: 500 },\n      ({ displayTitle, useMenuOpenState }) => {\n        const [, setMenuOpen] = useMenuOpenState()\n        return React.createElement(\n          \'button\',\n          {\n            type: \'button\', role: \'menuitem\',\n            onClick: () => { setMenuOpen(false); void navigator.clipboard.writeText(displayTitle) },\n          },\n          copyLabel,\n        )\n      },\n    ))\n  },\n}',
-@@ -4800,6 +4863,7 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
+@@ -4982,6 +5045,7 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
      occupants: [
        'client-ui-workspace ArchiveSessionRowButton id \'archive\'',
        'client-ui-workspace PinSessionRowButton id \'pin\'',
@@ -3023,7 +3257,7 @@ index 33794f1a71..2a2dca1e38 100644
      replaceRisk: 'none',
      example: 'return {\n  inject: [\'slots\'],\n  apply(ctx) {\n    ctx.slots.inject(\'sidebar.workspaces.session.row.action\', () => ctx.slots.register(\n      { name: \'sidebar.workspaces.session.row.action\', id: \'my-entry\', order: 100, label: \'My entry\' },\n      () => React.createElement(\'div\', null, \'hello\'),\n    ))\n  },\n}',
 diff --git a/packages/mcp/mcp-client/README.md b/packages/mcp/mcp-client/README.md
-index 950b9b8c85..ac54d2355e 100644
+index be3f250ebf..f710935e2f 100644
 --- a/packages/mcp/mcp-client/README.md
 +++ b/packages/mcp/mcp-client/README.md
 @@ -61,6 +61,7 @@ Add one entry per server; nothing else is required. After the harness starts, th
@@ -3071,7 +3305,7 @@ index 950b9b8c85..ac54d2355e 100644
  - **Image is the only durable rich-result bridge** — PNG, JPEG, WebP, and GIF enter Native context after exact capability proof. Audio and embedded-resource payloads remain execution-local with explicit diagnostics, while resource links preserve only their name and URI as text.
  - **Invalid protocol results or output schemas fail through the SDK** — the bridge does not accept legacy `toolResult` substitutes or bypass advertised schema validation.
 diff --git a/packages/mcp/mcp-client/README.zh.md b/packages/mcp/mcp-client/README.zh.md
-index 3ba2038418..5ab5c69fa2 100644
+index 00612777e4..82fb4002b7 100644
 --- a/packages/mcp/mcp-client/README.zh.md
 +++ b/packages/mcp/mcp-client/README.zh.md
 @@ -61,6 +61,7 @@ kind: "package-reference"
@@ -3211,10 +3445,10 @@ index 3f89532b91..bc0a41df89 100644
    }
  }
 diff --git a/packages/mcp/mcp-client/tests/apply.spec.ts b/packages/mcp/mcp-client/tests/apply.spec.ts
-index fff238923f..7c26c31394 100644
+index 57803aaf27..3182a8cc43 100644
 --- a/packages/mcp/mcp-client/tests/apply.spec.ts
 +++ b/packages/mcp/mcp-client/tests/apply.spec.ts
-@@ -77,6 +77,7 @@ const stdioConfig: Config = {
+@@ -79,6 +79,7 @@ const stdioConfig: Config = {
    cwd: '',
    toolCallTimeoutMs: 60_000,
    failOnStartupError: false,
@@ -3222,7 +3456,7 @@ index fff238923f..7c26c31394 100644
  }
  
  // ---- Tests ----
-@@ -436,6 +437,7 @@ describe('apply (plugin lifecycle)', () => {
+@@ -440,6 +441,7 @@ describe('apply (plugin lifecycle)', () => {
        headers: { Authorization: 'Bearer x' },
        toolCallTimeoutMs: 30_000,
        failOnStartupError: false,
@@ -3231,10 +3465,10 @@ index fff238923f..7c26c31394 100644
  
      await apply(ctx, httpConfig)
 diff --git a/packages/mcp/mcp-client/tests/mcp-client.e2e.ts b/packages/mcp/mcp-client/tests/mcp-client.e2e.ts
-index a82105d977..59baab0459 100644
+index 0478bc7d16..87ea5113cd 100644
 --- a/packages/mcp/mcp-client/tests/mcp-client.e2e.ts
 +++ b/packages/mcp/mcp-client/tests/mcp-client.e2e.ts
-@@ -105,6 +105,7 @@ describe('fixture server — controlled scenarios', () => {
+@@ -108,6 +108,7 @@ describe('fixture server — controlled scenarios', () => {
      cwd: packageDir,
      toolCallTimeoutMs: 15_000,
      failOnStartupError: false,
@@ -3242,7 +3476,7 @@ index a82105d977..59baab0459 100644
    }
  
    beforeAll(async () => {
-@@ -204,6 +205,7 @@ describe('fixture server — duplicate serverName', () => {
+@@ -207,6 +208,7 @@ describe('fixture server — duplicate serverName', () => {
        cwd: packageDir,
        toolCallTimeoutMs: 15_000,
        failOnStartupError: false,
@@ -3250,7 +3484,7 @@ index a82105d977..59baab0459 100644
      }
      await apply(ctx, config)
  
-@@ -226,6 +228,7 @@ describe('fixture server — disposal', () => {
+@@ -229,6 +231,7 @@ describe('fixture server — disposal', () => {
        cwd: packageDir,
        toolCallTimeoutMs: 15_000,
        failOnStartupError: false,
@@ -3258,7 +3492,7 @@ index a82105d977..59baab0459 100644
      })
  
      // Tools are registered before dispose.
-@@ -249,6 +252,7 @@ describe('fixture server — crash recovery', () => {
+@@ -252,6 +255,7 @@ describe('fixture server — crash recovery', () => {
        cwd: packageDir,
        toolCallTimeoutMs: 15_000,
        failOnStartupError: false,
@@ -3266,7 +3500,7 @@ index a82105d977..59baab0459 100644
        reconnect,
      }
    }
-@@ -333,6 +337,7 @@ describe('server-everything — official test server', () => {
+@@ -336,6 +340,7 @@ describe('server-everything — official test server', () => {
      cwd: '',
      toolCallTimeoutMs: 30_000,
      failOnStartupError: false,
@@ -3274,7 +3508,7 @@ index a82105d977..59baab0459 100644
    }
  
    beforeAll(async () => {
-@@ -402,6 +407,7 @@ describe('server-filesystem — real filesystem operations', () => {
+@@ -405,6 +410,7 @@ describe('server-filesystem — real filesystem operations', () => {
        cwd: '',
        toolCallTimeoutMs: 30_000,
        failOnStartupError: false,
@@ -3282,7 +3516,7 @@ index a82105d977..59baab0459 100644
      }
      await apply(ctx, config)
    }, 60_000)
-@@ -512,6 +518,7 @@ describe('streamable-http — in-process MCP server', () => {
+@@ -515,6 +521,7 @@ describe('streamable-http — in-process MCP server', () => {
        headers: { Authorization: 'Bearer e2e-test-token' },
        toolCallTimeoutMs: 15_000,
        failOnStartupError: false,
@@ -3291,10 +3525,10 @@ index a82105d977..59baab0459 100644
      await apply(ctx, config)
    }, 30_000)
 diff --git a/packages/mcp/mcp-client/tests/mcp-client.spec.ts b/packages/mcp/mcp-client/tests/mcp-client.spec.ts
-index 4a330850b8..2aaad7eca8 100644
+index 5507c58f36..a18d6312e7 100644
 --- a/packages/mcp/mcp-client/tests/mcp-client.spec.ts
 +++ b/packages/mcp/mcp-client/tests/mcp-client.spec.ts
-@@ -1095,6 +1095,7 @@ describe('createTransport', () => {
+@@ -1098,6 +1098,7 @@ describe('createTransport', () => {
        cwd: '/tmp',
        toolCallTimeoutMs: 60_000,
        failOnStartupError: false,
@@ -3302,7 +3536,7 @@ index 4a330850b8..2aaad7eca8 100644
      }
      const transport = createTransport(config)
      expect(transport).toBeDefined()
-@@ -1110,6 +1111,7 @@ describe('createTransport', () => {
+@@ -1113,6 +1114,7 @@ describe('createTransport', () => {
        headers: {},
        toolCallTimeoutMs: 60_000,
        failOnStartupError: false,
@@ -3310,7 +3544,7 @@ index 4a330850b8..2aaad7eca8 100644
      }
      const transport = createTransport(config)
      expect(transport).toBeDefined()
-@@ -1125,6 +1127,7 @@ describe('createTransport', () => {
+@@ -1128,6 +1130,7 @@ describe('createTransport', () => {
        headers: { Authorization: 'Bearer token' },
        toolCallTimeoutMs: 60_000,
        failOnStartupError: false,
@@ -3318,7 +3552,7 @@ index 4a330850b8..2aaad7eca8 100644
      }
      const transport = createTransport(config)
      expect(transport).toBeDefined()
-@@ -1149,6 +1152,7 @@ describe('createTransport', () => {
+@@ -1152,6 +1155,7 @@ describe('createTransport', () => {
          cwd: '',
          toolCallTimeoutMs: 60_000,
          failOnStartupError: false,
@@ -3326,7 +3560,7 @@ index 4a330850b8..2aaad7eca8 100644
        }
        // StdioClientTransport keeps its env private; the observable contract is
        // that createTransport(config) returns a transport without throwing.
-@@ -1175,6 +1179,7 @@ describe('createTransport', () => {
+@@ -1178,6 +1182,7 @@ describe('createTransport', () => {
        cwd: '',
        toolCallTimeoutMs: 60_000,
        failOnStartupError: false,
@@ -3335,10 +3569,10 @@ index 4a330850b8..2aaad7eca8 100644
      const transport = createTransport(config)
      expect(transport).toBeDefined()
 diff --git a/packages/mcp/mcp-client/tests/negotiation-lifecycle.spec.ts b/packages/mcp/mcp-client/tests/negotiation-lifecycle.spec.ts
-index 1aba633559..94943374d2 100644
+index ed3291a494..db772816aa 100644
 --- a/packages/mcp/mcp-client/tests/negotiation-lifecycle.spec.ts
 +++ b/packages/mcp/mcp-client/tests/negotiation-lifecycle.spec.ts
-@@ -19,7 +19,7 @@ vi.mock('../src/transport.ts', () => ({ createTransport: mockTransport }))
+@@ -20,7 +20,7 @@ vi.mock('../src/transport.ts', () => ({ createTransport: mockTransport }))
  
  const config: Config = {
    transport: 'stdio', serverName: 'fixture', command: 'fixture', args: [], env: {}, cwd: '',
@@ -3348,10 +3582,10 @@ index 1aba633559..94943374d2 100644
  const fixture = fileURLToPath(new URL('./fixtures/negotiation-lifecycle.mjs', import.meta.url))
  
 diff --git a/packages/mcp/mcp-client/tests/protocol.spec.ts b/packages/mcp/mcp-client/tests/protocol.spec.ts
-index 6124752c08..e0e7850135 100644
+index 85b9469473..fccda748cf 100644
 --- a/packages/mcp/mcp-client/tests/protocol.spec.ts
 +++ b/packages/mcp/mcp-client/tests/protocol.spec.ts
-@@ -18,7 +18,7 @@ vi.mock('../src/transport.ts', () => ({ createTransport: mockTransport }))
+@@ -20,7 +20,7 @@ vi.mock('../src/transport.ts', () => ({ createTransport: mockTransport }))
  
  const config: Config = {
    transport: 'stdio', serverName: 'fixture', command: 'fixture', args: [], env: {}, cwd: '',
@@ -3361,10 +3595,10 @@ index 6124752c08..e0e7850135 100644
  
  async function connect(server: McpServer, options?: { resources: true }): Promise<Context> {
 diff --git a/packages/mcp/mcp-client/tests/reconnect.spec.ts b/packages/mcp/mcp-client/tests/reconnect.spec.ts
-index f41670178c..b4a440026f 100644
+index a25e1e8683..08b0aef2ff 100644
 --- a/packages/mcp/mcp-client/tests/reconnect.spec.ts
 +++ b/packages/mcp/mcp-client/tests/reconnect.spec.ts
-@@ -99,6 +99,7 @@ function stdioConfig(reconnect?: Config['reconnect']): Config {
+@@ -102,6 +102,7 @@ function stdioConfig(reconnect?: Config['reconnect']): Config {
      cwd: '',
      toolCallTimeoutMs: 60_000,
      failOnStartupError: false,

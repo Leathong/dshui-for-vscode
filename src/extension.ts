@@ -19,7 +19,7 @@ import { WindowProxy } from './windowProxy'
 import { isObject, RollbackReviewManager, type RollbackFileChange } from './rollbackReview'
 import { ensureProfileBundle, installPlugins, resolveDshHome, type InstalledPlugin } from './plugins'
 import {
-  bridgesPath, readRegistry, registerBridge, registerServerUser, startServerUserHeartbeat,
+  bridgesPath, CLIENT_BUILD_REV, readRegistry, registerBridge, registerServerUser, startServerUserHeartbeat,
   unregisterBridge, unregisterServerUser, writeWorkspaceMarker,
 } from './sharedBackend'
 import {
@@ -522,22 +522,70 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         logger.error('[dshui] shared registry pre-register failed:', error)
       }
     }
+    /** Whether the port was taken back from a server an older build started. */
+    let reclaimedStaleServer = false
+    /**
+     * Take the rendezvous port back from a server a different build started.
+     * The kill leaves a short window where the listener still accepts
+     * connections, and the spawn below would adopt such a dying server through
+     * its EADDRINUSE fallback — so poll until the port stops answering before
+     * letting the spawn run. Another window still running the previous build
+     * respawns its own server within seconds (and has a bounded recovery
+     * budget), so a listener that comes back is killed again.
+     * @param target - the rendezvous port.
+     * @returns true when the port ends up free.
+     */
+    const reclaimSharedPort = async (target: number): Promise<boolean> => {
+      for (let round = 0; round < 3; round++) {
+        try {
+          await killProcessOnPort(target)
+        } catch (error) {
+          logger.error('[dshui] failed to reclaim the shared server port:', error)
+        }
+        const deadline = Date.now() + 5000
+        while (Date.now() < deadline) {
+          if (!(await probeDshuiServer(target, 400, 1))) return true
+          await new Promise((resolve) => setTimeout(resolve, 250))
+        }
+        logger.warn(`[dshui] port ${target} answered again after a reclaim (round ${round + 1})`)
+      }
+      return false
+    }
     serverStart = (async () => {
       if (shared) {
+        // 采纳前先读旧构建的标记：preRegisterSharedUser 会用本构建的 revision
+        // 覆盖注册表，之后就无法再区分「同版本窗口」和「上一版遗留的服务器」。
+        const liveRev = readRegistry(dshHome)?.clientRev ?? null
         // 先登记租约再拉服务器：见 preRegisterSharedUser 的说明（冷启动竞态）。
         await preRegisterSharedUser()
         // 会合探测：固定端口上已有 dshui 服务器（另一窗口启动的）→ 直接采纳，
         // 注册自己的工作区（host 插件会经 marker 登记）并以普通用户身份加入。
         if (await probeDshuiServer(port)) {
-          server = DshServer.attach(port, workspacePath)
-          // Adopt the live server's launch token so the browser-auth index can
-          // exchange it for a signed cookie (otherwise this window's webview
-          // 401s). Resolution verifies every candidate against that server, so
-          // a registry record left behind by a dead process is never reused.
-          writeWorkspaceMarker(dshHome, workspacePath)
-          await registerUse(port, false)
-          notifyReady(port)
-          return port
+          if (liveRev === CLIENT_BUILD_REV) {
+            server = DshServer.attach(port, workspacePath)
+            // Adopt the live server's launch token so the browser-auth index can
+            // exchange it for a signed cookie (otherwise this window's webview
+            // 401s). Resolution verifies every candidate against that server, so
+            // a registry record left behind by a dead process is never reused.
+            writeWorkspaceMarker(dshHome, workspacePath)
+            await registerUse(port, false)
+            notifyReady(port)
+            return port
+          }
+          // 端口上的服务器由上一版构建拉起：它渲染的是本窗口激活时刚被覆盖
+          // 掉的旧载荷（注册表的 clientRev 就是为此记录的），采纳它只会得到
+          // 空白面板。收回端口再启动本构建自己的服务器。
+          logger.warn(
+            `[dshui] shared server on port ${port} was started by build ${liveRev ?? 'unknown'} (this build is ${CLIENT_BUILD_REV}); reclaiming the port`,
+          )
+          reclaimedStaleServer = true
+          if (!await reclaimSharedPort(port)) {
+            throw new Error(
+              `dsh UI: port ${port} is still served by a dsh server started by another dshui build. `
+              + 'Reload every window running the previous version (or close them), then run the '
+              + '"dshui: Restart dsh Server" command.',
+            )
+          }
         }
         // No compatible dshui server on the port. Do NOT auto-reclaim here: a
         // probe can transiently miss the boot manifest (a restarting/starting
@@ -558,6 +606,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         port,
         nodePath,
         sharedBackend: shared,
+        // 收回旧构建端口后不再采纳“抢到端口”的监听者：那可能是旧版本窗口刚重启
+        // 的服务器，采纳它就会用新载荷渲染旧图表（空白面板）。
+        adoptExisting: !reclaimedStaleServer,
         onReady: notifyReady,
         onExit: (code, signal) => {
           logger.warn(`[dshui] dsh web exited (code ${String(code)}, signal ${String(signal)})`)

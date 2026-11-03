@@ -233,6 +233,14 @@ export interface DshServerOptions {
   env?: Record<string, string>
   /** True when this server participates in the shared lifecycle registry. */
   sharedBackend?: boolean
+  /**
+   * Whether a spawn that loses the fixed-port race may adopt the winner.
+   * Defaults to true (another window of this build started it). A window that
+   * just killed a server started by a previous build sets this to false: the
+   * rejoined listener could be that old build respawning, and adopting it would
+   * render the new client payload against the old graph (blank panel).
+   */
+  adoptExisting?: boolean
 }
 
 /**
@@ -576,7 +584,7 @@ export class DshServer {
       // port (this child exited with EADDRINUSE). Adopt the winner instead of
       // failing; this is still the same configured port and the same shared
       // backend, not a fallback.
-      if (requestedPort !== 0 && await probeDshuiServer(requestedPort)) {
+      if (requestedPort !== 0 && this.options.adoptExisting !== false && await probeDshuiServer(requestedPort)) {
         this.child = null
         this.boundPort = requestedPort
         return requestedPort

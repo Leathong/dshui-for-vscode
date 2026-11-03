@@ -312,6 +312,12 @@ Notes:
   authentication does not redirect, so the scope survives). The lease heartbeat also re-registers
   this window after another window prunes its entry by TTL (registry and bridge table), so a shared
   server is not reaped while windows still use it — the reap is what changes the token.
+- **Build-aware rendezvous:** the registry also records each window's `clientRev` (extension version
+  plus bundled dsh version). A server started by the **previous** build — exactly what the first window
+  after an upgrade finds — renders the client payload that this window's activation has just
+  overwritten, so adopting it leaves the panel blank. A server whose `clientRev` differs (or is
+  missing, as older builds never wrote it) is killed, its port polled until free, and this build
+  spawns its own.
 - **Per-window origin:** every window loads the shared server through an in-extension loopback proxy
   (`dshui.windowOrigin`, on by default), so the browser's **per-origin HTTP connection pool** and its
   localStorage/IndexedDB belong to that window alone. With one shared origin the whole VS Code
@@ -557,8 +563,8 @@ workflow below.
 
 The extension binds three dsh versions together, and all must be aligned on upgrade:
 
-1. **CLI runtime:** `dependencies["@deepseek-ai/dsh"]` in `package.json` (currently `0.2.1-rc.3`).
-2. **Client bundle source:** the `.dsh-src` checkout (currently `dsh-v0.2.1-rc.3` with the dshui
+1. **CLI runtime:** `dependencies["@deepseek-ai/dsh"]` in `package.json` (currently `0.2.2-alpha.2`).
+2. **Client bundle source:** the `.dsh-src` checkout (currently `dsh-v0.2.2-alpha.2` with the dshui
    client patch re-applied — since 0.1.2 the session/chat clients were restructured, so re-apply the
    patch to the new structure per `scripts/verify-patches.mjs`; since the repo's master may lag behind
    the npm release, align by checking each package's version in its `package.json` and confirm with
@@ -608,7 +614,7 @@ node scripts/verify-patches.mjs      # each file flagged as missing needs its pa
 #    - ui-workspace/src/client/contract/slots.ts       DeleteSessionInjected and the deletedSessions observable
 #    - ui-workspace/src/client/index.ts                deleted-sessions store + deleteSession postMessage
 #    - ui-workspace/src/client/session-actions/DeleteSession.tsx  since 0.1.7 row actions are slot entries: register "Delete Session"
-#    - ui-workspace/src/client/locales.ts              add menu.deleteSession / actions.delete
+#    - ui-workspace/src/client/locales.ts              add menu.deleteSession / actions.delete (all six extra dictionaries too)
 #    - ui-workspace/tsdown.config.ts                   bundle id → dshui-client-ui-workspace
 #    - ui-conversation/src/client/skeleton/dshui-scope.ts          SCOPE constant (DSHUI_SCOPE)
 #    - ui-conversation/src/client/skeleton/ConversationMainPanel.tsx  data-dshui-scope root marker
@@ -621,7 +627,8 @@ node scripts/verify-patches.mjs      # each file flagged as missing needs its pa
 #                                                      selectWorkspace guards it explicitly, and the composer inject degrades
 #                                                      to the absent posture instead of holding the slot dead
 #    - ui-chat/src/client/chat/MessageItem.tsx         UserMessageNodeView / SteeringMessageNodeView split, user-actions child slot, markdown link projection
-#    - ui-chat/src/client/chat/register-node-renderers.ts  user declares the user-actions child; steering uses the strip-free renderer
+#    - ui-chat/src/client/chat/register-node-renderers.ts  user declares the user.before and user-actions children; steering stays seat-free
+#    - ui-chat/tests/user-origin-slot.client.spec.tsx     upstream's new origin-seat spec: steering uses SteeringMessageNodeView, the user row gets a renderSlot stub
 #    - ui-chat/src/client/contract/slots.ts            UserActionOwnerProps and the conversation.chat.user-actions slot
 #    - packages/client/tsdown.client.ts                workspaceManifest resolves dshui-client-* ids by package directory (rc.2 resolves them from the package directory, not the package name)
 #    - packages/util/native-command/src/path-opener.ts  darwin bridge/CLI/vscode://file branch + dshuiOrigin/dshuiLine (line travels as the bridge line param)
@@ -676,13 +683,13 @@ Other drift-prone spots to check after every upgrade:
   (`git apply` errors) — just rewrite it for the new source; when the bridge is unavailable the opener
   automatically falls back to `vscode://file`.
 - **Re-exporting the patch requires `--binary`, and the base commit must move with it:** the patch is
-  pinned to dsh `0.2.1-rc.3` (`1f81c047…`, see `patches/README.md` and Makefile's `DSH_BASE`) and is
+  pinned to dsh `0.2.2-alpha.2` (`f3803c96…`, see `patches/README.md` and Makefile's `DSH_BASE`) and is
   exported with `git -C .dsh-src diff --binary <base commit> > patches/dshui-bundles.patch` (`make
   dsh-gen-patch` already does this). Both halves have bitten us: without `--binary`, `git diff` writes
   only a `Binary files ... differ` placeholder (no content) for the PNG/ICO assets the base snapshot
   adds, and `git apply` then reports `cannot apply binary patch ... without full index line` and
   rejects the whole patch; exporting against a stale base swallows the entire upstream delta (the
-  rc.1-based export came out as 3447 files / 15.2 MB, where the correct size is 59 files / ~195 KB).
+  rc.1-based export came out as 3447 files / 15.2 MB, where the correct size is 60 files / ~210 KB).
 - **A dsh version bump needs `make deploy`, not just `make sync`:** `make sync` only copies `out/`,
   `dshui-plugins/`, `patch.yml`, and `package.json` — it **does not touch
   `node_modules/@deepseek-ai`**. With the old host closure in place the new client bundles fail to

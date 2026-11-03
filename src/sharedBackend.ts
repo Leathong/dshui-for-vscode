@@ -22,6 +22,28 @@ const LOCK_FILE = 'dshui-server.lock'
 const MARKER_DIR = 'dshui-workspaces'
 const LOCK_TIMEOUT_MS = 8000
 
+function readPackageVersion(file: string): string {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(file, 'utf8')) as { version?: unknown }
+    return typeof parsed.version === 'string' ? parsed.version : ''
+  } catch {
+    return ''
+  }
+}
+
+/**
+ * Build identity of the client payload this window would serve: the extension
+ * version plus the bundled dsh version. A shared server renders its web UI from
+ * the *installed* payload (`profiles/node_modules` plugin copies plus the dsh
+ * build), and an upgrade replaces both on activation — so a server started by
+ * the previous build no longer matches what the new window just installed.
+ * Attaching to it leaves the webview blank (the SPA boots the new plugin
+ * bundles against the old client-modules graph). The registry records this
+ * revision so a window can tell "same build" from "older build" and reclaim
+ * the port instead of adopting it.
+ */
+export const CLIENT_BUILD_REV = `${readPackageVersion(path.join(__dirname, '..', 'package.json'))}+${readPackageVersion(path.join(__dirname, '..', 'node_modules', '@deepseek-ai', 'dsh', 'package.json'))}`
+
 /**
  * A random id generated once per extension-host process. Registry and bridge
  * entries carry this id plus a heartbeat timestamp, so a recycled OS pid can
@@ -62,6 +84,8 @@ export interface ServerRegistry {
   users: ServerUser[]
   /** The dsh launch token the server prints on its boot URL (for browser auth). */
   token?: string
+  /** `CLIENT_BUILD_REV` of the window that registered the server (absent for older builds). */
+  clientRev?: string
 }
 
 function isServerUserShape(user: unknown): user is ServerUser {
@@ -201,6 +225,7 @@ export function readRegistry(dshHome: string): ServerRegistry | null {
     return {
       port: parsed.port, owner: parsed.owner, users: parsed.users,
       ...typeof parsed.token === 'string' && parsed.token !== '' ? { token: parsed.token } : {},
+      ...typeof parsed.clientRev === 'string' && parsed.clientRev !== '' ? { clientRev: parsed.clientRev } : {},
     }
   } catch {
     return null
@@ -235,7 +260,7 @@ export async function registerServerUser(dshHome: string, port: number, owner: b
     // 窗口启动）：创建注册表并登记自己——绝不能静默跳过，否则 host 插件
     // 会把本窗口误判为不存在而退出共享服务器（见文件头注释的竞态）。
     if (existing === null && !owner) {
-      writeRegistry(dshHome, { port, owner: 0, users: [currentServerUser()] })
+      writeRegistry(dshHome, { port, owner: 0, users: [currentServerUser()], clientRev: CLIENT_BUILD_REV })
       sharedUserRegistered = true
       return
     }
@@ -247,6 +272,7 @@ export async function registerServerUser(dshHome: string, port: number, owner: b
       owner: owner ? process.pid : (existing?.owner ?? process.pid),
       users,
       ...resolvedToken !== undefined ? { token: resolvedToken } : {},
+      clientRev: CLIENT_BUILD_REV,
     })
     sharedUserRegistered = true
   })
