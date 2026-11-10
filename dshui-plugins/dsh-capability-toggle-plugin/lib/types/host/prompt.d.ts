@@ -36,6 +36,7 @@
 import type { Context } from '@deepseek-ai/cordis';
 import type { ScopeKey } from '@deepseek-ai/dsh-scope';
 import type { CapabilityDescriptor } from '../shared/types.ts';
+import type { DriftSink } from './inventory.ts';
 /**
  * The single coarse runtime-context suppressor switch id. Unlike the other
  * prompt ids (`prompt:section:<name>` / `prompt:context:<name>`, 3 segments,
@@ -59,6 +60,20 @@ export declare const RUNTIME_SUPPRESS_ID = "prompt:runtime";
  */
 export declare function collectPromptGates(ctx: Context, scope: ScopeKey | undefined): Promise<CapabilityDescriptor[]>;
 /**
+ * Try one best-effort shadow registration. `dsh-system-prompt` throws when a
+ * same-name section or context is already registered in this exact scope layer
+ * (a per-agent composition can hold the name first, e.g. dsh-tool-subagent's
+ * `tool:subagent` guidance). A cosmetic shadow must never abort the rest of
+ * reconcile — the gates installed after the sweep would be silently skipped —
+ * so report the skipped shadow through the drift sink and return undefined.
+ *
+ * @param register - performs the registration and returns its disposer.
+ * @param onDrift - optional warn-once sink for the skipped-shadow report.
+ * @param what - human label naming the shadow for the report.
+ * @returns the disposer on success, or undefined when registration threw.
+ */
+export declare function attemptShadow(register: () => () => void, onDrift: DriftSink | undefined, what: string): (() => void) | undefined;
+/**
  * Apply prompt-gate enforcement for one scope: for every disabled prompt switch,
  * register the matching empty shadow (section/context) or the runtime
  * suppressor. Each returns a Cordis disposer, collected by the caller.
@@ -67,9 +82,14 @@ export declare function collectPromptGates(ctx: Context, scope: ScopeKey | undef
  * or context in the global layer collides with the framework's own registration
  * and throws. The caller gates on `scope !== undefined` before invoking.
  *
+ * COLLISION-TOLERANT: a same-name entry already registered in this exact scope
+ * layer makes one registration throw; the collision is reported through
+ * `onDrift` and skipped so the remaining gates still apply.
+ *
  * @param scopedCtx - the agent's scoped context.
  * @param descriptors - this scope's promptable inventory.
  * @param disabledIds - switch ids resolved to disabled.
- * @returns disposers for every shadow/suppressor installed.
+ * @param onDrift - optional warn-once sink for skipped shadows.
+ * @returns disposers for every shadow/suppressor successfully installed.
  */
-export declare function applyPromptGates(scopedCtx: Context, descriptors: readonly CapabilityDescriptor[], disabledIds: ReadonlySet<string>): Array<() => void>;
+export declare function applyPromptGates(scopedCtx: Context, descriptors: readonly CapabilityDescriptor[], disabledIds: ReadonlySet<string>, onDrift?: DriftSink): Array<() => void>;

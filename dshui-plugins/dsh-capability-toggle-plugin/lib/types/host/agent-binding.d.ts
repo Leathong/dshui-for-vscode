@@ -17,8 +17,11 @@
  *     disposing invalidates the skill catalog cache, so a mid-session toggle
  *     takes effect on the next agent step — no restart.
  *   - prompt: disabled plain tools shadow away their `tool:<name>` guidance
- *     section, and the curated prompt-gate family shadows sections/contexts or
- *     installs the runtime-context suppressor (see ./prompt.ts).
+ *     section, disabled MCP servers shadow away their `mcp:<server>`
+ *     instructions section (dsh-mcp-client registers the server-supplied
+ *     instructions block under exactly that name), and the curated prompt-gate
+ *     family shadows sections/contexts or installs the runtime-context
+ *     suppressor (see ./prompt.ts).
  *
  * Reconcile is latest-wins: any store change disposes the current application
  * and installs a fresh one from the current inventory and overrides.
@@ -109,6 +112,7 @@ export declare class AgentBinding {
      * the agent's scope has begun tearing down.
      */
     get knownInventory(): readonly CapabilityDescriptor[] | null;
+    owns(agent: Agent): boolean;
     /**
      * Read the agent's PRISTINE inventory — the full set with our own
      * enforcement lifted. Only valid to call while `this.disposers` is empty
@@ -147,6 +151,7 @@ export declare class AgentBinding {
      */
     private installGuards;
     private installCallStats;
+    private installCapabilityGate;
     /**
      * Build the UI projection for this agent: every capability with its per-level
      * stored stance and resolved disabled flag.

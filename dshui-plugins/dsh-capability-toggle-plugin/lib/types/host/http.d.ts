@@ -11,14 +11,14 @@
  *           refreshed projection.
  *   POST /api/plugin/capability-toggle/set-many
  *        body { session, level, ids, state } -> writes the same stance to every
- *           listed id in one domain write, and returns the refreshed
+ *           listed id in one settings write, and returns the refreshed
  *           projection. Backs the panel's bulk-toolbar (enable/disable/clear a
  *           filtered tab's visible rows at one level).
  *
  * This is a Host-owned control channel, not model-visible state, so it lives off
  * the session log entirely (see host/config.ts for why the state is not a
- * session event). Every write lands in this plugin's storage domain, whose
- * commit event drives reconcile on every affected agent.
+ * session event). Every write lands in the Loader configuration entry, whose
+ * volatile-update event drives reconciliation for every live agent.
  *
  * @module dsh-capability-toggle-plugin/host/http
  */

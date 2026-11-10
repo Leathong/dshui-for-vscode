@@ -32,14 +32,15 @@ export declare function scopeIdentityDrift(scopeKey: ScopeKey | undefined): stri
  */
 export declare const FRAMEWORK_CONTRACT: {
     /** Services whose absence makes the whole plugin fail to activate (via `inject`). */
-    readonly requiredServices: readonly ['storageDomain', 'tools', 'skills', 'systemPrompt', 'webServer', 'connection'];
+    readonly requiredServices: readonly ['agents', 'configEditor', 'tools', 'skills', 'systemPrompt', 'webServer', 'connection'];
     /**
      * Members each required service must still expose. A surviving service NAME is
      * not enough: DSH 0.1.7 kept `settings` while dropping the method this plugin
-     * called, so a presence-only probe reports a healthy host until the first write.
+     * called, and the 0.2 config seam replaced that service entirely, so a
+     * presence-only probe reports a healthy host until the first write.
      */
     readonly serviceShapes: {
-        readonly storageDomain: readonly ['open'];
+        readonly configEditor: readonly ['edit'];
     };
     /** Services probed non-strictly; absence degrades one family, not the plugin. */
     readonly optionalServices: readonly ['approval'];
@@ -61,8 +62,8 @@ export declare const FRAMEWORK_CONTRACT: {
     readonly scopeRoutingKey: 'exec.agent';
     /** The MCP public-tool name grammar, and the per-member switch id derived from it. */
     readonly mcpNameGrammar: 'mcp__<server>__<tool> → mcptool:<server>/<tool>';
-    /** The storage domain holding the three-level override document. */
-    readonly domainName: "capability_toggle";
+    /** The Loader entry holding the three-level override document. */
+    readonly configEntry: 'dsh-capability-toggle-plugin';
 };
 /**
  * Log one activation banner naming the framework assumptions enforcement rests
@@ -78,9 +79,9 @@ export declare function emitContractBanner(ctx: Context): void;
  * this plugin calls. `inject` already gates activation on resolution, so a miss
  * here means the inject contract itself changed (a required service was
  * renamed/removed upstream) — an `error`-level signal, not a mere warning,
- * because enforcement is then partially inoperative. Resolution alone cannot
- * see a service that kept its name and lost a method, which is exactly how the
- * 0.1.7 settings change presented.
+ * because enforcement is then partially inoperative. Resolution alone cannot see
+ * a service that kept its name and lost a method, which is exactly how the 0.1.7
+ * settings change presented.
  * @param ctx - the Host context.
  * @returns the names that failed to resolve or lost a required member (empty
  *   when every service is present and shaped as expected).

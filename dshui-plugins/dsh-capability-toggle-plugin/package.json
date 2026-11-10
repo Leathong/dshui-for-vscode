@@ -1,6 +1,6 @@
 {
   "name": "dsh-capability-toggle-plugin",
-  "version": "1.6.0",
+  "version": "2.1.0",
   "private": true,
   "description": "DSH WebUI capability controls for skills, MCP servers, tools, prompt injections, approvals, and safety guards at session, project, and global levels.",
   "keywords": [
@@ -42,6 +42,7 @@
     "LICENSE",
     "README.md",
     "README.zh-CN.md",
+    "README.en.md",
     "docs/screenshot.jpeg"
   ],
   "scripts": {
@@ -67,41 +68,47 @@
     }
   },
   "license": "MIT",
+  "dependencies": {
+    "yaml": "2.8.1"
+  },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.1",
     "@deepseek-ai/dsh-agent": ">=0.2.1-0 <0.3.0-0",
     "@deepseek-ai/dsh-client-locale": ">=0.2.1-0 <0.3.0-0",
     "@deepseek-ai/dsh-client-ui-conversation": ">=0.2.1-0 <0.3.0-0",
     "@deepseek-ai/dsh-client-ui-input-trigger": ">=0.2.1-0 <0.3.0-0",
+    "@deepseek-ai/dsh-config-editor": ">=0.2.1-0 <0.3.0-0",
+    "@deepseek-ai/dsh-home-paths": ">=0.2.1-0 <0.3.0-0",
     "@deepseek-ai/dsh-host-webserver": ">=0.2.1-0 <0.3.0-0",
     "@deepseek-ai/dsh-scope": ">=0.2.1-0 <0.3.0-0",
     "@deepseek-ai/dsh-skill": ">=0.2.1-0 <0.3.0-0",
-    "@deepseek-ai/dsh-storage-domain": ">=0.2.1-0 <0.3.0-0",
     "@deepseek-ai/dsh-system-prompt": ">=0.2.1-0 <0.3.0-0",
     "@deepseek-ai/dsh-tools": ">=0.2.1-0 <0.3.0-0",
     "@deepseek-ai/dsh-user-approval": ">=0.2.1-0 <0.3.0-0",
+    "@deepseek-ai/schemastery": "~3.18.4",
     "react": "^18.3.1"
   },
   "devDependencies": {
-    "@deepseek-ai/cordis": "4.0.6-alpha.1",
-    "@deepseek-ai/dsh-agent": "0.2.2-alpha.2",
-    "@deepseek-ai/dsh-client-locale": "0.2.2-alpha.2",
-    "@deepseek-ai/dsh-client-ui-conversation": "0.2.2-alpha.2",
-    "@deepseek-ai/dsh-client-ui-input-trigger": "0.2.2-alpha.2",
-    "@deepseek-ai/dsh-host-webserver": "0.2.2-alpha.2",
-    "@deepseek-ai/dsh-scope": "0.2.2-alpha.2",
-    "@deepseek-ai/dsh-skill": "0.2.2-alpha.2",
-    "@deepseek-ai/dsh-storage": "0.2.2-alpha.2",
-    "@deepseek-ai/dsh-storage-domain": "0.2.2-alpha.2",
-    "@deepseek-ai/dsh-storage-json": "0.2.2-alpha.2",
-    "@deepseek-ai/dsh-system-prompt": "0.2.2-alpha.2",
-    "@deepseek-ai/dsh-tools": "0.2.2-alpha.2",
-    "@deepseek-ai/dsh-user-approval": "0.2.2-alpha.2",
+    "@deepseek-ai/cordis": "4.1.0",
+    "@deepseek-ai/dsh-agent": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-client-locale": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-client-ui-conversation": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-client-ui-input-trigger": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-config-editor": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-home-paths": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-host-webserver": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-mcp-client": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-scope": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-skill": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-system-prompt": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-tools": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-user-approval": "0.2.2-rc.1",
+    "@deepseek-ai/schemastery": "3.18.4",
     "@types/node": "^26.4.0",
     "@types/react": "^18.3.31",
     "react": "18.3.1",
+    "semver": "^7.8.5",
     "tsdown": "^0.22.14",
-    "typescript": "^7.0.2",
-    "zod": "4.4.3"
+    "typescript": "^7.0.2"
   }
 }

@@ -116,9 +116,8 @@ export interface CapabilityDescriptor {
 }
 /**
  * One level's explicit stances, keyed by capability id. Only `on`/`off` entries
- * are stored; a missing key means `inherit`. Persisted verbatim in the session
- * event (session level) and in this plugin's storage domain (project/global
- * levels).
+ * are stored; a missing key means `inherit`. Persisted verbatim in the Loader
+ * configuration entry at every level.
  */
 export type OverrideMap = Readonly<Record<string, Exclude<ToggleState, 'inherit'>>>;
 /** The three override maps that merge into an effective decision. */

@@ -409,6 +409,15 @@ window.__ModuleLoader__.load({
 			}
 			return false;
 		}
+		/**
+		* Every tooltip below passes `portal` on purpose. Since dsh 0.2.2 the composer
+		* seat is a fixed-position containing block (`will-change: transform`), so a
+		* non-portaled `position: fixed` bubble would keep viewport-derived left/top
+		* but be laid out in seat coordinates. That overflow expands the transcript
+		* scroll area, which moves the sticky composer under the pointer; hover then
+		* repeatedly shows/hides the bubble and the page flickers. The upstream
+		* composer controls (`InputBar`, `QueueDock`) portal for the same reason.
+		*/
 		function ModificationDock(props) {
 			const { session, t, sessionEvents, sessionChanges, refreshChanges, acceptAll, undoAll, acceptFile, acceptModification, undoFile, undoModification, undoHunks, openAt } = props;
 			const [data, setData] = (0, react.useState)(null);
@@ -659,6 +668,7 @@ window.__ModuleLoader__.load({
 							children: [(0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Tooltip, {
 								label: t("dock.acceptAll"),
 								side: "bottom",
+								portal: true,
 								children: (0, react_jsx_runtime.jsx)("button", {
 									type: "button",
 									className: "dsh-mod-action",
@@ -693,6 +703,7 @@ window.__ModuleLoader__.load({
 							}) : (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Tooltip, {
 								label: t("dock.undoAll"),
 								side: "bottom",
+								portal: true,
 								children: (0, react_jsx_runtime.jsx)("button", {
 									type: "button",
 									className: "dsh-mod-action",
@@ -823,6 +834,7 @@ window.__ModuleLoader__.load({
 								children: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Tooltip, {
 									label: t("dock.refresh"),
 									side: "bottom",
+									portal: true,
 									children: (0, react_jsx_runtime.jsx)("button", {
 										type: "button",
 										className: "dsh-mod-tool",
@@ -878,6 +890,7 @@ window.__ModuleLoader__.load({
 						change.foreign === true ? (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Tooltip, {
 							label: t("dock.foreignHint"),
 							side: "bottom",
+							portal: true,
 							children: (0, react_jsx_runtime.jsx)("span", {
 								className: "dsh-mod-foreign",
 								children: t("dock.foreign")
@@ -886,6 +899,7 @@ window.__ModuleLoader__.load({
 						hunks.length > 0 ? (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Tooltip, {
 							label: t("dock.hunks"),
 							side: "bottom",
+							portal: true,
 							children: (0, react_jsx_runtime.jsx)("button", {
 								type: "button",
 								className: "dsh-mod-link",
@@ -898,6 +912,7 @@ window.__ModuleLoader__.load({
 						(0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Tooltip, {
 							label: t("openAt"),
 							side: "bottom",
+							portal: true,
 							children: (0, react_jsx_runtime.jsx)("button", {
 								type: "button",
 								className: "dsh-mod-link",
@@ -911,6 +926,7 @@ window.__ModuleLoader__.load({
 							children: [(0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Tooltip, {
 								label: t("dock.accept"),
 								side: "bottom",
+								portal: true,
 								children: (0, react_jsx_runtime.jsx)("button", {
 									type: "button",
 									className: "dsh-mod-action",
@@ -925,6 +941,7 @@ window.__ModuleLoader__.load({
 							}), fileConfirming ? undoConfirm : (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Tooltip, {
 								label: t("dock.undo"),
 								side: "bottom",
+								portal: true,
 								children: (0, react_jsx_runtime.jsx)("button", {
 									type: "button",
 									className: "dsh-mod-action",
@@ -956,6 +973,7 @@ window.__ModuleLoader__.load({
 							(0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Tooltip, {
 								label: t("dock.undoHunk"),
 								side: "bottom",
+								portal: true,
 								children: (0, react_jsx_runtime.jsx)("button", {
 									type: "button",
 									className: "dsh-mod-action",

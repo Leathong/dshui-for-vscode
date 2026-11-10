@@ -6,6 +6,7 @@ window.__ModuleLoader__.load({
 		Object.defineProperty(exports, Symbol.toStringTag, { value: "Module" });
 		let react_jsx_runtime = require("react/jsx-runtime");
 		let react = require("react");
+		let react_dom = require("react-dom");
 		//#region lib/types/client/api.js
 		/**
 		* Same-origin HTTP client for the composer panel. Two thin wrappers over the
@@ -1290,6 +1291,13 @@ window.__ModuleLoader__.load({
 .dshct-button:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-secondary)}
 .dshct-button[data-open=true]{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
 .dshct-button:disabled{opacity:.4;cursor:default}
+/* Portal host: the overlay and the confirmation cards are mounted here on
+   document.body (see index.tsx), outside the composer seat. DSH 0.2.2's docked
+   composer is a fixed-position containing block because of its permanent
+   will-change: transform, so a fixed child that stays in the composer sizes
+   itself to the input row instead of the viewport. Keep this layer static: any
+   transform/filter/contain on it would recreate the same containing block. */
+.dshct-layer{position:static}
 /* overlay: a fixed full-viewport backdrop that CENTERS the panel. Centering (not
    anchoring to the trigger) is deliberate — an expanded right sidebar (e.g.
    dsh-better-sidebar) overlaps a trigger-anchored panel; a viewport-centered
@@ -1300,9 +1308,11 @@ window.__ModuleLoader__.load({
 @keyframes dshct-fade{from{opacity:0}to{opacity:1}}
 /* confirm card: FIXED so a blocked call surfaces its prompt even with the
    toggle panel closed, anchored bottom-right (clear of the centered panel and
-   the composer). Multiple cards would overlap; the host blocks one call per
-   agent at a time, and a second card stacking over the first is still legible
-   because each is opaque. Reuses dshct-pop below for its entrance. */
+   the composer). It rides the same body portal as the panel, so the composer's
+   containing block cannot offset it either. Multiple cards would overlap; the
+   host blocks one call per agent at a time, and a second card stacking over the
+   first is still legible because each is opaque. Reuses dshct-pop below for
+   its entrance. */
 .dshct-confirm{position:fixed;right:16px;bottom:16px;z-index:2147482000;width:min(420px,calc(100vw - 32px));box-sizing:border-box;display:flex;flex-direction:column;gap:9px;padding:14px 15px;border:1px solid var(--dsw-alias-border-l1);border-left:3px solid var(--dsw-alias-label-tertiary);border-radius:12px;background:var(--dsw-alias-bg-base);box-shadow:var(--dsw-shadow-lv3);animation:dshct-pop .14s cubic-bezier(.34,1.56,.64,1)}
 .dshct-confirm[data-action="deny"]{border-left-color:var(--dsw-alias-danger,#e5484d)}
 .dshct-confirm[data-action="ask"]{border-left-color:var(--dsw-alias-warning,#f5a623)}
@@ -1599,6 +1609,7 @@ window.__ModuleLoader__.load({
 			const [prefs, setPrefs] = (0, react.useState)(readPrefs);
 			const wrapRef = (0, react.useRef)(null);
 			const buttonRef = (0, react.useRef)(null);
+			const layerRef = (0, react.useRef)(null);
 			const aliveRef = (0, react.useRef)(true);
 			const readSeqRef = (0, react.useRef)(0);
 			const writeSeqRef = (0, react.useRef)(0);
@@ -1630,7 +1641,10 @@ window.__ModuleLoader__.load({
 			(0, react.useEffect)(() => {
 				if (!open) return;
 				const onDown = (e) => {
-					if (wrapRef.current !== null && !wrapRef.current.contains(e.target)) setOpen(false);
+					const target = e.target;
+					if (wrapRef.current?.contains(target) === true) return;
+					if (layerRef.current?.contains(target) === true) return;
+					setOpen(false);
 				};
 				const onKey = (e) => {
 					if (e.key === "Escape") setOpen(false);
@@ -1779,55 +1793,58 @@ window.__ModuleLoader__.load({
 				});
 			}, [apply]);
 			const confirmList = scopeRef.current === null || scopeRef.current.sessionId !== sessionId ? [] : [...scopeRef.current.cards.values()];
+			const dialog = open ? (0, react_jsx_runtime.jsx)("div", {
+				className: "dshct-overlay",
+				onMouseDown: (e) => {
+					if (e.target === e.currentTarget) setOpen(false);
+				},
+				children: loading && projection === null ? (0, react_jsx_runtime.jsx)("div", {
+					className: "dshct-panel dshct-panel-loading",
+					children: t("loading")
+				}) : projection === null ? (0, react_jsx_runtime.jsx)("div", {
+					className: "dshct-panel dshct-panel-loading",
+					children: t("unavailable")
+				}) : (0, react_jsx_runtime.jsx)(Panel, {
+					projection,
+					disabled: running,
+					t,
+					prefs,
+					onPrefsChange,
+					onSet,
+					onSetMany
+				})
+			}) : null;
+			const cards = confirmList.map((entry) => (0, react_jsx_runtime.jsx)(ConfirmationCard, {
+				guardId: entry.card.guardId,
+				guardAction: entry.card.guardAction,
+				reason: entry.card.reason,
+				toolName: entry.card.toolName,
+				detail: entry.card.detail,
+				busy: entry.status === "busy",
+				failed: entry.status === "retry",
+				t,
+				onAnswer: (decision) => onAnswer(entry.card.id, decision)
+			}, entry.card.id));
+			const fixedLayer = typeof document === "undefined" || dialog === null && cards.length === 0 ? null : (0, react_dom.createPortal)((0, react_jsx_runtime.jsxs)("div", {
+				className: "dshct-layer",
+				ref: layerRef,
+				children: [dialog, cards]
+			}), document.body);
 			return (0, react_jsx_runtime.jsxs)("div", {
 				className: "dshct-wrap",
 				ref: wrapRef,
-				children: [
-					(0, react_jsx_runtime.jsx)("button", {
-						type: "button",
-						ref: buttonRef,
-						className: "dshct-button",
-						"data-open": open,
-						"aria-haspopup": "dialog",
-						"aria-expanded": open,
-						"aria-label": t("button.aria"),
-						title: running ? t("button.title.running") : t("button.title"),
-						onClick: () => setOpen((v) => !v),
-						children: (0, react_jsx_runtime.jsx)(SlidersIcon, {})
-					}),
-					open ? (0, react_jsx_runtime.jsx)("div", {
-						className: "dshct-overlay",
-						onMouseDown: (e) => {
-							if (e.target === e.currentTarget) setOpen(false);
-						},
-						children: loading && projection === null ? (0, react_jsx_runtime.jsx)("div", {
-							className: "dshct-panel dshct-panel-loading",
-							children: t("loading")
-						}) : projection === null ? (0, react_jsx_runtime.jsx)("div", {
-							className: "dshct-panel dshct-panel-loading",
-							children: t("unavailable")
-						}) : (0, react_jsx_runtime.jsx)(Panel, {
-							projection,
-							disabled: running,
-							t,
-							prefs,
-							onPrefsChange,
-							onSet,
-							onSetMany
-						})
-					}) : null,
-					confirmList.map((entry) => (0, react_jsx_runtime.jsx)(ConfirmationCard, {
-						guardId: entry.card.guardId,
-						guardAction: entry.card.guardAction,
-						reason: entry.card.reason,
-						toolName: entry.card.toolName,
-						detail: entry.card.detail,
-						busy: entry.status === "busy",
-						failed: entry.status === "retry",
-						t,
-						onAnswer: (decision) => onAnswer(entry.card.id, decision)
-					}, entry.card.id))
-				]
+				children: [(0, react_jsx_runtime.jsx)("button", {
+					type: "button",
+					ref: buttonRef,
+					className: "dshct-button",
+					"data-open": open,
+					"aria-haspopup": "dialog",
+					"aria-expanded": open,
+					"aria-label": t("button.aria"),
+					title: running ? t("button.title.running") : t("button.title"),
+					onClick: () => setOpen((v) => !v),
+					children: (0, react_jsx_runtime.jsx)(SlidersIcon, {})
+				}), fixedLayer]
 			});
 		}
 		/** Inline sliders glyph (self-contained; avoids depending on the icon package). */

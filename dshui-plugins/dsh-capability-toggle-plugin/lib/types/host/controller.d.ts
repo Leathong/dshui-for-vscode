@@ -49,9 +49,9 @@ export declare class ControllerRegistry {
     add(agent: Agent): Promise<AgentBinding>;
     /**
      * Stop tracking an agent and drop its application (and its minted scope).
-     * @param sessionId - the disposed agent's session id.
+     * @param agent - the disposed agent.
      */
-    remove(sessionId: string): void;
+    remove(agent: Agent): void;
     /**
      * Look up one live agent's binding.
      * @param sessionId - the session id.
@@ -81,6 +81,7 @@ export declare class ControllerRegistry {
      * @returns the cached project key, or undefined when nothing is cached.
      */
     lastKnownProjectKey(sessionId: string): string | undefined;
+    disposeAll(): void;
     /** Re-apply the current decision to every tracked agent (store changed). */
     reconcileAll(): Promise<void>;
 }

@@ -8,7 +8,7 @@
  * still attempts it, so the effect is enforced, not merely hidden.
  *
  * Composition:
- *   - OverrideStore        durable three-level state in one storage domain.
+ *   - OverrideStore        durable three-level state in the Loader config entry.
  *   - ControllerRegistry   per-agent enforcement on the tool and skill seams.
  *   - installHttp          the browser panel's read/write channel.
  *
@@ -18,21 +18,21 @@
  * @module dsh-capability-toggle-plugin
  */
 import type { Context } from '@deepseek-ai/cordis';
+import type { OverrideConfig } from './host/config.ts';
 /** Cordis plugin name used by loader diagnostics. */
 export declare const name = "dsh-capability-toggle-plugin";
 /**
- * Required services. `storageDomain` backs the durable state, `tools` and
- * `skills` are the enforced seams, `systemPrompt` carries the tool-guidance
- * section shadow that accompanies a disabled tool, `webServer` carries the
- * browser panel channel, and `connection` carries the per-request auth seam the
- * panel routes apply themselves.
+ * Required services. `configEditor` backs the durable state, `tools` and `skills`
+ * are the enforced seams, `systemPrompt` carries the tool-guidance section
+ * shadow that accompanies a disabled tool, `agents` is unused directly but its
+ * lifecycle events drive tracking, and `webServer` carries the browser panel
+ * channel.
  */
 export declare const inject: string[];
 /**
  * Host plugin body. Every contribution is an effect, so plugin unload (or HMR
- * hot-swap) tears down the routes, the domain, and every per-agent application.
- * The domain is opened BEFORE any listener is installed: a binding created
- * against a not-yet-open domain would read empty overrides and fail open.
+ * hot-swap) tears down the routes and every per-agent application.
  * @param ctx - the Host root context.
  */
-export declare function apply(ctx: Context): Promise<void>;
+export declare const Config: import("@deepseek-ai/schemastery").default<import("./host/config.ts").StoredConfigDocument>;
+export declare function apply(ctx: Context, config: OverrideConfig): void;
