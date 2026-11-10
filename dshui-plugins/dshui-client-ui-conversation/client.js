@@ -16498,10 +16498,12 @@ window.__ModuleLoader__.load({
 			"tool.title.getGoal": "查看目标",
 			"tool.title.updateGoal": "更新目标",
 			"tool.preparing.content": "{kilobytes}KB",
-			"tool.title.createSchedule": "创建定时任务",
-			"tool.title.listSchedules": "查看定时任务",
-			"tool.title.deleteSchedule": "删除定时任务",
-			"tool.title.updateSchedule": "修改定时任务",
+			"tool.title.createSchedule": "创建自动化任务",
+			"tool.title.listSchedules": "查看自动化任务",
+			"tool.title.viewSchedule": "查看自动化任务详情",
+			"tool.title.editSchedule": "编辑自动化任务",
+			"tool.title.deleteSchedule": "删除自动化任务",
+			"tool.title.updateSchedule": "修改自动化任务",
 			"detail.state": "状态",
 			"detail.todo.completed": "已完成",
 			"detail.todo.in_progress": "进行中",
@@ -16537,12 +16539,16 @@ window.__ModuleLoader__.load({
 			"detail.schedule.frequency": "重复",
 			"detail.schedule.scheduled": "等待触发",
 			"detail.schedule.overdue": "已到期，等待会话恢复",
-			"detail.schedule.empty": "没有定时任务",
+			"detail.schedule.active": "已开启",
+			"detail.schedule.paused": "已暂停",
+			"detail.schedule.ended": "已结束",
+			"detail.schedule.empty": "没有自动化任务",
 			"detail.schedule.deleted": "已删除",
-			"detail.schedule.count": "{count} 个定时任务",
+			"detail.schedule.count": "{count} 个自动化任务",
 			"detail.schedule.daily": "每天 {time}（{zone}）",
 			"detail.schedule.weekly": "每周 {days} {time}（{zone}）",
 			"detail.schedule.cron": "Cron {expression}（{zone}）",
+			"detail.schedule.custom": "自定义",
 			"detail.weekday.1": "周一",
 			"detail.weekday.2": "周二",
 			"detail.weekday.3": "周三",
@@ -16727,6 +16733,7 @@ window.__ModuleLoader__.load({
 			"tool.title.bash": "运行命令",
 			"tool.title.write": "写入",
 			"tool.title.edit": "编辑",
+			"tool.title.applyPatch": "应用补丁",
 			"tool.title.code": "代码",
 			"tool.title.generic": "工具调用",
 			"tool.title.inspect": "查询 Cordis 环境",
@@ -16877,10 +16884,12 @@ window.__ModuleLoader__.load({
 			"tool.title.getGoal": "View goal",
 			"tool.title.updateGoal": "Update goal",
 			"tool.preparing.content": "{kilobytes}KB",
-			"tool.title.createSchedule": "Create reminder",
-			"tool.title.listSchedules": "List reminders",
-			"tool.title.deleteSchedule": "Delete reminder",
-			"tool.title.updateSchedule": "Update reminder",
+			"tool.title.createSchedule": "Create automation task",
+			"tool.title.listSchedules": "List automation tasks",
+			"tool.title.viewSchedule": "View automation task",
+			"tool.title.editSchedule": "Edit automation task",
+			"tool.title.deleteSchedule": "Delete automation task",
+			"tool.title.updateSchedule": "Update automation task",
 			"detail.state": "Status",
 			"detail.todo.completed": "Completed",
 			"detail.todo.in_progress": "In progress",
@@ -16916,12 +16925,16 @@ window.__ModuleLoader__.load({
 			"detail.schedule.frequency": "Repeat",
 			"detail.schedule.scheduled": "Scheduled",
 			"detail.schedule.overdue": "Overdue, awaiting session resume",
-			"detail.schedule.empty": "No reminders",
+			"detail.schedule.active": "Enabled",
+			"detail.schedule.paused": "Paused",
+			"detail.schedule.ended": "Ended",
+			"detail.schedule.empty": "No automation tasks",
 			"detail.schedule.deleted": "Deleted",
-			"detail.schedule.count": "{count} reminders",
+			"detail.schedule.count": "{count} automation tasks",
 			"detail.schedule.daily": "Every day at {time} ({zone})",
 			"detail.schedule.weekly": "Weekly on {days} at {time} ({zone})",
 			"detail.schedule.cron": "Cron {expression} ({zone})",
+			"detail.schedule.custom": "Custom",
 			"detail.weekday.1": "Mon",
 			"detail.weekday.2": "Tue",
 			"detail.weekday.3": "Wed",
@@ -17106,6 +17119,7 @@ window.__ModuleLoader__.load({
 			"tool.title.bash": "Bash",
 			"tool.title.write": "Write",
 			"tool.title.edit": "Edit",
+			"tool.title.applyPatch": "Apply patch",
 			"tool.title.code": "Code",
 			"tool.title.generic": "Tool call",
 			"tool.title.inspect": "Query Cordis environment",
@@ -17256,10 +17270,12 @@ window.__ModuleLoader__.load({
 			"tool.title.getGoal": "目標を表示",
 			"tool.title.updateGoal": "目標を更新",
 			"tool.preparing.content": "{kilobytes}KB",
-			"tool.title.createSchedule": "リマインダーを作成",
-			"tool.title.listSchedules": "リマインダーを一覧表示",
-			"tool.title.deleteSchedule": "リマインダーを削除",
-			"tool.title.updateSchedule": "リマインダーを更新",
+			"tool.title.createSchedule": "自動化タスクを作成",
+			"tool.title.viewSchedule": "自動化タスクを表示",
+			"tool.title.editSchedule": "自動化タスクを編集",
+			"tool.title.listSchedules": "自動化タスクを一覧表示",
+			"tool.title.deleteSchedule": "自動化タスクを削除",
+			"tool.title.updateSchedule": "自動化タスクを更新",
 			"detail.state": "ステータス",
 			"detail.todo.completed": "完了",
 			"detail.todo.in_progress": "進行中",
@@ -17293,14 +17309,18 @@ window.__ModuleLoader__.load({
 			"detail.schedule.every": "{interval} ごと",
 			"detail.schedule.when": "スケジュール設定",
 			"detail.schedule.frequency": "繰り返し",
+			"detail.schedule.active": "有効",
+			"detail.schedule.paused": "一時停止中",
+			"detail.schedule.ended": "終了",
 			"detail.schedule.scheduled": "スケジュール済み",
 			"detail.schedule.overdue": "期限超過、セッション再開待ち",
-			"detail.schedule.empty": "リマインダーなし",
+			"detail.schedule.empty": "自動化タスクなし",
 			"detail.schedule.deleted": "削除済み",
-			"detail.schedule.count": "{count}件のリマインダー",
+			"detail.schedule.count": "{count}件の自動化タスク",
 			"detail.schedule.daily": "毎日 {time} ({zone})",
 			"detail.schedule.weekly": "毎週 {days} の {time} ({zone})",
 			"detail.schedule.cron": "Cron {expression} ({zone})",
+			"detail.schedule.custom": "カスタム",
 			"detail.weekday.1": "月",
 			"detail.weekday.2": "火",
 			"detail.weekday.3": "水",
@@ -17485,6 +17505,7 @@ window.__ModuleLoader__.load({
 			"tool.title.bash": "Bash",
 			"tool.title.write": "書き込み",
 			"tool.title.edit": "編集",
+			"tool.title.applyPatch": "パッチを適用",
 			"tool.title.code": "コード",
 			"tool.title.generic": "ツール呼び出し",
 			"tool.title.inspect": "Cordis 環境を照会",
@@ -17635,10 +17656,10 @@ window.__ModuleLoader__.load({
 			"tool.title.getGoal": "Ver objetivo",
 			"tool.title.updateGoal": "Actualizar objetivo",
 			"tool.preparing.content": "{kilobytes}KB",
-			"tool.title.createSchedule": "Crear recordatorio",
-			"tool.title.listSchedules": "Recordatorios de lista",
-			"tool.title.deleteSchedule": "Eliminar recordatorio",
-			"tool.title.updateSchedule": "Recordatorio de actualización",
+			"tool.title.createSchedule": "Crear tarea de automatización",
+			"tool.title.listSchedules": "Listar tareas de automatización",
+			"tool.title.deleteSchedule": "Eliminar tarea de automatización",
+			"tool.title.updateSchedule": "Actualizar tarea de automatización",
 			"detail.state": "Estado",
 			"detail.todo.completed": "Completado",
 			"detail.todo.in_progress": "En progreso",
@@ -17674,12 +17695,13 @@ window.__ModuleLoader__.load({
 			"detail.schedule.frequency": "repetir",
 			"detail.schedule.scheduled": "Programado",
 			"detail.schedule.overdue": "Atrasado, a la espera de reanudar la sesión.",
-			"detail.schedule.empty": "Sin recordatorios",
+			"detail.schedule.empty": "Sin tareas de automatización",
 			"detail.schedule.deleted": "Eliminado",
-			"detail.schedule.count": "Recordatorios de {count}",
+			"detail.schedule.count": "{count} tareas de automatización",
 			"detail.schedule.daily": "Todos los días en {time} ({zone})",
 			"detail.schedule.weekly": "Semanalmente en {days} en {time} ({zone})",
 			"detail.schedule.cron": "Cron {expression} ({zone})",
+			"detail.schedule.custom": "Personalizado",
 			"detail.weekday.1": "lun",
 			"detail.weekday.2": "mar",
 			"detail.weekday.3": "mié",
@@ -17864,6 +17886,7 @@ window.__ModuleLoader__.load({
 			"tool.title.bash": "golpe",
 			"tool.title.write": "escribir",
 			"tool.title.edit": "Editar",
+			"tool.title.applyPatch": "Aplicar parche",
 			"tool.title.code": "Código",
 			"tool.title.generic": "llamada de herramienta",
 			"tool.title.inspect": "Consulta entorno Cordis",
@@ -17926,7 +17949,12 @@ window.__ModuleLoader__.load({
 			"terminal.expandAria": "Expanda las líneas de salida {n} restantes",
 			"terminal.expandRest": "… {n} más líneas",
 			"terminal.sendInput": "(enviar entrada)",
-			"terminal.session": "Terminal {sessionId}"
+			"terminal.session": "Terminal {sessionId}",
+			"tool.title.viewSchedule": "Ver tarea de automatización",
+			"tool.title.editSchedule": "Editar tarea de automatización",
+			"detail.schedule.active": "Habilitado",
+			"detail.schedule.paused": "Pausada",
+			"detail.schedule.ended": "Finalizada"
 		};
 		/** French dictionary, checked against the English keys. */
 		const fr = {
@@ -18014,10 +18042,10 @@ window.__ModuleLoader__.load({
 			"tool.title.getGoal": "Afficher l'objectif",
 			"tool.title.updateGoal": "Objectif de mise à jour",
 			"tool.preparing.content": "{kilobytes}KB",
-			"tool.title.createSchedule": "Créer un rappel",
-			"tool.title.listSchedules": "Liste des rappels",
-			"tool.title.deleteSchedule": "Supprimer le rappel",
-			"tool.title.updateSchedule": "Rappel de mise à jour",
+			"tool.title.createSchedule": "Créer une tâche d'automatisation",
+			"tool.title.listSchedules": "Lister les tâches d'automatisation",
+			"tool.title.deleteSchedule": "Supprimer la tâche d'automatisation",
+			"tool.title.updateSchedule": "Mettre à jour la tâche d'automatisation",
 			"detail.state": "Statut",
 			"detail.todo.completed": "Terminé",
 			"detail.todo.in_progress": "En cours",
@@ -18053,12 +18081,13 @@ window.__ModuleLoader__.load({
 			"detail.schedule.frequency": "Répéter",
 			"detail.schedule.scheduled": "Programmé",
 			"detail.schedule.overdue": "En retard, en attente de reprise de la session",
-			"detail.schedule.empty": "Aucun rappel",
+			"detail.schedule.empty": "Aucune tâche d'automatisation",
 			"detail.schedule.deleted": "Supprimé",
-			"detail.schedule.count": "Rappels {count}",
+			"detail.schedule.count": "{count} tâches d'automatisation",
 			"detail.schedule.daily": "Tous les jours à {time} ({zone})",
 			"detail.schedule.weekly": "Hebdomadaire sur {days} à {time} ({zone})",
 			"detail.schedule.cron": "Cron {expression} ({zone})",
+			"detail.schedule.custom": "Personnalisé",
 			"detail.weekday.1": "lundi",
 			"detail.weekday.2": "mar.",
 			"detail.weekday.3": "mer",
@@ -18243,6 +18272,7 @@ window.__ModuleLoader__.load({
 			"tool.title.bash": "Frapper",
 			"tool.title.write": "Écrire",
 			"tool.title.edit": "Modifier",
+			"tool.title.applyPatch": "Appliquer le patch",
 			"tool.title.code": "Coder",
 			"tool.title.generic": "Appel d'outil",
 			"tool.title.inspect": "Interroger l'environnement Cordis",
@@ -18305,7 +18335,12 @@ window.__ModuleLoader__.load({
 			"terminal.expandAria": "Développez les lignes de sortie {n} restantes",
 			"terminal.expandRest": "… {n} plus de lignes",
 			"terminal.sendInput": "(envoyer une entrée)",
-			"terminal.session": "Borne {sessionId}"
+			"terminal.session": "Borne {sessionId}",
+			"tool.title.viewSchedule": "Voir la tâche d'automatisation",
+			"tool.title.editSchedule": "Modifier la tâche d'automatisation",
+			"detail.schedule.active": "Activé",
+			"detail.schedule.paused": "Suspendue",
+			"detail.schedule.ended": "Terminée"
 		};
 		/** German dictionary, checked against the English keys. */
 		const de = {
@@ -18393,10 +18428,10 @@ window.__ModuleLoader__.load({
 			"tool.title.getGoal": "Ziel ansehen",
 			"tool.title.updateGoal": "Ziel aktualisieren",
 			"tool.preparing.content": "{kilobytes}KB",
-			"tool.title.createSchedule": "Erinnerung erstellen",
-			"tool.title.listSchedules": "Listen Sie Erinnerungen auf",
-			"tool.title.deleteSchedule": "Erinnerung löschen",
-			"tool.title.updateSchedule": "Update-Erinnerung",
+			"tool.title.createSchedule": "Automatisierungsaufgabe erstellen",
+			"tool.title.listSchedules": "Automatisierungsaufgaben auflisten",
+			"tool.title.deleteSchedule": "Automatisierungsaufgabe löschen",
+			"tool.title.updateSchedule": "Automatisierungsaufgabe aktualisieren",
 			"detail.state": "Status",
 			"detail.todo.completed": "Abgeschlossen",
 			"detail.todo.in_progress": "In Bearbeitung",
@@ -18432,12 +18467,13 @@ window.__ModuleLoader__.load({
 			"detail.schedule.frequency": "Wiederholen",
 			"detail.schedule.scheduled": "Geplant",
 			"detail.schedule.overdue": "Überfällig, ich warte auf die Fortsetzung der Sitzung",
-			"detail.schedule.empty": "Keine Erinnerungen",
+			"detail.schedule.empty": "Keine Automatisierungsaufgaben",
 			"detail.schedule.deleted": "Gelöscht",
-			"detail.schedule.count": "{count} Erinnerungen",
+			"detail.schedule.count": "{count} Automatisierungsaufgaben",
 			"detail.schedule.daily": "Täglich um {time} ({zone})",
 			"detail.schedule.weekly": "Wöchentlich auf {days} um {time} ({zone})",
 			"detail.schedule.cron": "Cron {expression} ({zone})",
+			"detail.schedule.custom": "Benutzerdefiniert",
 			"detail.weekday.1": "Mo",
 			"detail.weekday.2": "Di",
 			"detail.weekday.3": "Mi",
@@ -18622,6 +18658,7 @@ window.__ModuleLoader__.load({
 			"tool.title.bash": "Bash",
 			"tool.title.write": "Schreiben",
 			"tool.title.edit": "Bearbeiten",
+			"tool.title.applyPatch": "Patch anwenden",
 			"tool.title.code": "Code",
 			"tool.title.generic": "Werkzeugaufruf",
 			"tool.title.inspect": "Fragen Sie die Cordis-Umgebung ab",
@@ -18684,7 +18721,12 @@ window.__ModuleLoader__.load({
 			"terminal.expandAria": "Erweitern Sie die verbleibenden {n}-Ausgabezeilen",
 			"terminal.expandRest": "… {n} weitere Zeilen",
 			"terminal.sendInput": "(Eingabe senden)",
-			"terminal.session": "Terminal {sessionId}"
+			"terminal.session": "Terminal {sessionId}",
+			"tool.title.viewSchedule": "Automatisierungsaufgabe anzeigen",
+			"tool.title.editSchedule": "Automatisierungsaufgabe bearbeiten",
+			"detail.schedule.active": "Aktiviert",
+			"detail.schedule.paused": "Pausiert",
+			"detail.schedule.ended": "Beendet"
 		};
 		/** Russian dictionary, checked against the English keys. */
 		const ru = {
@@ -18772,10 +18814,10 @@ window.__ModuleLoader__.load({
 			"tool.title.getGoal": "Посмотреть цель",
 			"tool.title.updateGoal": "Обновить цель",
 			"tool.preparing.content": "{kilobytes}KB",
-			"tool.title.createSchedule": "Создать напоминание",
-			"tool.title.listSchedules": "Список напоминаний",
-			"tool.title.deleteSchedule": "Удалить напоминание",
-			"tool.title.updateSchedule": "Обновить напоминание",
+			"tool.title.createSchedule": "Создать задачу автоматизации",
+			"tool.title.listSchedules": "Показать задачи автоматизации",
+			"tool.title.deleteSchedule": "Удалить задачу автоматизации",
+			"tool.title.updateSchedule": "Обновить задачу автоматизации",
 			"detail.state": "Статус",
 			"detail.todo.completed": "Завершено",
 			"detail.todo.in_progress": "В процессе",
@@ -18811,12 +18853,13 @@ window.__ModuleLoader__.load({
 			"detail.schedule.frequency": "Повторить",
 			"detail.schedule.scheduled": "Запланировано",
 			"detail.schedule.overdue": "Просрочено, ждём возобновления сеанса",
-			"detail.schedule.empty": "Нет напоминаний",
+			"detail.schedule.empty": "Нет задач автоматизации",
 			"detail.schedule.deleted": "Удалено",
-			"detail.schedule.count": "{count} напоминания",
+			"detail.schedule.count": "{count} задачи автоматизации",
 			"detail.schedule.daily": "Каждый день в {time} ({zone})",
 			"detail.schedule.weekly": "Еженедельно на {days} по адресу {time} ({zone})",
 			"detail.schedule.cron": "Крон {expression} ({zone})",
+			"detail.schedule.custom": "Произвольно",
 			"detail.weekday.1": "Пн.",
 			"detail.weekday.2": "Вт",
 			"detail.weekday.3": "ср.",
@@ -19001,6 +19044,7 @@ window.__ModuleLoader__.load({
 			"tool.title.bash": "Баш",
 			"tool.title.write": "Написать",
 			"tool.title.edit": "Редактировать",
+			"tool.title.applyPatch": "Применить патч",
 			"tool.title.code": "Код",
 			"tool.title.generic": "Вызов инструмента",
 			"tool.title.inspect": "Запрос среды Cordis",
@@ -19063,7 +19107,12 @@ window.__ModuleLoader__.load({
 			"terminal.expandAria": "Разверните оставшиеся выходные строки {n}.",
 			"terminal.expandRest": "… {n} еще строки",
 			"terminal.sendInput": "(отправить ввод)",
-			"terminal.session": "Терминал {sessionId}"
+			"terminal.session": "Терминал {sessionId}",
+			"tool.title.viewSchedule": "Посмотреть задачу автоматизации",
+			"tool.title.editSchedule": "Изменить задачу автоматизации",
+			"detail.schedule.active": "Включено",
+			"detail.schedule.paused": "Приостановлена",
+			"detail.schedule.ended": "Завершена"
 		};
 		/** Portuguese dictionary, checked against the English keys. */
 		const pt = {
@@ -19151,10 +19200,10 @@ window.__ModuleLoader__.load({
 			"tool.title.getGoal": "Ver meta",
 			"tool.title.updateGoal": "Atualizar meta",
 			"tool.preparing.content": "{kilobytes}KB",
-			"tool.title.createSchedule": "Criar lembrete",
-			"tool.title.listSchedules": "Listar lembretes",
-			"tool.title.deleteSchedule": "Excluir lembrete",
-			"tool.title.updateSchedule": "Lembrete de atualização",
+			"tool.title.createSchedule": "Criar tarefa de automação",
+			"tool.title.listSchedules": "Listar tarefas de automação",
+			"tool.title.deleteSchedule": "Excluir tarefa de automação",
+			"tool.title.updateSchedule": "Atualizar tarefa de automação",
 			"detail.state": "Estado",
 			"detail.todo.completed": "Concluído",
 			"detail.todo.in_progress": "Em andamento",
@@ -19190,12 +19239,13 @@ window.__ModuleLoader__.load({
 			"detail.schedule.frequency": "Repetir",
 			"detail.schedule.scheduled": "Agendado",
 			"detail.schedule.overdue": "Atrasado, aguardando retomada da sessão",
-			"detail.schedule.empty": "Sem lembretes",
+			"detail.schedule.empty": "Sem tarefas de automação",
 			"detail.schedule.deleted": "Excluído",
-			"detail.schedule.count": "{count} lembretes",
+			"detail.schedule.count": "{count} tarefas de automação",
 			"detail.schedule.daily": "Todos os dias às {time} ({zone})",
 			"detail.schedule.weekly": "Semanalmente em {days} às {time} ({zone})",
 			"detail.schedule.cron": "Cron {expression} ({zone})",
+			"detail.schedule.custom": "Personalizado",
 			"detail.weekday.1": "segunda-feira",
 			"detail.weekday.2": "Terça",
 			"detail.weekday.3": "Quarta",
@@ -19380,6 +19430,7 @@ window.__ModuleLoader__.load({
 			"tool.title.bash": "Bash",
 			"tool.title.write": "Escreva",
 			"tool.title.edit": "Editar",
+			"tool.title.applyPatch": "Aplicar patch",
 			"tool.title.code": "Código",
 			"tool.title.generic": "Chamada de ferramenta",
 			"tool.title.inspect": "Consultar ambiente Cordis",
@@ -19442,7 +19493,12 @@ window.__ModuleLoader__.load({
 			"terminal.expandAria": "Expanda as {n} linhas de saída restantes",
 			"terminal.expandRest": "… mais {n} linhas",
 			"terminal.sendInput": "(enviar entrada)",
-			"terminal.session": "Terminal {sessionId}"
+			"terminal.session": "Terminal {sessionId}",
+			"tool.title.viewSchedule": "Ver tarefa de automação",
+			"tool.title.editSchedule": "Editar tarefa de automação",
+			"detail.schedule.active": "Habilitado",
+			"detail.schedule.paused": "Pausada",
+			"detail.schedule.ended": "Concluída"
 		};
 		//#endregion
 		//#region \0dsh-css:/Volumes/Development/LLM/dsh-plugin/vscode/dshui_for_vscode/.dsh-src/packages/client/ui-conversation/src/client/queue/QueueDock.module.css.mjs
@@ -19998,7 +20054,7 @@ window.__ModuleLoader__.load({
 		}
 		//#endregion
 		//#region \0dsh-css:/Volumes/Development/LLM/dsh-plugin/vscode/dshui_for_vscode/.dsh-src/packages/client/ui-conversation/src/client/skeleton/ConversationRoot.module.css.mjs
-		const css$4 = ".ZBQAyG_root{background:var(--dsw-alias-bg-base);flex-direction:column;min-width:0;height:100%;display:flex;position:relative}.ZBQAyG_header{box-sizing:border-box;border-bottom:.5px solid var(--dsw-alias-border-l3);flex:none;grid-template-columns:auto minmax(0,1fr);min-height:76px;padding:10px 28px 0 20px;display:grid}.ZBQAyG_header:where(:not(:has(.ZBQAyG_tabs))){min-height:0;padding-bottom:10px}.ZBQAyG_headerBlank{border-bottom:none;min-height:0;padding-bottom:0}.ZBQAyG_headerBlank .ZBQAyG_headerCorner{margin-left:auto}html:not([data-platform=darwin]) .ZBQAyG_headerSessionless{padding-top:0}html:not([data-platform=darwin]) .ZBQAyG_headerSessionless .ZBQAyG_titleRow{min-height:0}[data-platform=darwin] .ZBQAyG_headerLeading,[data-platform=darwin] .ZBQAyG_headerActions,[data-platform=darwin] .ZBQAyG_headerUtilities,[data-platform=darwin] .ZBQAyG_headerCorner{-webkit-app-region:no-drag}.ZBQAyG_titleRow{min-height:30px;grid-column:2;align-items:center;gap:0;padding-inline-start:max(0px, calc(var(--dsh-frame-leading-clearance,0px) - 20px));display:flex;container-type:inline-size}.ZBQAyG_titleCluster{--title-cluster-fade:20px;min-width:0;margin:-4px calc(-1 * var(--title-cluster-fade)) -4px -4px;padding:4px var(--title-cluster-fade) 4px 4px;mask-image:linear-gradient(to left, transparent calc(.3 * var(--title-cluster-fade)), #000 var(--title-cluster-fade));flex:1;align-items:center;gap:10px;display:flex;overflow:clip}.ZBQAyG_titleCluster:has(+.ZBQAyG_headerUtilities:empty){--title-cluster-fade:8px}.ZBQAyG_headerLeading{flex:none;grid-area:1/1;align-items:center;gap:8px;display:flex}.ZBQAyG_crumbs{white-space:nowrap;align-items:center;gap:4px;min-width:0;display:flex;overflow:hidden}.ZBQAyG_crumbSeg{align-items:center;gap:4px;min-width:0;display:inline-flex}.ZBQAyG_crumbSep{color:var(--dsw-alias-label-caption);font-size:14px;line-height:20px}.ZBQAyG_crumb{border-radius:var(--dsw-radius-md);max-width:220px;color:var(--dsw-alias-label-tertiary);text-overflow:ellipsis;white-space:nowrap;cursor:pointer;background:0 0;border:none;padding:4px 8px;font-size:14px;line-height:20px;display:inline-block;overflow:hidden}.ZBQAyG_crumbSubagent{font-size:12px;line-height:18px}@media (hover:hover){button.ZBQAyG_crumb:hover{background:var(--dsw-alias-interactive-bg-hover)}}.ZBQAyG_crumbCurrent{color:var(--dsw-alias-label-primary);cursor:default;font-weight:500}.ZBQAyG_headerActions{flex:none;align-items:center;gap:8px;display:flex}.ZBQAyG_headerUtilities{flex:none;align-items:center;gap:8px;margin-left:20px;display:flex}.ZBQAyG_headerUtilities:empty{display:none}.ZBQAyG_headerCorner{flex:none;align-items:center;margin-left:8px;margin-right:-16px;display:flex}.ZBQAyG_headerCorner:empty{display:none}.ZBQAyG_tabs{z-index:1;box-sizing:border-box;flex-wrap:wrap;grid-column:1/-1;align-items:flex-start;gap:16px 20px;width:100%;min-width:0;margin-top:10px;padding-left:8px;display:flex;position:relative}.ZBQAyG_viewTabs{flex-wrap:wrap;gap:32px;min-width:0;min-height:25px;display:flex}.ZBQAyG_tab{--dsh-tab-hit-inline:10px;box-sizing:border-box;min-height:35px;margin:-10px calc(-1 * var(--dsh-tab-hit-inline)) 0;padding:10px var(--dsh-tab-hit-inline) 9px;color:var(--dsw-alias-label-tertiary);cursor:pointer;background:0 0;border:none;font-size:13px;font-weight:500;line-height:16px;position:relative}.ZBQAyG_tab:after{content:\"\";right:var(--dsh-tab-hit-inline);bottom:-1px;left:var(--dsh-tab-hit-inline);background:0 0;border-radius:2px;height:2px;position:absolute}.ZBQAyG_tabActive{color:var(--dsw-alias-state-business-primary)}.ZBQAyG_tabActive:after{background:var(--dsw-alias-state-business-primary)}.ZBQAyG_viewsMoreAnchor{flex:none}.ZBQAyG_viewsMore{width:22px;height:22px;color:var(--dsw-alias-label-secondary);margin-top:-3px;padding:0}.ZBQAyG_viewsMoreActive{color:var(--dsw-alias-state-business-primary)}.ZBQAyG_tabLabel{text-overflow:ellipsis;white-space:nowrap;max-width:88px;display:block;overflow:hidden}.ZBQAyG_viewsMore[aria-expanded=true]{background:var(--dsw-alias-interactive-bg-hover)}.ZBQAyG_viewsMoreMenu{width:288px;max-width:calc(100vw - 24px)}.ZBQAyG_viewArea{flex-direction:column;flex:1;min-height:0;display:flex}.ZBQAyG_widthHandle{z-index:0;width:min(10px, calc((100% - var(--dsh-chat-content-width)) / 2 - 24px - 24px));cursor:col-resize;position:absolute;top:0;bottom:0}.ZBQAyG_widthHandle[data-side=left]{right:calc(50% + var(--dsh-chat-content-width) / 2 + 24px)}.ZBQAyG_widthHandle[data-side=right]{left:calc(50% + var(--dsh-chat-content-width) / 2 + 24px)}.ZBQAyG_widthHandle:after{content:\"\";background:linear-gradient(to bottom, transparent calc(var(--dsh-width-handle-pointer-y,50%) - 36px), var(--dsw-alias-scrollbar-bg-l1) calc(var(--dsh-width-handle-pointer-y,50%) - 8px), var(--dsw-alias-scrollbar-bg-l1) calc(var(--dsh-width-handle-pointer-y,50%) + 8px), transparent calc(var(--dsh-width-handle-pointer-y,50%) + 36px));opacity:0;pointer-events:none;border-radius:2px;width:2px;position:absolute;top:0;bottom:0}.ZBQAyG_widthHandle[data-side=left]:after{right:4px}.ZBQAyG_widthHandle[data-side=right]:after{left:4px}.ZBQAyG_widthHandle[data-dragging]:after{opacity:1}@media (hover:hover){.ZBQAyG_widthHandle:hover:after{opacity:1}}.ZBQAyG_widthHandle[data-dragging]{z-index:8}.ZBQAyG_root:has([data-conversation-composer-overlay]) .ZBQAyG_widthHandle{display:none}.ZBQAyG_composerStack{--dsh-composer-stack-gap:6px;gap:var(--dsh-composer-stack-gap);flex-direction:column;display:flex}.ZBQAyG_composerSeat{--dsh-composer-text-max-height:336px;flex-direction:column;flex:none;display:flex}.ZBQAyG_root[data-phase=active]{overflow:hidden}.ZBQAyG_root[data-phase=active] .ZBQAyG_header{flex:none}.ZBQAyG_body{--dsh-chat-content-width:var(--dsh-chat-user-width,clamp(680px, calc(var(--dsh-conversation-column-width,0px) * .64), 920px));--dsh-composer-card-max-width:calc(var(--dsh-chat-content-width) + 32px);--dsh-composer-side-clearance:16px;--dsh-composer-dock-inset:8px;flex-direction:column;flex:1;min-height:0;display:flex;position:relative}.ZBQAyG_embeddedBody{--dsh-chat-content-width:min(calc(100% - 32px), 920px);--dsh-composer-card-max-width:min(calc(100% - 16px), 952px);--dsh-composer-side-clearance:8px;--dsh-composer-dock-inset:8px;overflow:hidden}.ZBQAyG_scrollBody{scrollbar-gutter:stable;flex-direction:column;flex:1;min-height:0;margin-right:2px;display:flex;overflow-y:auto}.ZBQAyG_scrollBody::-webkit-scrollbar-track{margin:2px}.ZBQAyG_root[data-phase=active] .ZBQAyG_viewArea,.ZBQAyG_embeddedBody[data-content-phase=active] .ZBQAyG_viewArea{flex:1 0 auto;min-height:auto}.ZBQAyG_root[data-phase=active] .ZBQAyG_composerSeat,.ZBQAyG_embeddedBody[data-content-phase=active] .ZBQAyG_composerSeat{z-index:7;background:linear-gradient(180deg, color-mix(in srgb, var(--dsw-alias-bg-base) 0%, transparent) 0px, var(--dsw-alias-bg-base) 36px);position:sticky;bottom:0}.ZBQAyG_root[data-phase=active] .ZBQAyG_composerSeat:has([data-trigger-menu]){z-index:9}.ZBQAyG_scrollBody:has([data-conversation-composer-overlay]){scrollbar-gutter:auto;position:relative;overflow:hidden auto}.ZBQAyG_scrollBody:has([data-conversation-composer-overlay])>[data-slot=conversation\\.session]>.ZBQAyG_viewArea{flex:1 1 0;min-height:0;overflow:hidden}.ZBQAyG_scrollBody:has([data-conversation-composer-overlay])>.ZBQAyG_composerSeat{right:var(--dsh-scrollbar-width);position:absolute;bottom:0;left:0}.ZBQAyG_composerHero{width:min(calc(var(--dsh-composer-card-max-width) + 2 * var(--dsh-composer-side-clearance)), 100%);z-index:1;align-self:center;gap:8px;padding-bottom:32px}.ZBQAyG_heroWorkspaceRow{align-items:center;gap:2px;min-width:0;margin-top:4px;padding:0 16px 0 20px;display:flex}.ZBQAyG_heroOptions{flex:none;align-items:center;gap:2px;min-width:0;margin-left:auto;display:flex}.ZBQAyG_heroOptions:empty{display:none}.ZBQAyG_root[data-phase=hero] .ZBQAyG_scrollBody,.ZBQAyG_embeddedBody[data-content-phase=hero] .ZBQAyG_scrollBody{justify-content:center;overflow-y:auto}.ZBQAyG_root[data-dshui-scope=true][data-phase=hero] .ZBQAyG_scrollBody{justify-content:flex-end}.ZBQAyG_root[data-phase=settling] .ZBQAyG_composerSeat,.ZBQAyG_embeddedBody[data-content-phase=settling] .ZBQAyG_composerSeat{visibility:hidden}.ZBQAyG_root[data-dshui-scope=true][data-phase=settling] .ZBQAyG_composerSeat{visibility:visible;opacity:.35;pointer-events:none}";
+		const css$4 = ".ZBQAyG_root{background:var(--dsw-alias-bg-base);flex-direction:column;min-width:0;height:100%;display:flex;position:relative}.ZBQAyG_header{box-sizing:border-box;border-bottom:.5px solid var(--dsw-alias-border-l3);flex:none;grid-template-columns:auto minmax(0,1fr);min-height:76px;padding:10px 28px 0 20px;display:grid}.ZBQAyG_header:where(:not(:has(.ZBQAyG_tabs))){min-height:0;padding-bottom:10px}.ZBQAyG_headerBlank{border-bottom:none;min-height:0;padding-bottom:0}.ZBQAyG_headerBlank .ZBQAyG_headerCorner{margin-left:auto}[data-platform=darwin] .ZBQAyG_headerLeading,[data-platform=darwin] .ZBQAyG_headerActions,[data-platform=darwin] .ZBQAyG_headerUtilities,[data-platform=darwin] .ZBQAyG_headerCorner{-webkit-app-region:no-drag}.ZBQAyG_titleRow{min-height:30px;grid-column:2;align-items:center;gap:0;padding-inline-start:max(0px, calc(var(--dsh-frame-leading-clearance,0px) - 20px));display:flex;container-type:inline-size}.ZBQAyG_titleCluster{--title-cluster-fade:20px;min-width:0;margin:-4px calc(-1 * var(--title-cluster-fade)) -4px -4px;padding:4px var(--title-cluster-fade) 4px 4px;mask-image:linear-gradient(to left, transparent calc(.3 * var(--title-cluster-fade)), #000 var(--title-cluster-fade));flex:1;align-items:center;gap:10px;display:flex;overflow:clip}.ZBQAyG_titleCluster:has(+.ZBQAyG_headerUtilities:empty){--title-cluster-fade:8px}.ZBQAyG_headerLeading{flex:none;grid-area:1/1;align-items:center;gap:8px;display:flex}.ZBQAyG_crumbs{white-space:nowrap;align-items:center;gap:4px;min-width:0;display:flex;overflow:hidden}.ZBQAyG_crumbSeg{align-items:center;gap:4px;min-width:0;display:inline-flex}.ZBQAyG_crumbSep{color:var(--dsw-alias-label-caption);font-size:14px;line-height:20px}.ZBQAyG_crumb{border-radius:var(--dsw-radius-md);max-width:220px;color:var(--dsw-alias-label-tertiary);text-overflow:ellipsis;white-space:nowrap;cursor:pointer;background:0 0;border:none;padding:4px 8px;font-size:14px;line-height:20px;display:inline-block;overflow:hidden}.ZBQAyG_crumbSubagent{font-size:12px;line-height:18px}@media (hover:hover){button.ZBQAyG_crumb:hover{background:var(--dsw-alias-interactive-bg-hover)}}.ZBQAyG_crumbCurrent{color:var(--dsw-alias-label-primary);cursor:default;font-weight:500}.ZBQAyG_headerActions{flex:none;align-items:center;gap:8px;display:flex}.ZBQAyG_headerUtilities{flex:none;align-items:center;gap:8px;margin-left:20px;display:flex}.ZBQAyG_headerUtilities:empty{display:none}.ZBQAyG_headerCorner{flex:none;align-items:center;margin-left:8px;margin-right:-16px;display:flex}.ZBQAyG_headerCorner:empty{display:none}.ZBQAyG_tabs{z-index:1;box-sizing:border-box;flex-wrap:wrap;grid-column:1/-1;align-items:flex-start;gap:16px 20px;width:100%;min-width:0;margin-top:10px;padding-left:8px;display:flex;position:relative}@media (width<=767px){html:not([data-platform]) .ZBQAyG_tabs{padding-left:0}}.ZBQAyG_viewTabs{flex-wrap:wrap;gap:32px;min-width:0;min-height:25px;display:flex}.ZBQAyG_tab{--dsh-tab-hit-inline:10px;box-sizing:border-box;min-height:35px;margin:-10px calc(-1 * var(--dsh-tab-hit-inline)) 0;padding:10px var(--dsh-tab-hit-inline) 9px;color:var(--dsw-alias-label-tertiary);cursor:pointer;background:0 0;border:none;font-size:13px;font-weight:500;line-height:16px;position:relative}.ZBQAyG_tab:after{content:\"\";right:var(--dsh-tab-hit-inline);bottom:-1px;left:var(--dsh-tab-hit-inline);background:0 0;border-radius:2px;height:2px;position:absolute}.ZBQAyG_tabActive{color:var(--dsw-alias-state-business-primary)}.ZBQAyG_tabActive:after{background:var(--dsw-alias-state-business-primary)}.ZBQAyG_viewsMoreAnchor{flex:none}.ZBQAyG_viewsMore{width:22px;height:22px;color:var(--dsw-alias-label-secondary);margin-top:-3px;padding:0}.ZBQAyG_viewsMoreActive{color:var(--dsw-alias-state-business-primary)}.ZBQAyG_tabLabel{text-overflow:ellipsis;white-space:nowrap;max-width:88px;display:block;overflow:hidden}.ZBQAyG_viewsMore[aria-expanded=true]{background:var(--dsw-alias-interactive-bg-hover)}.ZBQAyG_viewsMoreMenu{width:288px;max-width:calc(100vw - 24px)}.ZBQAyG_viewArea{flex-direction:column;flex:1;min-height:0;display:flex}.ZBQAyG_widthHandle{z-index:0;width:min(10px, calc((100% - var(--dsh-chat-content-width)) / 2 - 24px - 24px));cursor:col-resize;position:absolute;top:0;bottom:0}.ZBQAyG_widthHandle[data-side=left]{right:calc(50% + var(--dsh-chat-content-width) / 2 + 24px)}.ZBQAyG_widthHandle[data-side=right]{left:calc(50% + var(--dsh-chat-content-width) / 2 + 24px)}.ZBQAyG_widthHandle:after{content:\"\";background:linear-gradient(to bottom, transparent calc(var(--dsh-width-handle-pointer-y,50%) - 36px), var(--dsw-alias-scrollbar-bg-l1) calc(var(--dsh-width-handle-pointer-y,50%) - 8px), var(--dsw-alias-scrollbar-bg-l1) calc(var(--dsh-width-handle-pointer-y,50%) + 8px), transparent calc(var(--dsh-width-handle-pointer-y,50%) + 36px));opacity:0;pointer-events:none;border-radius:2px;width:2px;position:absolute;top:0;bottom:0}.ZBQAyG_widthHandle[data-side=left]:after{right:4px}.ZBQAyG_widthHandle[data-side=right]:after{left:4px}.ZBQAyG_widthHandle[data-dragging]:after{opacity:1}@media (hover:hover){.ZBQAyG_widthHandle:hover:after{opacity:1}}.ZBQAyG_root:has([data-conversation-composer-overlay]) .ZBQAyG_widthHandle{display:none}.ZBQAyG_composerStack{--dsh-composer-stack-gap:6px;gap:var(--dsh-composer-stack-gap);flex-direction:column;display:flex}.ZBQAyG_composerSeat{--dsh-composer-text-max-height:336px;flex-direction:column;flex:none;display:flex}.ZBQAyG_root[data-phase=active]{overflow:hidden}.ZBQAyG_root[data-phase=active] .ZBQAyG_header{flex:none}.ZBQAyG_body{--dsh-chat-content-width:var(--dsh-chat-user-width,clamp(680px, calc(var(--dsh-conversation-column-width,0px) * .64), 920px));--dsh-composer-card-max-width:calc(var(--dsh-chat-content-width) + 32px);--dsh-composer-side-clearance:16px;--dsh-composer-dock-inset:8px;flex-direction:column;flex:1;min-height:0;display:flex;position:relative}.ZBQAyG_embeddedBody{--dsh-chat-content-width:min(calc(100% - 32px), 920px);--dsh-composer-card-max-width:min(calc(100% - 16px), 952px);--dsh-composer-side-clearance:8px;--dsh-composer-dock-inset:8px;overflow:hidden}.ZBQAyG_scrollBody{scrollbar-gutter:stable;flex-direction:column;flex:1;min-height:0;margin-right:2px;display:flex;overflow-y:auto}.ZBQAyG_scrollBody::-webkit-scrollbar-track{margin:2px}.ZBQAyG_root[data-phase=active] .ZBQAyG_viewArea,.ZBQAyG_embeddedBody[data-content-phase=active] .ZBQAyG_viewArea{flex:1 0 auto;min-height:auto}.ZBQAyG_root[data-phase=active] .ZBQAyG_composerSeat,.ZBQAyG_embeddedBody[data-content-phase=active] .ZBQAyG_composerSeat{z-index:9;will-change:transform;overflow-anchor:none;background:linear-gradient(180deg, color-mix(in srgb, var(--dsw-alias-bg-base) 0%, transparent) 0px, var(--dsw-alias-bg-base) 36px);margin-top:auto;position:sticky;bottom:0}.ZBQAyG_scrollBody:has([data-conversation-composer-overlay]){scrollbar-gutter:auto;position:relative;overflow:hidden auto}.ZBQAyG_scrollBody:has([data-conversation-composer-overlay])>[data-slot=conversation\\.session]>.ZBQAyG_viewArea{flex:1 1 0;min-height:0;overflow:hidden}.ZBQAyG_scrollBody:has([data-conversation-composer-overlay])>.ZBQAyG_composerSeat{right:var(--dsh-scrollbar-width);position:absolute;bottom:0;left:0}.ZBQAyG_composerHero{width:min(calc(var(--dsh-composer-card-max-width) + 2 * var(--dsh-composer-side-clearance)), 100%);z-index:1;align-self:center;gap:8px;padding-bottom:32px}.ZBQAyG_heroWorkspaceRow{align-items:center;gap:2px;min-width:0;margin-top:4px;padding:0 16px 0 20px;display:flex}.ZBQAyG_heroOptions{flex:none;align-items:center;gap:2px;min-width:0;margin-left:auto;display:flex}.ZBQAyG_heroOptions:empty{display:none}.ZBQAyG_root[data-phase=hero] .ZBQAyG_scrollBody,.ZBQAyG_embeddedBody[data-content-phase=hero] .ZBQAyG_scrollBody{justify-content:center;overflow-y:auto}.ZBQAyG_root[data-dshui-scope=true][data-phase=hero] .ZBQAyG_scrollBody{justify-content:flex-end}.ZBQAyG_root[data-phase=settling] .ZBQAyG_composerSeat,.ZBQAyG_embeddedBody[data-content-phase=settling] .ZBQAyG_composerSeat{visibility:hidden}.ZBQAyG_root[data-dshui-scope=true][data-phase=settling] .ZBQAyG_composerSeat{visibility:visible;opacity:.35;pointer-events:none}";
 		const tagId$4 = "dshui-client-ui-conversation/ConversationRoot.module.css";
 		if (typeof document !== "undefined" && document.querySelector("style[data-plugin-css=" + JSON.stringify(tagId$4) + "]") === null) {
 			const tag = document.createElement("style");
@@ -20024,7 +20080,6 @@ window.__ModuleLoader__.load({
 			"headerBlank": "ZBQAyG_headerBlank",
 			"headerCorner": "ZBQAyG_headerCorner",
 			"headerLeading": "ZBQAyG_headerLeading",
-			"headerSessionless": "ZBQAyG_headerSessionless",
 			"headerUtilities": "ZBQAyG_headerUtilities",
 			"heroOptions": "ZBQAyG_heroOptions",
 			"heroWorkspaceRow": "ZBQAyG_heroWorkspaceRow",
@@ -20621,7 +20676,7 @@ window.__ModuleLoader__.load({
 			const conversation = useConversation((s) => s);
 			const blank = session === void 0 || conversation === void 0 || session.blank && conversationPhase(session, conversation) === "blank";
 			return (0, react_jsx_runtime.jsxs)("header", {
-				className: clsx(ConversationRoot_module_css_default.header, blank && ConversationRoot_module_css_default.headerBlank, sessionId === void 0 && ConversationRoot_module_css_default.headerSessionless),
+				className: clsx(ConversationRoot_module_css_default.header, blank && ConversationRoot_module_css_default.headerBlank),
 				"data-window-drag": true,
 				children: [(0, react_jsx_runtime.jsx)("div", {
 					className: ConversationRoot_module_css_default.headerLeading,
@@ -20790,7 +20845,8 @@ window.__ModuleLoader__.load({
 		* @param props - Strict Session store, view ledger, navigation, render, and locale shares.
 		* @returns Session navigation controls, with title and tabs after conversation starts.
 		*/
-		function ConversationSessionHeader({ sessionId, hideChrome, useSessions, useConversationViews, useStore, renderSlot, open, selectView, setPinned, t, useEntryPins, useEntryActions }) {
+		function ConversationSessionHeader({ sessionId, hideChrome, useSessions, useConversationViews, useStore, renderSlot, open, useContextMenu, selectView, setPinned, t, useEntryPins, useEntryActions }) {
+			const { getTriggerProps } = useContextMenu();
 			const tabs = useConversationViews((value) => value);
 			const active = resolveActiveView(tabs, useStore((s) => s.view));
 			const ancestry = useSessions((s) => deriveAncestry(s, sessionId), equalBreadcrumbs);
@@ -20858,6 +20914,13 @@ window.__ModuleLoader__.load({
 							};
 							return (0, react_jsx_runtime.jsxs)("span", {
 								className: ConversationRoot_module_css_default.crumbSeg,
+								...getTriggerProps({
+									kind: "session",
+									value: {
+										sessionId: summary.id,
+										displayTitle: summary.displayTitle
+									}
+								}),
 								children: [index > 0 && (0, react_jsx_runtime.jsx)("span", {
 									className: ConversationRoot_module_css_default.crumbSep,
 									children: "/"
@@ -21425,7 +21488,7 @@ window.__ModuleLoader__.load({
 		}
 		//#endregion
 		//#region \0dsh-css:/Volumes/Development/LLM/dsh-plugin/vscode/dshui_for_vscode/.dsh-src/packages/client/ui-conversation/src/client/skeleton/ContextMeter.module.css.mjs
-		const css$2 = ".WeOvQW_root{flex:none;display:inline-flex}.WeOvQW_trigger{border-radius:var(--dsw-radius-sm);color:var(--dsw-alias-label-tertiary);font-family:inherit;font-size:var(--dsh-content-font-size-secondary,13px);font-variant-numeric:tabular-nums;line-height:calc(20px + var(--dsh-content-font-delta-secondary,0px));white-space:nowrap;cursor:pointer;background:0 0;border:none;flex:none;align-items:center;gap:6px;padding:1px 8px;display:inline-flex}.WeOvQW_trigger[aria-expanded=true]{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-secondary)}@media (hover:hover){.WeOvQW_trigger:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-secondary)}}.WeOvQW_track{fill:none;stroke:var(--dsw-alias-border-l3);stroke-width:2px}.WeOvQW_fill{fill:none;stroke:var(--dsw-alias-label-tertiary);stroke-width:2px;stroke-linecap:round}.WeOvQW_panel{z-index:1100;box-sizing:border-box;border-radius:var(--dsw-radius-lg);background:var(--dsw-specific-menu);width:min(264px,100vw - 24px);backdrop-filter:var(--dsw-menu-backdrop-filter);--dsw-elevation-stroke-color:var(--dsw-alias-border-l1);box-shadow:var(--dsw-elevation-prominent);color:var(--dsw-alias-label-secondary);cursor:default;border:0;padding:12px;font-size:12px;line-height:20px;position:fixed}.WeOvQW_header{align-items:center;gap:6px;display:flex}.WeOvQW_figures{font-variant-numeric:tabular-nums;color:var(--dsw-alias-label-primary);margin-left:auto;font-weight:500}.WeOvQW_percent{color:var(--dsw-alias-label-primary);font-weight:500}.WeOvQW_headline{color:var(--dsw-alias-label-tertiary)}.WeOvQW_headline:empty{display:none}.WeOvQW_bar{corner-shape:round;background:var(--dsw-alias-interactive-bg-hover);border-radius:999px;gap:1px;height:4px;margin:10px 0 12px;display:flex;overflow:hidden}.WeOvQW_segment{background:var(--meter-tint,var(--dsw-alias-label-tertiary));border-radius:1px;flex:none;min-width:2px;height:100%}.WeOvQW_swatch{background:var(--meter-tint);vertical-align:baseline;border-radius:2px;width:8px;height:8px;margin-right:6px;display:inline-block}.WeOvQW_colorSystem{--meter-tint:var(--dsw-static-neutral-bluish-400)}.WeOvQW_colorTools{--meter-tint:#a78bfa}.WeOvQW_colorMessages{--meter-tint:var(--dsw-static-blue-450)}.WeOvQW_rows{margin:6px 0 0}.WeOvQW_row{justify-content:space-between;align-items:center;gap:12px;padding:2px 0;display:flex}.WeOvQW_row dt{color:var(--dsw-alias-label-secondary)}.WeOvQW_row dd{font-variant-numeric:tabular-nums;color:var(--dsw-alias-label-primary);margin:0}";
+		const css$2 = ".WeOvQW_root{flex:none;display:inline-flex}.WeOvQW_trigger{border-radius:var(--dsw-radius-sm);color:var(--dsw-alias-label-tertiary);font-family:inherit;font-size:var(--dsh-content-font-size-secondary,13px);font-variant-numeric:tabular-nums;line-height:calc(20px + var(--dsh-content-font-delta-secondary,0px));white-space:nowrap;cursor:pointer;background:0 0;border:none;flex:none;align-items:center;gap:6px;padding:1px 8px;display:inline-flex}.WeOvQW_trigger[aria-expanded=true]{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-secondary)}@media (hover:hover){.WeOvQW_trigger:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-secondary)}}.WeOvQW_track{fill:none;stroke:var(--dsw-alias-border-l3);stroke-width:2px}.WeOvQW_fill{fill:none;stroke:var(--dsw-alias-label-tertiary);stroke-width:2px;stroke-linecap:round}.WeOvQW_panel{z-index:1100;box-sizing:border-box;border-radius:var(--dsw-radius-lg);background:var(--dsw-specific-menu);width:min(264px,100vw - 24px);backdrop-filter:var(--dsw-menu-backdrop-filter);--dsw-elevation-stroke-color:var(--dsw-alias-border-l1);box-shadow:var(--dsw-elevation-prominent);color:var(--dsw-alias-label-secondary);cursor:default;max-width:var(--dsh-anchored-max-width,none);max-height:var(--dsh-anchored-max-height,none);--dsh-scrollbar-thumb:var(--dsw-alias-scrollbar-bg-l2);--dsh-scrollbar-thumb-hover:var(--dsw-alias-scrollbar-hover-l2);border:0;padding:12px;font-size:12px;line-height:20px;position:fixed;overflow:hidden auto}.WeOvQW_header{align-items:center;gap:6px;display:flex}.WeOvQW_figures{font-variant-numeric:tabular-nums;color:var(--dsw-alias-label-primary);margin-left:auto;font-weight:500}.WeOvQW_percent{color:var(--dsw-alias-label-primary);font-weight:500}.WeOvQW_headline{color:var(--dsw-alias-label-tertiary)}.WeOvQW_headline:empty{display:none}.WeOvQW_bar{corner-shape:round;background:var(--dsw-alias-interactive-bg-hover);border-radius:999px;gap:1px;height:4px;margin:10px 0 12px;display:flex;overflow:hidden}.WeOvQW_segment{background:var(--meter-tint,var(--dsw-alias-label-tertiary));border-radius:1px;flex:none;min-width:2px;height:100%}.WeOvQW_swatch{background:var(--meter-tint);vertical-align:baseline;border-radius:2px;width:8px;height:8px;margin-right:6px;display:inline-block}.WeOvQW_colorSystem{--meter-tint:var(--dsw-static-neutral-bluish-400)}.WeOvQW_colorTools{--meter-tint:#a78bfa}.WeOvQW_colorMessages{--meter-tint:var(--dsw-static-blue-450)}.WeOvQW_rows{margin:6px 0 0}.WeOvQW_row{justify-content:space-between;align-items:center;gap:12px;padding:2px 0;display:flex}.WeOvQW_row dt{color:var(--dsw-alias-label-secondary)}.WeOvQW_row dd{font-variant-numeric:tabular-nums;color:var(--dsw-alias-label-primary);margin:0}";
 		const tagId$2 = "dshui-client-ui-conversation/ContextMeter.module.css";
 		if (typeof document !== "undefined" && document.querySelector("style[data-plugin-css=" + JSON.stringify(tagId$2) + "]") === null) {
 			const tag = document.createElement("style");
@@ -21551,6 +21614,7 @@ window.__ModuleLoader__.load({
 					side: "top",
 					delayMs: 200,
 					disabled: open,
+					portal: true,
 					children: (0, react_jsx_runtime.jsxs)("button", {
 						type: "button",
 						className: ContextMeter_module_css_default.trigger,
@@ -21674,7 +21738,7 @@ window.__ModuleLoader__.load({
 		}
 		//#endregion
 		//#region \0dsh-css:/Volumes/Development/LLM/dsh-plugin/vscode/dshui_for_vscode/.dsh-src/packages/client/ui-conversation/src/client/skeleton/InputBar.module.css.mjs
-		const css$1 = ".JSW9Oa_root{padding:0 var(--dsh-composer-side-clearance) 4px;flex-direction:column;align-items:center;display:flex}.JSW9Oa_dock{justify-content:center;align-items:center;gap:12px;max-width:100%;padding-top:4px;display:flex}.JSW9Oa_hero .JSW9Oa_dock:empty{display:none}.JSW9Oa_hero{padding:0 var(--dsh-composer-side-clearance)}.JSW9Oa_notice{width:100%;max-width:var(--dsh-composer-card-max-width);border-radius:var(--dsw-radius-md);background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-secondary);margin-bottom:6px;padding:4px 8px;font-size:12px;line-height:18px}.JSW9Oa_card{box-sizing:border-box;width:100%;max-width:var(--dsh-composer-card-max-width);--dsw-elevation-stroke-color:var(--dsw-alias-border-l2);border-radius:var(--dsw-radius-panel);background:var(--dsw-specific-input-major);box-shadow:var(--dsw-elevation-soft);font-size:var(--dsh-content-font-size,14px);line-height:calc(24px + var(--dsh-content-font-delta,0px));--dsh-scrollbar-thumb:var(--dsw-alias-scrollbar-bg-l2);--dsh-scrollbar-thumb-hover:var(--dsw-alias-scrollbar-hover-l2);border:0;flex-direction:column;gap:12px;padding-top:8px;display:flex;position:relative}@media (pointer:coarse){.JSW9Oa_card{font-size:max(16px, var(--dsh-content-font-size,14px))}}.JSW9Oa_cardWorkspaceTrigger{--dsw-elevation-stroke-color:transparent;cursor:pointer}.JSW9Oa_cardWorkspaceTrigger:after{content:\"\";box-sizing:border-box;border-radius:var(--dsw-radius-panel);color:var(--dsw-alias-border-l4);pointer-events:none;border:1px dashed;transition:color .1s;position:absolute;inset:0}.JSW9Oa_cardWorkspaceTrigger :disabled{pointer-events:none}@media (hover:hover){.JSW9Oa_cardWorkspaceTrigger:hover:after{color:var(--dsw-alias-state-business-primary)}}.JSW9Oa_accessory{align-items:center;gap:8px;padding:10px 12px 0;display:flex}.JSW9Oa_overlayAnchor{height:0;position:absolute;inset:0 0 auto}.JSW9Oa_scroll{max-height:var(--dsh-composer-text-max-height);margin-right:4px;overflow-y:auto}.JSW9Oa_scroll::-webkit-scrollbar-track{margin-top:8px}.JSW9Oa_grow{position:relative}.JSW9Oa_pending{corner-shape:round;background:var(--dsw-alias-state-business-primary);border-radius:50%;width:8px;height:8px;animation:1s ease-in-out infinite alternate JSW9Oa_input-pending}@keyframes JSW9Oa_input-pending{0%{opacity:.35}to{opacity:1}}.JSW9Oa_input{box-sizing:border-box;min-height:36px;font-family:var(--dsw-font-family);font-size:inherit;line-height:inherit;white-space:pre-wrap;word-break:break-word;overflow-wrap:anywhere;color:var(--dsw-alias-label-primary);caret-color:var(--dsw-alias-state-business-primary);outline:none;padding:4px 8px 0 14px}.JSW9Oa_input p{margin:0}.JSW9Oa_input p:last-child:after{content:var(--dsh-composer-hint);color:var(--dsw-alias-label-caption)}.JSW9Oa_input[data-composer-composing] p:last-child:after{content:none}.JSW9Oa_input[data-composer-chip-selected]{caret-color:#0000}.JSW9Oa_input[data-composer-composing]+.JSW9Oa_placeholder{visibility:hidden}.JSW9Oa_placeholder{color:var(--dsw-alias-label-caption);white-space:nowrap;text-overflow:ellipsis;pointer-events:none;user-select:none;position:absolute;inset:4px 8px auto 14px;overflow:hidden}.JSW9Oa_inputDisabled{color:var(--dsw-alias-label-tertiary);cursor:not-allowed}.JSW9Oa_input[aria-haspopup=menu]{cursor:pointer}.JSW9Oa_hero .JSW9Oa_input{min-height:52px}.JSW9Oa_hero .JSW9Oa_placeholder{white-space:normal;-webkit-line-clamp:2;line-clamp:2;-webkit-box-orient:vertical;display:-webkit-box}.JSW9Oa_row{flex-wrap:wrap;justify-content:space-between;align-items:center;gap:12px;min-width:0;padding:2px 8px 6px;display:flex;container-type:inline-size}.JSW9Oa_row[data-model-compact]{--dsh-composer-model-text-display:none;--dsh-composer-model-icon-display:block}.JSW9Oa_tools,.JSW9Oa_modes,.JSW9Oa_trailing{align-items:center;min-width:0;display:flex}.JSW9Oa_tools,.JSW9Oa_modes{gap:12px}.JSW9Oa_trailing{flex:none;gap:12px;margin-left:auto}@container (width<=560px){.JSW9Oa_tools,.JSW9Oa_modes,.JSW9Oa_trailing{gap:8px}}.JSW9Oa_add{corner-shape:round;background:var(--dsw-specific-selector);width:28px;height:28px;color:var(--dsw-alias-label-primary);cursor:pointer;border:none;border-radius:999px;flex:none;place-items:center;display:grid}@media (hover:hover){.JSW9Oa_add:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover-solid)}}.JSW9Oa_add:disabled{opacity:.5;cursor:default}.JSW9Oa_select{border-radius:var(--dsw-radius-sm);max-width:220px;height:28px;color:var(--dsw-alias-label-secondary);white-space:nowrap;cursor:pointer;appearance:none;background-color:#0000;background-image:url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12' fill='none'%3E%3Cpath d='M3 4.5L6 7.5L9 4.5' stroke='%2381858C' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E\");background-position:right 4px center;background-repeat:no-repeat;background-size:12px 12px;border:none;outline:none;padding:0 20px 0 8px;font-size:13px;font-weight:500;line-height:20px}@media (hover:hover){.JSW9Oa_select:hover:not(:disabled){background-color:var(--dsw-alias-interactive-bg-hover)}}.JSW9Oa_select:disabled{opacity:.5;cursor:default}.JSW9Oa_primary{corner-shape:round;background:var(--dsw-alias-button-info-fill);color:#fff;cursor:pointer;border:none;border-radius:999px;flex:none;place-items:center;width:34px;height:34px;transition:background-color .1s;display:grid;transform:translateY(-2px)}@media (hover:hover){.JSW9Oa_primary:hover:not(:disabled){background:var(--dsw-alias-button-info-hover)}}.JSW9Oa_primary:disabled{opacity:.4;cursor:default}.JSW9Oa_primary[data-sending]:disabled{opacity:1;cursor:progress}.JSW9Oa_sendingSpinner{animation:.8s linear infinite JSW9Oa_input-sending}@media (prefers-reduced-motion:reduce){.JSW9Oa_sendingSpinner{animation-duration:2.4s}}@keyframes JSW9Oa_input-sending{to{transform:rotate(360deg)}}.JSW9Oa_retry{border-radius:var(--dsw-radius-sm);color:inherit;cursor:pointer;background:0 0;border:1px solid;margin-left:8px;padding:1px 8px;font-size:12px}.JSW9Oa_standardControls{align-items:center;gap:12px;min-width:0;display:flex}.JSW9Oa_tools[hidden],.JSW9Oa_standardControls[hidden]{display:none}.JSW9Oa_trailingActive{flex:1;margin-left:0}.JSW9Oa_activity{flex:none;align-items:center;display:flex}.JSW9Oa_activity:empty{display:none}.JSW9Oa_activityExpanded{flex:1;min-width:0}";
+		const css$1 = ".JSW9Oa_root{padding:0 var(--dsh-composer-side-clearance) 4px;flex-direction:column;align-items:center;display:flex}.JSW9Oa_dock{justify-content:center;align-items:center;gap:12px;max-width:100%;padding-top:4px;display:flex}.JSW9Oa_root:not(.JSW9Oa_hero)>.JSW9Oa_dock{min-height:calc(22px + var(--dsh-content-font-delta-secondary,0px))}.JSW9Oa_hero .JSW9Oa_dock:empty{display:none}.JSW9Oa_hero{padding:0 var(--dsh-composer-side-clearance)}.JSW9Oa_notice{width:100%;max-width:var(--dsh-composer-card-max-width);border-radius:var(--dsw-radius-md);background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-secondary);margin-bottom:6px;padding:4px 8px;font-size:12px;line-height:18px}.JSW9Oa_card{box-sizing:border-box;width:100%;max-width:var(--dsh-composer-card-max-width);--dsw-elevation-stroke-color:var(--dsw-alias-border-l2);border-radius:var(--dsw-radius-panel);background:var(--dsw-specific-input-major);box-shadow:var(--dsw-elevation-soft);font-size:var(--dsh-content-font-size,14px);line-height:calc(24px + var(--dsh-content-font-delta,0px));--dsh-scrollbar-thumb:var(--dsw-alias-scrollbar-bg-l2);--dsh-scrollbar-thumb-hover:var(--dsw-alias-scrollbar-hover-l2);border:0;flex-direction:column;gap:12px;padding-top:8px;display:flex;position:relative}@media (pointer:coarse){.JSW9Oa_card{font-size:max(16px, var(--dsh-content-font-size,14px))}}.JSW9Oa_cardWorkspaceTrigger{--dsw-elevation-stroke-color:transparent;cursor:pointer}.JSW9Oa_cardWorkspaceTrigger:after{content:\"\";box-sizing:border-box;border-radius:var(--dsw-radius-panel);color:var(--dsw-alias-border-l4);pointer-events:none;border:1px dashed;transition:color .1s;position:absolute;inset:0}.JSW9Oa_cardWorkspaceTrigger :disabled{pointer-events:none}@media (hover:hover){.JSW9Oa_cardWorkspaceTrigger:hover:after{color:var(--dsw-alias-state-business-primary)}}.JSW9Oa_accessory{align-items:center;gap:8px;padding:10px 12px 0;display:flex}.JSW9Oa_overlayAnchor{height:0;position:absolute;inset:0 0 auto}.JSW9Oa_scroll{max-height:var(--dsh-composer-text-max-height);margin-right:4px;overflow-y:auto}.JSW9Oa_scroll::-webkit-scrollbar-track{margin-top:8px}.JSW9Oa_grow{position:relative}.JSW9Oa_pending{corner-shape:round;background:var(--dsw-alias-state-business-primary);border-radius:50%;width:8px;height:8px;animation:1s ease-in-out infinite alternate JSW9Oa_input-pending}@keyframes JSW9Oa_input-pending{0%{opacity:.35}to{opacity:1}}.JSW9Oa_input{box-sizing:border-box;min-height:36px;font-family:var(--dsw-font-family);font-size:inherit;line-height:inherit;white-space:pre-wrap;word-break:break-word;overflow-wrap:anywhere;color:var(--dsw-alias-label-primary);caret-color:var(--dsw-alias-state-business-primary);outline:none;padding:4px 8px 0 14px}.JSW9Oa_input p{margin:0}.JSW9Oa_input p:last-child:after{content:var(--dsh-composer-hint);color:var(--dsw-alias-label-caption)}.JSW9Oa_input[data-composer-composing] p:last-child:after{content:none}.JSW9Oa_input[data-composer-chip-selected]{caret-color:#0000}.JSW9Oa_input[data-composer-composing]+.JSW9Oa_placeholder{visibility:hidden}.JSW9Oa_placeholder{color:var(--dsw-alias-label-caption);white-space:nowrap;text-overflow:ellipsis;pointer-events:none;user-select:none;position:absolute;inset:4px 8px auto 14px;overflow:hidden}.JSW9Oa_inputDisabled{color:var(--dsw-alias-label-tertiary);cursor:not-allowed}.JSW9Oa_input[aria-haspopup=menu]{cursor:pointer}.JSW9Oa_hero .JSW9Oa_input{min-height:52px}.JSW9Oa_hero .JSW9Oa_placeholder{white-space:normal;-webkit-line-clamp:2;line-clamp:2;-webkit-box-orient:vertical;display:-webkit-box}.JSW9Oa_row{flex-wrap:wrap;justify-content:space-between;align-items:center;gap:12px;min-width:0;padding:2px 8px 6px;display:flex;container-type:inline-size}.JSW9Oa_row[data-model-compact]{--dsh-composer-model-text-display:none;--dsh-composer-model-icon-display:block}.JSW9Oa_tools,.JSW9Oa_modes,.JSW9Oa_trailing{align-items:center;min-width:0;display:flex}.JSW9Oa_tools,.JSW9Oa_modes{gap:12px}.JSW9Oa_trailing{flex:none;gap:12px;margin-left:auto}@container (width<=560px){.JSW9Oa_tools,.JSW9Oa_modes,.JSW9Oa_trailing{gap:8px}}.JSW9Oa_add{corner-shape:round;background:var(--dsw-specific-selector);width:28px;height:28px;color:var(--dsw-alias-label-primary);cursor:pointer;border:none;border-radius:999px;flex:none;place-items:center;display:grid}@media (hover:hover){.JSW9Oa_add:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover-solid)}}.JSW9Oa_add:disabled{opacity:.5;cursor:default}.JSW9Oa_select{border-radius:var(--dsw-radius-sm);max-width:220px;height:28px;color:var(--dsw-alias-label-secondary);white-space:nowrap;cursor:pointer;appearance:none;background-color:#0000;background-image:url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12' fill='none'%3E%3Cpath d='M3 4.5L6 7.5L9 4.5' stroke='%2381858C' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E\");background-position:right 4px center;background-repeat:no-repeat;background-size:12px 12px;border:none;outline:none;padding:0 20px 0 8px;font-size:13px;font-weight:500;line-height:20px}@media (hover:hover){.JSW9Oa_select:hover:not(:disabled){background-color:var(--dsw-alias-interactive-bg-hover)}}.JSW9Oa_select:disabled{opacity:.5;cursor:default}.JSW9Oa_primary{corner-shape:round;background:var(--dsw-alias-button-info-fill);color:#fff;cursor:pointer;border:none;border-radius:999px;flex:none;place-items:center;width:34px;height:34px;transition:background-color .1s;display:grid;transform:translateY(-2px)}@media (hover:hover){.JSW9Oa_primary:hover:not(:disabled){background:var(--dsw-alias-button-info-hover)}}.JSW9Oa_primary:disabled{opacity:.4;cursor:default}.JSW9Oa_primary[data-sending]:disabled{opacity:1;cursor:progress}.JSW9Oa_sendingSpinner{animation:.8s linear infinite JSW9Oa_input-sending}@media (prefers-reduced-motion:reduce){.JSW9Oa_sendingSpinner{animation-duration:2.4s}}@keyframes JSW9Oa_input-sending{to{transform:rotate(360deg)}}.JSW9Oa_retry{border-radius:var(--dsw-radius-sm);color:inherit;cursor:pointer;background:0 0;border:1px solid;margin-left:8px;padding:1px 8px;font-size:12px}.JSW9Oa_standardControls{align-items:center;gap:12px;min-width:0;display:flex}.JSW9Oa_tools[hidden],.JSW9Oa_standardControls[hidden]{display:none}.JSW9Oa_trailingActive{flex:1;margin-left:0}.JSW9Oa_activity{flex:none;align-items:center;display:flex}.JSW9Oa_activity:empty{display:none}.JSW9Oa_activityExpanded{flex:1;min-width:0}";
 		const tagId$1 = "dshui-client-ui-conversation/InputBar.module.css";
 		if (typeof document !== "undefined" && document.querySelector("style[data-plugin-css=" + JSON.stringify(tagId$1) + "]") === null) {
 			const tag = document.createElement("style");
@@ -22050,6 +22114,7 @@ window.__ModuleLoader__.load({
 											label: t("input.commands"),
 											side: "top",
 											delayMs: 500,
+											portal: true,
 											children: (0, react_jsx_runtime.jsx)("button", {
 												type: "button",
 												className: InputBar_module_css_default.add,
@@ -22097,6 +22162,7 @@ window.__ModuleLoader__.load({
 											side: "top",
 											delayMs: 500,
 											disabled: stopAction === void 0,
+											portal: true,
 											children: (0, react_jsx_runtime.jsx)("button", {
 												type: "button",
 												className: InputBar_module_css_default.primary,
@@ -22126,6 +22192,7 @@ window.__ModuleLoader__.load({
 											side: "top",
 											delayMs: 500,
 											disabled: primaryDisabled,
+											portal: true,
 											children: (0, react_jsx_runtime.jsx)("button", {
 												type: "button",
 												className: InputBar_module_css_default.primary,

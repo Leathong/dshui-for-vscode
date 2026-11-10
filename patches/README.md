@@ -3,7 +3,7 @@
 > 中文 · [English](README.en.md)
 
 `dshui-bundles.patch` 是对 [deepseek-harness](https://github.com/deepseek-ai/deepseek-harness) 源码的
-dshui 改动（60 个文件、约 210 KB，含客户端 bundle + host 运行时两大部分，基提交为 dsh `0.2.2-alpha.2`）。
+dshui 改动（60 个文件、约 210 KB，含客户端 bundle + host 运行时两大部分，基提交为 dsh `0.2.2-rc.1`）。
 客户端与 host 必须**对齐**到同一基提交并一起套用，因此合并为单个补丁——套一半都是不完整的。
 
 ## 客户端 bundle（浏览器 SPA）
@@ -13,10 +13,10 @@ dshui 改动（60 个文件、约 210 KB，含客户端 bundle + host 运行时�
   （`scopedWorkspacePath` / `useDeletedSessions` 接线、会话删除行隐藏）、
   `contract/slots.ts`（`DeleteSessionInjected` 与 `deletedSessions` 可观察量）、`index.ts`
   （dshui 的 deleted-sessions snapshot store + `deleteSession`：经 webview 外壳请求扩展宿主
-  删除会话日志，并把 id 记入本地隐藏集）、`session-actions/DeleteSession.tsx`（0.1.7 起上游把会话
-  行操作改为 slot 目录：本文件把「删除会话」注册进 `sidebar.workspaces.session.menu.item`（order
-  460，排在 rc.2 新增的「复制 Session ID」450 之后）与 `sidebar.workspaces.session.row.action`（order 300），
-  与上游的 archive/pin 并存）、
+  删除会话日志，并把 id 记入本地隐藏集）、`session-actions/DeleteSession.tsx`（rc.1 起上游把内置
+  会话菜单项改为结构化 `ctx.contextMenus` 条目、只把 `sidebar.workspaces.session.menu.item` 留给外部
+  React 条目：本文件把「删除会话」注册进该 legacy 槽（order 460，排在结构化「复制 Session ID」450 之后）
+  与 `sidebar.workspaces.session.row.action`（order 300），与上游的 archive/pin 并存）、
   `locales.ts`（新增 `menu.deleteSession` / `actions.delete`）、
   `tsdown.config.ts`（bundle id 改为 `dshui-client-ui-workspace`）；
 - `ui-conversation`：`apply.ts`（共享后端第二个窗口再入会话时 `conversation` 服务可能读到
@@ -131,16 +131,16 @@ RPC；上游 0.1.7 新增的归档/置顶行操作保留并存）、每条用户
 
 ## 应用（必须锁定基提交）
 
-补丁针对的基提交（**固定，不能漂移**）——dsh `0.2.2-alpha.2` 的发布合并提交（tag `dsh-v0.2.2-alpha.2`）：
+补丁针对的基提交（**固定，不能漂移**）——dsh `0.2.2-rc.1` 的发布合并提交（tag `dsh-v0.2.2-rc.1`）：
 
 ```
-f3803c96974ad4a94195fb97e5c637e9c2a3afe3
+66491b05e3f05ad35bcdd4f6cd7ed26041d9e3db
 ```
 
 ```sh
 git clone https://github.com/deepseek-ai/deepseek-harness.git .dsh-src
 cd .dsh-src
-git fetch origin f3803c96974ad4a94195fb97e5c637e9c2a3afe3 && git checkout FETCH_HEAD
+git fetch origin 66491b05e3f05ad35bcdd4f6cd7ed26041d9e3db && git checkout FETCH_HEAD
 git apply --3way ../patches/dshui-bundles.patch     # 基提交不匹配会安全失败
 pnpm install                                        # 需要 pnpm 11.7.0、Node ^22.19 || >=24
 pnpm run clean                                      # 升级换基时必须清掉上一版的 lib/ 与 tsbuildinfo
@@ -155,7 +155,7 @@ npm run compile
 ```
 
 > 换基（上游版本跃迁）时用 `git apply --3way`：三方合并会把真正冲突的 hunk 标出来。
-> 0.2.1-rc.3 → 0.2.2-alpha.2 那次上游改了 7251 个文件，与本补丁相交 38 个；13 个文件需要手工对齐，
+> 0.2.2-alpha.2 → 0.2.2-rc.1 那次上游改了 2315 个文件，与本补丁相交 20 个；7 个文件需要手工对齐，
 > 其余干净套用，`slot-catalog.ts` 随后由 `pnpm run gen-client-catalog` 重新生成（详见下方重基记录）。
 
 ### 重新导出补丁
@@ -171,7 +171,7 @@ git -C .dsh-src diff --binary <基提交> > patches/dshui-bundles.patch
   `cannot apply binary patch ... without full index line` 并**整体拒绝**该补丁。dshui 自身的改动
   目前全是文本，但只要基提交里含二进制新增就会踩中，所以一律带 `--binary`。
 - **基提交必须跟着换**：`DSH_BASE`（Makefile）与本文档的 SHA 必须等于导出时用的那个提交。用旧基提交
-  导出的补丁会把「旧基提交 → 新版」的全部上游差异一起装进去（rc.1 基提交导出时是 3447 文件 / 15.2 MB），
+  导出的补丁会把「旧基提交 → 新版」的全部上游差异一起装进去（曾导出过 3447 文件 / 15.2 MB），
   补丁随即变得不可用；正常应稳定在 60 个文件 / 约 210 KB。
 - **导出别用 `cd` 写法**：`make dsh-gen-patch` 用 `git -C $(DSH_SRC)` 加绝对输出路径。此前写成
   花括号组内 `cd $(DSH_SRC) && git diff … > "../patches/…"`，一旦 `cd` 失败，重定向会先把 patch
@@ -187,47 +187,35 @@ git -C .dsh-src diff --binary <基提交> > patches/dshui-bundles.patch
 一节的清单逐个重套（改动都很小，按文件内注释即可）。dsh 是 MIT 协议，本补丁与其产物可自由
 修改/分发，保留上游版权声明即可。
 
-## 0.2.1-rc.3 → 0.2.2-alpha.2 重基记录
+## 0.2.2-alpha.2 → 0.2.2-rc.1 重基记录
 
-上游 2170 个提交、7251 个文件。主要变化：Liveshare 宿主/查看器/客户端三面（#6749）、模型选择器
-按官方 `/models` 列表显示徽标（#7027）、会话运行时投影读取统一（#7347）、session-controller
-拆成 `HistoryController` / `StateController` / `WebController` 并新增 `events` / `state` /
-`wait` 等 remote、聊天用户消息新增「来源座位」（`conversation.chat.user.before`）、
-客户端新增日/西/法/德/俄/葡六套词表、vendor 升到 cordis 4.0.6-alpha.1 等。
+上游 466 个提交、2315 个文件。主要变化：schedule 任务创建与编辑统一（`TaskDetail` / TaskEditor 重写）、
+forge 评审与 worktree 入口合并、设置页支持插件自定义导航图标、CUA 原生权限引导、
+`apply_patch` 默认开启并下线 observation policy、vendor 升到 cordis 4.1.0 等。
 
-与本补丁相交的 38 个文件里，13 个需要手工对齐（其余干净套用）：
+与本补丁相交的 20 个文件里，7 个需要手工对齐：
 
 | 文件 | 上游改动 | 处理 |
 |---|---|---|
-| `api/session-controller/src/index.ts` | 控制器拆分为 history/state/web，service 延迟到 `Service.init` | 取上游结构；`openPath` 字段与 `SessionControllerInternals` 保留 dshui 的 `internals?: PathOpenerInternals` 第三参，`openWorkspacePath` 继续透传 `dshuiOrigin` / `dshuiLine` |
-| `api/session-controller/tests/session-fork.host.spec.ts` | `createSessionTestRemote` 改为异步，新增 `loopComposed` | 保留 dshui 的「fork 子会话 inbox 为空」用例，调用点补 `await` |
-| `client/tsdown.client.ts` | `clientConfig` 增加 `packageDir` 参数（资源 URL 归属） | 合并 `packageDir` 与 dshui 的 `pluginId` 选项 |
-| `ui-chat/src/client/apply.ts` | `openFile` 改为按会话工作目录解析后开右侧预览 | 取 dshui 版本（`openWorkspacePath` + 点击来源/行号）；删掉不再使用的 `fileAddressFor` / `resolveWorkspacePath` 导入 |
-| `ui-chat/src/client/chat/MessageItem.tsx` | `UserStyleBubble` 增加消息来源链座位（`renderSlotChain`），user/steering 共用同一渲染器 | 保留 dshui 的 user/steering 拆分与 `user-actions` 操作条：`UserStyleNodeView` 同时接收两个座位，user 渲染器声明两者，steering 传空实现 |
-| `ui-chat/src/client/chat/register-node-renderers.ts` | user 行声明 `conversation.chat.user.before`（chain） | user 行同时声明 `user.before` 与 `user-actions`；steering 继续用无座位的 `SteeringMessageNodeView` |
-| `ui-chat/tests/chat-*.client.spec.tsx` | 夹具改为同一渲染器 + chain 座位 | 夹具合并两个座位，steering 改用 `SteeringMessageNodeView` |
-| `ui-conversation/src/client/apply.ts` | `rebindDraftFiles` / `createDrafts` 增加 `ordinary` 参数 | 保留 dshui 的 `concreteConversation` 可空与 composer 无态降级，同时传入 `ordinary` |
-| `ui-workspace/src/client/navigation.ts` | 新增 `restorationNavigation` 中止守卫 | 与 dshui 的「清掉归档选中后重置 waiting」和「boot scope 行到货前不 settle」合并 |
-| `ui-workspace/src/client/rows/Rows.tsx` | 空白行注释改写 | 取上游注释（行为一致） |
-| `ui-workspace/src/client/rows/WorkspaceBrowser.tsx` | `FlatList` 新增 `home` prop | 与 dshui 的 `scope` / `deletedSessionIds` 合并 |
-| `extensions/cordis-client-runner/src/client/slot-catalog.ts` | 生成物 | 由 `pnpm run gen-client-catalog` 重新生成（含 dshui 的 `conversation.chat.user-actions` 条目） |
+| `ui-workspace/src/client/index.ts` | 内置会话菜单项改为结构化 `ctx.contextMenus` 条目（`registerSessionMenus`），`SessionMenu` 只承载外部 legacy 槽 | 取上游结构；dshui 的 deleted-sessions store / `deleteInjected` 保留，「删除会话」继续注册进 `sidebar.workspaces.session.menu.item`（order 460） |
+| `ui-workspace/src/client/rows/WorkspaceBrowser.tsx` | `FlatList` 改收 `openSessionMenu` / `useContextMenuTarget` / `useContextMenu`，`home` 下移 | 与 dshui 的 `scope` / `deletedSessionIds` 合并，两边的 prop 都保留 |
+| `ui-workspace/tests/apply.client.spec.ts` | 内置菜单项不再是槽条目 | 断言改为「菜单槽只有 dshui 的 1 条 delete、行操作 3 条」 |
+| `ui-workspace/tests/rename-assembly.client.spec.tsx` | 菜单顺序为结构化条目 → legacy 槽 → afterContent 归档 | 期望顺序改为 pin / rename / fork / copy-id / delete / export / last / archive |
+| `ui-chat/src/client/apply.ts` | 删除 `fileMentions` 注入，新增 `resolveFilePath` | 保留 dshui 的 `openWorkspacePath` openFile 与 `resolveFilePath`，去掉 `fileMentions` |
+| `ui-chat/tests/apply-inject.client.spec.tsx` | 新增 `resolveFilePath` 断言 | 与 dshui 的 `openWorkspacePath` 断言并存 |
+| `extensions/cordis-client-runner/src/client/slot-catalog.ts` | 生成物 | 由 `pnpm run gen-client-catalog` 重新生成（含 `conversation.chat.user-actions`） |
 
-三方合并后仍需手工适配的三处（都是上游新增测试/词表，构建期才暴露）：
+其余相交文件（session-controller 的 `index.ts` / `types.ts`、ui-chat 与 ui-workspace 的
+`contract/slots.ts`、`register-node-renderers.ts`、`ui-conversation/apply.ts`、
+`ConversationRoot.module.css`、`Rows.tsx`、`tsdown.client.ts` 及配套测试）干净套用。
 
-- `api/session-controller/tests/session-open-workspace-path.host.spec.ts`：`createSessionTestRemote`
-  返回 Promise，dshui 新增用例的调用点补 `await`。
-- `ui-chat/tests/user-origin-slot.client.spec.tsx`（上游新增）按 dshui 的 user/steering 拆分改写：
-  steering 用 `SteeringMessageNodeView`，user 行补 `renderSlot` 桩。
-- `ui-workspace/src/client/locales.ts`：新增的 ja/es/fr/de/ru/pt 六套词表补齐
-  `menu.deleteSession` / `actions.delete`（类型按 en 的键集校验，缺键即构建失败）。
-
-宿主侧其余补丁（`path-opener.ts`、`browser-auth.ts`、`settings-controller`、`mcp-client`、
+宿主侧补丁（`path-opener.ts`、`browser-auth.ts`、`settings-controller`、`mcp-client`、
 `session-controller` 的 commands/types）上游未动，按「应用」一节的顺序重跑构建即可。
 
 ### 覆盖层下必然为红的上游用例（不是回归）
 
-`pnpm run test:gui`（`vitest run packages/client packages/host`，700 个文件 / 12104 个用例）在套用本补丁后
-固定有 3 个文件（3 个用例）失败，其余 696 个文件通过（另 1 个跳过）。它们都是**覆盖层有意改变上游行为**的
+`pnpm run test:gui`（`vitest run packages/client packages/host`，729 个文件 / 12545 个用例）在套用本补丁后
+固定有 3 个文件（3 个用例）失败，其余 725 个文件通过（另 1 个跳过）。它们都是**覆盖层有意改变上游行为**的
 必然结果，重基时不要当成回归去追：
 
 | 用例 | 原因 |
@@ -244,9 +232,12 @@ git -C .dsh-src diff --binary <基提交> > patches/dshui-bundles.patch
   5s 超时。用 `env -u DSHUI_OPEN_ENDPOINT -u DSHUI_BRIDGES_FILE -u DSHUI_CODE_CLI` 复跑即 60/60 通过。
 - 客户端的用例走源码平面（tsconfig paths），但 `client-bundle` 一类用例读的是 `lib/client.js` 产物，
   必须先在 `.dsh-src` 跑过 `pnpm run build:lib:client` 才有意义。
-- **满负载并行时会有一批 5s 超时假红**：需要起真实 HTTP 服务、子进程或打包的用例在 700 个文件同时跑时
+- **满负载并行时会有一批 5s 超时假红**：需要起真实 HTTP 服务、子进程或打包的用例在 700+ 个文件同时跑时
   撞默认 5s 超时——本次是 `connection/tests/binary-rpc.host.spec.ts`、
   `ui-deliverables/tests/review-tab.client.spec.tsx`、`ui-settings-general/tests/apply.client.spec.ts`、
   `ui-sidebar-documentpreview/tests/document-preview-license-bundle.client.spec.ts`、
   `ui-theme/tests/app-region-styles.client.spec.ts`；这 5 个文件单独跑 72/72 全过，不是回归。
+- **终端用例在文件沙箱里必然失败**：`packages/api/terminal-controller/tests/controller.spec.ts` 的
+  `runs a real interactive shell…` 需要 `posix_openpt`，被沙箱拒绝时报
+  `posix_openpt failed: Operation not permitted`；这是环境限制，不是回归，非沙箱环境跑即可。
 

@@ -563,8 +563,8 @@ workflow below.
 
 The extension binds three dsh versions together, and all must be aligned on upgrade:
 
-1. **CLI runtime:** `dependencies["@deepseek-ai/dsh"]` in `package.json` (currently `0.2.2-alpha.2`).
-2. **Client bundle source:** the `.dsh-src` checkout (currently `dsh-v0.2.2-alpha.2` with the dshui
+1. **CLI runtime:** `dependencies["@deepseek-ai/dsh"]` in `package.json` (currently `0.2.2-rc.1`).
+2. **Client bundle source:** the `.dsh-src` checkout (currently `dsh-v0.2.2-rc.1` with the dshui
    client patch re-applied — since 0.1.2 the session/chat clients were restructured, so re-apply the
    patch to the new structure per `scripts/verify-patches.mjs`; since the repo's master may lag behind
    the npm release, align by checking each package's version in its `package.json` and confirm with
@@ -683,13 +683,13 @@ Other drift-prone spots to check after every upgrade:
   (`git apply` errors) — just rewrite it for the new source; when the bridge is unavailable the opener
   automatically falls back to `vscode://file`.
 - **Re-exporting the patch requires `--binary`, and the base commit must move with it:** the patch is
-  pinned to dsh `0.2.2-alpha.2` (`f3803c96…`, see `patches/README.md` and Makefile's `DSH_BASE`) and is
+  pinned to dsh `0.2.2-rc.1` (`66491b05…`, see `patches/README.md` and Makefile's `DSH_BASE`) and is
   exported with `git -C .dsh-src diff --binary <base commit> > patches/dshui-bundles.patch` (`make
   dsh-gen-patch` already does this). Both halves have bitten us: without `--binary`, `git diff` writes
   only a `Binary files ... differ` placeholder (no content) for the PNG/ICO assets the base snapshot
   adds, and `git apply` then reports `cannot apply binary patch ... without full index line` and
-  rejects the whole patch; exporting against a stale base swallows the entire upstream delta (the
-  rc.1-based export came out as 3447 files / 15.2 MB, where the correct size is 60 files / ~210 KB).
+  rejects the whole patch; exporting against a stale base swallows the entire upstream delta (it
+  once came out as 3447 files / 15.2 MB, where the correct size is 60 files / ~210 KB).
 - **A dsh version bump needs `make deploy`, not just `make sync`:** `make sync` only copies `out/`,
   `dshui-plugins/`, `patch.yml`, and `package.json` — it **does not touch
   `node_modules/@deepseek-ai`**. With the old host closure in place the new client bundles fail to

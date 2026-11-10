@@ -4,11 +4,22 @@ window.__ModuleLoader__.load({
 		var module = { exports: {} };
 		var exports = module.exports;
 		Object.defineProperty(exports, Symbol.toStringTag, { value: "Module" });
-		let _deepseek_ai_dsh_client_store = require("@deepseek-ai/dsh-client-store");
 		let _deepseek_ai_dsh_client_ui_primitives = require("@deepseek-ai/dsh-client-ui-primitives");
+		let react = require("react");
+		let _deepseek_ai_dsh_client_store = require("@deepseek-ai/dsh-client-store");
 		let _deepseek_ai_cordis = require("@deepseek-ai/cordis");
 		let react_jsx_runtime = require("react/jsx-runtime");
-		let react = require("react");
+		//#region lib/types/client/session-actions/SessionMenu.js
+		/** Legacy external Session contributions shared by the row, header, and More trigger. */
+		/** @param props - captured Session and the existing extension position. @returns legacy component contributions. */
+		function SessionMenu({ target, dismiss, renderSlot }) {
+			const hookContext = (0, react.useMemo)(() => [true, (open) => {
+				if (!open) dismiss();
+			}], [dismiss]);
+			if (target.kind !== "session") return null;
+			return renderSlot("sidebar.workspaces.session.menu.item", target.value, { hookContext });
+		}
+		//#endregion
 		//#region lib/types/client/contract/slots.js
 		/**
 		* Bind the row's render occurrence into the entries' `useMenuOpenState` hook:
@@ -77,7 +88,7 @@ window.__ModuleLoader__.load({
 		}
 		/**
 		* Register navigation commands against the existing workspace owner.
-		* Rename requires a nonblank main Conversation with no modal obscuring it.
+		* Rename requires a nonblank main Conversation with no modal other than the navigation drawer obscuring it.
 		* @param ctx - plugin context with the shortcut, locale, and model services.
 		* @param navigation - session creation and forking from the pointer controls' navigation service.
 		* @param controls - browser-owned opening requests.
@@ -116,7 +127,7 @@ window.__ModuleLoader__.load({
 						}
 					},
 					regions: ["page", "editable"],
-					modals: [],
+					modals: ["sidebar"],
 					resolve
 				}), `ui-workspace: ${id}`);
 			};
@@ -142,7 +153,7 @@ window.__ModuleLoader__.load({
 			});
 			register("session.rename", () => t("rename.session.title"), ["rename session"], "KeyG", ["primary", "alt"], ["primary", "alt"], (context) => {
 				const target = current();
-				return target === void 0 || target.blank || context.modal !== null || ctx.layout.panelInfo.getSnapshot().activePanelId !== null ? {
+				return target === void 0 || target.blank || context.modal !== null && context.modal !== "sidebar" || ctx.layout.panelInfo.getSnapshot().activePanelId !== null ? {
 					status: "blocked",
 					reason: t("shortcut.noSession")
 				} : {
@@ -1778,6 +1789,210 @@ window.__ModuleLoader__.load({
 			for (var e, t, f = 0, n = "", o = arguments.length; f < o; f++) (e = arguments[f]) && (t = r(e)) && (n && (n += " "), n += t);
 			return n;
 		}
+		//#endregion
+		//#region \0dsh-css:/Volumes/Development/LLM/dsh-plugin/vscode/dshui_for_vscode/.dsh-src/packages/client/ui-workspace/src/client/rows/WorkspaceBrowser.module.css.mjs
+		const css$2 = "._3IzFYa_root{--dsh-session-list-edge-inset:var(--dsh-sidebar-inline-padding);--dsh-session-list-scrollbar-width:5px;--dsh-session-list-scrollbar-offset:2px;box-sizing:border-box;min-height:0;padding-right:var(--dsh-session-list-edge-inset);flex-direction:column;flex:1;display:flex}._3IzFYa_root._3IzFYa_rail{padding-right:0}._3IzFYa_iconButton{border-radius:var(--dsw-radius-sm);cursor:pointer;width:28px;height:28px;color:var(--dsw-alias-label-secondary);background:0 0;border:none;flex:none;justify-content:center;align-items:center;padding:0;display:inline-flex}._3IzFYa_iconButton:focus-visible,._3IzFYa_searchButton:focus-visible,._3IzFYa_clearButton:focus-visible{outline:var(--dsw-focus-ring-width) solid var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary));outline-offset:-2px}@media (hover:hover){._3IzFYa_iconButton:hover{background:var(--dsw-alias-interactive-bg-hover)}}._3IzFYa_viewOptionsMenu{min-width:200px}._3IzFYa_sectionHeader{height:36px;padding-left:var(--dsh-sidebar-row-padding);box-sizing:border-box;border-radius:var(--dsw-radius-md);color:var(--dsw-alias-label-tertiary);flex:none;justify-content:flex-end;align-items:center;gap:4px;margin-bottom:4px;display:flex;overflow:hidden}._3IzFYa_root:not(._3IzFYa_rail) ._3IzFYa_sectionHeader{margin-top:2px;margin-right:-4px}._3IzFYa_root:not(._3IzFYa_rail) ._3IzFYa_sectionHeader._3IzFYa_searchSpacingMotion{transition:margin-right .18s var(--ds-ease-in-out), padding-inline .18s var(--ds-ease-in-out), gap .18s var(--ds-ease-in-out)}._3IzFYa_root:not(._3IzFYa_rail) ._3IzFYa_sectionHeader:not(:has(._3IzFYa_searchExpanded)){padding-right:1px}._3IzFYa_sectionLabel{white-space:nowrap;opacity:1;visibility:visible;min-width:0;max-width:45%;transition:max-width .18s var(--ds-ease-in-out), margin-right .18s var(--ds-ease-in-out), opacity .12s var(--ds-ease-in-out), transform .18s var(--ds-ease-in-out), visibility 0s linear;flex:none;line-height:20px;position:relative;left:-1px;overflow:hidden}._3IzFYa_sectionLabelHidden{opacity:0;visibility:hidden;max-width:0;margin-right:-4px;transition-delay:0s,0s,0s,0s,.18s;transform:translate(-4px)}._3IzFYa_searchSlot{box-sizing:border-box;min-width:0;max-width:28px;transition:max-width .18s var(--ds-ease-in-out), padding-left .18s var(--ds-ease-in-out);flex:1;align-items:center;margin-left:auto;padding-left:0;display:flex}._3IzFYa_searchSlotExpanded{max-width:100%;padding-left:0}._3IzFYa_headerActions{opacity:1;visibility:visible;max-width:60px;transition:max-width .18s var(--ds-ease-in-out), opacity .12s var(--ds-ease-in-out), transform .18s var(--ds-ease-in-out), visibility 0s linear;flex:none;align-items:center;gap:4px;display:flex;overflow:hidden}._3IzFYa_headerActionsHidden{opacity:0;visibility:hidden;pointer-events:none;max-width:0;transition-delay:0s,0s,0s,.18s;transform:translate(4px)}._3IzFYa_search{box-sizing:border-box;border-radius:var(--dsw-radius-sm);cursor:text;width:100%;height:28px;color:var(--dsw-alias-label-secondary);transition:width .18s var(--ds-ease-in-out), padding .18s var(--ds-ease-in-out), border-color .18s var(--ds-ease-in-out), background-color .18s var(--ds-ease-in-out);background:0 0;border:none;flex:none;align-items:center;gap:0;margin:0;padding:0;display:flex;overflow:hidden}._3IzFYa_root:not(._3IzFYa_rail) ._3IzFYa_sectionHeader:has(._3IzFYa_searchExpanded){padding-inline:calc(var(--dsh-sidebar-paint-inset) + 1px);gap:0;margin-right:0}._3IzFYa_sectionHeader:has(._3IzFYa_searchExpanded) ._3IzFYa_sectionLabelHidden{margin-right:0}._3IzFYa_searchExpanded{border:.5px solid var(--dsw-alias-border-l4);border-radius:var(--dsw-radius-md);width:100%;height:32px;color:var(--dsw-alias-label-caption);background:0 0;margin-inline:0;padding:0 4px 0 0}._3IzFYa_searchButton{border-radius:var(--dsw-radius-sm);cursor:pointer;width:28px;height:28px;color:inherit;background:0 0;border:none;flex:none;justify-content:center;align-items:center;padding:0;display:inline-flex}._3IzFYa_searchExpanded ._3IzFYa_searchButton{width:28px;height:32px}@media (hover:hover){._3IzFYa_searchButton:hover{background:var(--dsw-alias-interactive-bg-hover)}._3IzFYa_searchExpanded ._3IzFYa_searchButton:hover{background:0 0}}._3IzFYa_searchInput{opacity:0;pointer-events:none;width:0;min-width:0;color:var(--dsw-alias-label-primary);transition:opacity .12s var(--ds-ease-in-out);background:0 0;border:none;outline:none;flex:1;font-size:13px;line-height:18px}._3IzFYa_searchExpanded ._3IzFYa_searchInput{opacity:1;pointer-events:auto;margin-left:-2px}._3IzFYa_searchInput::placeholder{color:var(--dsw-alias-label-tertiary)}._3IzFYa_clearButton{border-radius:var(--dsw-radius-sm);cursor:pointer;width:24px;height:24px;color:var(--dsw-alias-label-secondary);background:0 0;border:none;flex:none;justify-content:center;align-items:center;padding:0;display:inline-flex}@media (hover:hover){._3IzFYa_clearButton:hover{background:var(--dsw-alias-interactive-bg-hover)}}._3IzFYa_rail ._3IzFYa_sectionHeader{justify-content:flex-start;gap:0;margin-bottom:12px;padding-left:0}._3IzFYa_rail ._3IzFYa_headerActions{max-width:none}._3IzFYa_rail ._3IzFYa_iconButton{border-radius:var(--dsw-radius-md);width:36px;height:36px;color:var(--dsw-alias-label-primary)}._3IzFYa_rail ._3IzFYa_search{border-radius:var(--dsw-radius-md);background:0 0;border-color:#0000;gap:0;width:36px;height:36px;margin:0 0 12px;padding:0}._3IzFYa_rail ._3IzFYa_searchButton{border-radius:var(--dsw-radius-md);width:36px;height:36px;color:var(--dsw-alias-label-primary)}@media (hover:hover){._3IzFYa_rail ._3IzFYa_searchButton:hover{background:var(--dsw-alias-interactive-bg-hover)}}._3IzFYa_listArea{min-height:0;margin-left:-4px;margin-right:calc(-1 * var(--dsh-session-list-edge-inset));flex-direction:column;flex:1;padding-left:4px;display:flex;overflow:visible}._3IzFYa_rail ._3IzFYa_listArea{margin-left:0;margin-right:0;padding-left:0}._3IzFYa_treeBody{flex-direction:column;flex:1;min-height:0;display:flex;position:relative}._3IzFYa_fade{left:0;right:var(--dsh-session-list-edge-inset);background:linear-gradient(to bottom, transparent, var(--dsw-specific-sidebar-fill));pointer-events:none;height:24px;position:absolute;bottom:0}[data-platform=darwin] ._3IzFYa_fade{display:none}._3IzFYa_wide{animation:_3IzFYa_wide-in .2s var(--ds-ease-in-out)}@keyframes _3IzFYa_wide-in{0%{opacity:0}}._3IzFYa_list{min-height:0;margin-left:-4px;margin-right:var(--dsh-session-list-scrollbar-offset);padding-left:4px;padding-right:calc(var(--dsh-session-list-edge-inset) - var(--dsh-session-list-scrollbar-width) - var(--dsh-session-list-scrollbar-offset));scrollbar-gutter:stable;flex:1;padding-bottom:16px;overflow-y:auto}._3IzFYa_flatList>*+*,._3IzFYa_searchTree>[role=treeitem]+[role=treeitem],._3IzFYa_groupSection>*+*{margin-top:2px}._3IzFYa_searchStatus{color:var(--dsw-alias-label-tertiary);padding:10px 12px;font-size:12px;line-height:18px}._3IzFYa_skeletonRow{align-items:flex-start;gap:var(--dsh-sidebar-label-gap);box-sizing:border-box;min-height:48px;padding:6px var(--dsh-sidebar-row-padding) 7px;display:flex}._3IzFYa_skeletonDot{corner-shape:round;border-radius:50%;flex:none;width:16px;height:16px}._3IzFYa_skeletonBars{flex-direction:column;flex:1;gap:6px;min-width:0;display:flex}._3IzFYa_skeletonDot,._3IzFYa_skeletonBar{background:var(--dsw-alias-bg-skeleton);animation:2s cubic-bezier(.36,0,.64,1) infinite _3IzFYa_search-skeleton}._3IzFYa_skeletonBar{border-radius:var(--dsw-radius-xs);width:65%;height:16px}._3IzFYa_skeletonBarWide{width:90%;height:13px}@keyframes _3IzFYa_search-skeleton{0%{opacity:1}40%{opacity:.6}80%,to{opacity:1}}._3IzFYa_groupSection{position:relative}._3IzFYa_groupSection+._3IzFYa_groupSection{margin-top:4px}._3IzFYa_listTopDropIndicator,._3IzFYa_workspaceDropBefore:before,._3IzFYa_workspaceDropAfter:after{content:\"\";z-index:1;background:linear-gradient(55deg, transparent calc(50% - 1px), var(--dsw-alias-state-business-primary) calc(50% - 1px) calc(50% + 1px), transparent calc(50% + 1px)) 0 0 / 5px 7px no-repeat, linear-gradient(125deg, transparent calc(50% - 1px), var(--dsw-alias-state-business-primary) calc(50% - 1px) calc(50% + 1px), transparent calc(50% + 1px)) 0 5px / 5px 7px no-repeat, linear-gradient(var(--dsw-alias-state-business-primary) 0 0) 4px 5px / calc(100% - 4px) 2px no-repeat;pointer-events:none;height:12px;position:absolute;left:0;right:0}._3IzFYa_listTopDropIndicator{top:-8px;left:0;right:var(--dsh-session-list-edge-inset)}._3IzFYa_listTopDropActive>._3IzFYa_workspaceDropBefore:first-child:before{display:none}._3IzFYa_workspaceDropBefore:before{top:-8px}._3IzFYa_workspaceDropAfter:after{bottom:-8px}._3IzFYa_sessionOverflowButton{border-radius:var(--dsw-radius-sm);width:100%;height:28px;padding:0 var(--dsh-sidebar-row-padding) 0 calc(var(--dsh-sidebar-row-padding) + 16px + var(--dsh-sidebar-label-gap) + var(--dsh-workspace-indent,0px));cursor:pointer;text-align:left;color:var(--dsw-alias-label-tertiary);background:0 0;border:none;font-size:12px}._3IzFYa_groupSection>._3IzFYa_sessionOverflowButton{margin-top:0}@media (hover:hover){._3IzFYa_sessionOverflowButton:hover{color:var(--dsw-alias-label-secondary);background:0 0}}._3IzFYa_empty{color:var(--dsw-alias-label-tertiary);padding:16px 12px;font-size:13px}._3IzFYa_emptyState{color:var(--dsw-alias-label-tertiary);flex-direction:column;align-items:center;gap:8px;margin-top:80px;padding:0 12px;font-size:13px;line-height:20px;display:flex}._3IzFYa_emptyState>svg{color:var(--dsw-alias-label-caption);margin-bottom:4px}._3IzFYa_emptyAction{cursor:pointer;color:var(--dsw-alias-link);background:0 0;border:none;padding:0;font-size:13px;line-height:20px}._3IzFYa_renameInput{box-sizing:border-box;border:.5px solid var(--dsw-alias-border-l4);border-radius:var(--dsw-radius-lg);width:100%;height:44px;color:var(--dsw-alias-label-primary);background:0 0;outline:none;padding:7px 14px;font-size:14px;font-weight:400;line-height:22px}._3IzFYa_renameInput:disabled{color:var(--dsw-alias-label-dimmed)}._3IzFYa_renameError{color:var(--dsw-alias-state-error-primary);margin-top:8px;font-size:12px;line-height:18px}._3IzFYa_deleteAction:not(:disabled){color:var(--dsw-alias-state-error-primary)}._3IzFYa_deleteStatus{color:var(--dsw-alias-label-secondary);font-size:12px;line-height:18px}._3IzFYa_archiveActivity{color:var(--dsw-alias-label-primary);margin:0 0 8px;padding-left:18px;font-size:13px;line-height:20px}._3IzFYa_archiveActivity li{overflow-wrap:anywhere}@media (pointer:coarse){._3IzFYa_searchInput,._3IzFYa_renameInput{font-size:16px}}@media (prefers-reduced-motion:reduce){._3IzFYa_wide,._3IzFYa_skeletonDot,._3IzFYa_skeletonBar{animation:none}._3IzFYa_root:not(._3IzFYa_rail) ._3IzFYa_sectionHeader._3IzFYa_searchSpacingMotion,._3IzFYa_search,._3IzFYa_sectionLabel,._3IzFYa_searchSlot,._3IzFYa_searchInput,._3IzFYa_headerActions{transition:none}}";
+		const tagId$2 = "dshui-client-ui-workspace/WorkspaceBrowser.module.css";
+		if (typeof document !== "undefined" && document.querySelector("style[data-plugin-css=" + JSON.stringify(tagId$2) + "]") === null) {
+			const tag = document.createElement("style");
+			tag.dataset.plugin = "dshui-client-ui-workspace";
+			tag.dataset.pluginCss = tagId$2;
+			tag.textContent = css$2;
+			document.head.appendChild(tag);
+		}
+		var WorkspaceBrowser_module_css_default = {
+			"archiveActivity": "_3IzFYa_archiveActivity",
+			"clearButton": "_3IzFYa_clearButton",
+			"deleteAction": "_3IzFYa_deleteAction",
+			"deleteStatus": "_3IzFYa_deleteStatus",
+			"empty": "_3IzFYa_empty",
+			"emptyAction": "_3IzFYa_emptyAction",
+			"emptyState": "_3IzFYa_emptyState",
+			"fade": "_3IzFYa_fade",
+			"flatList": "_3IzFYa_flatList",
+			"groupSection": "_3IzFYa_groupSection",
+			"headerActions": "_3IzFYa_headerActions",
+			"headerActionsHidden": "_3IzFYa_headerActionsHidden",
+			"iconButton": "_3IzFYa_iconButton",
+			"list": "_3IzFYa_list",
+			"listArea": "_3IzFYa_listArea",
+			"listTopDropActive": "_3IzFYa_listTopDropActive",
+			"listTopDropIndicator": "_3IzFYa_listTopDropIndicator",
+			"rail": "_3IzFYa_rail",
+			"renameError": "_3IzFYa_renameError",
+			"renameInput": "_3IzFYa_renameInput",
+			"root": "_3IzFYa_root",
+			"search": "_3IzFYa_search",
+			"search-skeleton": "_3IzFYa_search-skeleton",
+			"searchButton": "_3IzFYa_searchButton",
+			"searchExpanded": "_3IzFYa_searchExpanded",
+			"searchInput": "_3IzFYa_searchInput",
+			"searchSlot": "_3IzFYa_searchSlot",
+			"searchSlotExpanded": "_3IzFYa_searchSlotExpanded",
+			"searchSpacingMotion": "_3IzFYa_searchSpacingMotion",
+			"searchStatus": "_3IzFYa_searchStatus",
+			"searchTree": "_3IzFYa_searchTree",
+			"sectionHeader": "_3IzFYa_sectionHeader",
+			"sectionLabel": "_3IzFYa_sectionLabel",
+			"sectionLabelHidden": "_3IzFYa_sectionLabelHidden",
+			"sessionOverflowButton": "_3IzFYa_sessionOverflowButton",
+			"skeletonBar": "_3IzFYa_skeletonBar",
+			"skeletonBarWide": "_3IzFYa_skeletonBarWide",
+			"skeletonBars": "_3IzFYa_skeletonBars",
+			"skeletonDot": "_3IzFYa_skeletonDot",
+			"skeletonRow": "_3IzFYa_skeletonRow",
+			"treeBody": "_3IzFYa_treeBody",
+			"viewOptionsMenu": "_3IzFYa_viewOptionsMenu",
+			"wide": "_3IzFYa_wide",
+			"wide-in": "_3IzFYa_wide-in",
+			"workspaceDropAfter": "_3IzFYa_workspaceDropAfter",
+			"workspaceDropBefore": "_3IzFYa_workspaceDropBefore"
+		};
+		//#endregion
+		//#region lib/types/client/rows/WorkspaceDialogs.js
+		/** Workspace rename and removal dialogs, keyed by their captured request. */
+		/** @param props - captured request, current Workspace list, and existing mutations. @returns the active dialog. */
+		function WorkspaceDialogs({ request, workspaces, renameWorkspace, deleteWorkspace, settleWorkspaceAction, t }) {
+			const composingRef = (0, react.useRef)(false);
+			const renameTarget = request.action === "rename" ? request : null;
+			const [renameDraft, setRenameDraft] = (0, react.useState)(request.displayTitle);
+			const [renaming, setRenaming] = (0, react.useState)(false);
+			const [renameError, setRenameError] = (0, react.useState)(null);
+			const renameTrimmed = renameDraft.trim();
+			const renameDuplicate = renameTarget !== null && renameTrimmed !== "" && workspaces.some((w) => w.workspaceId !== renameTarget.workspaceId && w.title === renameTrimmed);
+			const renameBlocked = renaming || renameTrimmed === "" || renameTarget === null || renameTrimmed === renameTarget.storedTitle || renameDuplicate;
+			const closeRename = () => {
+				if (renaming) return;
+				settleWorkspaceAction();
+				setRenameError(null);
+			};
+			const confirmRename = () => {
+				if (renameBlocked) return;
+				setRenaming(true);
+				setRenameError(null);
+				renameWorkspace(renameTarget.workspaceId, renameTrimmed).then(() => {
+					setRenaming(false);
+					settleWorkspaceAction();
+				}).catch((reason) => {
+					setRenaming(false);
+					setRenameError(reason instanceof Error ? reason.message : String(reason));
+				});
+			};
+			const deleteTarget = request.action === "delete" ? request : null;
+			const [deleting, setDeleting] = (0, react.useState)(false);
+			const [deleteCommittedId, setDeleteCommittedId] = (0, react.useState)(null);
+			const [deleteError, setDeleteError] = (0, react.useState)(null);
+			(0, react.useEffect)(() => {
+				if (deleteCommittedId === null || workspaces.some((workspace) => workspace.workspaceId === deleteCommittedId)) return;
+				setDeleting(false);
+				setDeleteCommittedId(null);
+				settleWorkspaceAction();
+			}, [
+				deleteCommittedId,
+				workspaces,
+				settleWorkspaceAction
+			]);
+			const closeDelete = () => {
+				if (deleting) return;
+				settleWorkspaceAction();
+				setDeleteError(null);
+			};
+			const confirmDelete = () => {
+				/* v8 ignore next -- the Modal is absent without a target and its button is disabled while deleting. */
+				if (deleting || deleteTarget === null) return;
+				setDeleting(true);
+				setDeleteCommittedId(null);
+				setDeleteError(null);
+				deleteWorkspace(deleteTarget.workspaceId).then(() => {
+					setDeleteCommittedId(deleteTarget.workspaceId);
+				}).catch((reason) => {
+					setDeleting(false);
+					setDeleteError(reason instanceof Error ? reason.message : String(reason));
+				});
+			};
+			return (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [(0, react_jsx_runtime.jsxs)(_deepseek_ai_dsh_client_ui_primitives.Modal, {
+				open: renameTarget !== null,
+				onClose: closeRename,
+				closeLabel: t("close"),
+				title: t("rename.workspace.title"),
+				footer: (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [(0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Button, {
+					variant: "outline",
+					disabled: renaming,
+					onClick: closeRename,
+					children: t("cancel")
+				}), (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Button, {
+					variant: "primary",
+					disabled: renameBlocked,
+					onClick: confirmRename,
+					children: t("rename")
+				})] }),
+				children: [
+					(0, react_jsx_runtime.jsx)("input", {
+						className: WorkspaceBrowser_module_css_default.renameInput,
+						value: renameDraft,
+						"aria-label": t("field.workspaceName"),
+						"data-modal-autofocus": true,
+						disabled: renaming,
+						onFocus: (e) => {
+							e.target.select();
+						},
+						onChange: (e) => {
+							setRenameDraft(e.target.value);
+							setRenameError(null);
+						},
+						onCompositionStart: () => {
+							composingRef.current = true;
+						},
+						onCompositionEnd: () => {
+							composingRef.current = false;
+						},
+						onKeyDown: (e) => {
+							if (e.key === "Enter" && !composingRef.current) {
+								e.preventDefault();
+								confirmRename();
+							}
+						}
+					}),
+					renameDuplicate && (0, react_jsx_runtime.jsx)("div", {
+						className: WorkspaceBrowser_module_css_default.renameError,
+						role: "alert",
+						children: t("conflict.named", { name: renameTrimmed })
+					}),
+					renameError !== null && (0, react_jsx_runtime.jsx)("div", {
+						className: WorkspaceBrowser_module_css_default.renameError,
+						role: "alert",
+						children: renameError
+					})
+				]
+			}), (0, react_jsx_runtime.jsxs)(_deepseek_ai_dsh_client_ui_primitives.Modal, {
+				open: deleteTarget !== null,
+				onClose: closeDelete,
+				closeLabel: t("close"),
+				title: t("delete.workspace"),
+				...deleteTarget === null ? {} : { description: t("delete.desc", { name: deleteTarget.displayTitle }) },
+				footer: (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [(0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Button, {
+					variant: "outline",
+					disabled: deleting,
+					onClick: closeDelete,
+					children: t("cancel")
+				}), (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Button, {
+					variant: "outline",
+					className: WorkspaceBrowser_module_css_default.deleteAction,
+					disabled: deleting,
+					onClick: confirmDelete,
+					children: t("delete.workspace")
+				})] }),
+				children: [deleting && (0, react_jsx_runtime.jsx)("div", {
+					className: WorkspaceBrowser_module_css_default.deleteStatus,
+					role: "status",
+					children: t("delete.pending")
+				}), deleteError !== null && (0, react_jsx_runtime.jsx)("div", {
+					className: WorkspaceBrowser_module_css_default.renameError,
+					role: "alert",
+					children: deleteError
+				})]
+			})] });
+		}
 		/**
 		* The text one Workspace is labeled with. A Workspace still carrying the
 		* automatic first-use title reads as the caller's localized default name; every
@@ -1793,13 +2008,13 @@ window.__ModuleLoader__.load({
 		}
 		//#endregion
 		//#region \0dsh-css:/Volumes/Development/LLM/dsh-plugin/vscode/dshui_for_vscode/.dsh-src/packages/client/ui-workspace/src/client/rows/Rows.module.css.mjs
-		const css$2 = ".JKg95G_projectRow,.JKg95G_sessionRow{align-items:center;gap:var(--dsh-sidebar-label-gap);border-radius:var(--dsw-radius-md);border-inline:var(--dsh-sidebar-paint-inset) solid transparent;box-sizing:border-box;padding:0 8px;cursor:pointer;-webkit-user-select:none;user-select:none;color:var(--dsw-alias-label-primary);background-clip:padding-box;padding-inline-start:calc(var(--dsh-sidebar-row-padding) - var(--dsh-sidebar-paint-inset) + var(--dsh-workspace-indent,0px));display:flex}@media (hover:hover){.JKg95G_projectRow:hover{background-color:var(--dsw-alias-interactive-bg-hover)}}.JKg95G_sessionRow.JKg95G_selected{background-color:var(--dsw-alias-interactive-bg-hover)}.JKg95G_dragPreview{background:var(--dsw-specific-sidebar-fill)}.JKg95G_searchResultRow{box-sizing:border-box;border-radius:var(--dsw-radius-lg);width:100%;min-height:48px;padding:4px calc(var(--dsh-sidebar-row-padding) - var(--dsh-sidebar-paint-inset));border:none;border-inline:var(--dsh-sidebar-paint-inset) solid transparent;cursor:pointer;text-align:left;color:var(--dsw-alias-label-primary);background:padding-box padding-box;flex-direction:column;align-items:stretch;display:flex}@media (hover:hover){.JKg95G_searchResultRow:hover{background-color:var(--dsw-alias-interactive-bg-hover)}}.JKg95G_searchResultRow.JKg95G_selected{background-color:var(--dsw-alias-interactive-bg-hover)}.JKg95G_searchResultHeading{align-items:center;min-width:0;display:flex}.JKg95G_searchResultTitle{min-width:0;margin:0 var(--dsh-sidebar-label-gap);text-overflow:ellipsis;white-space:nowrap;flex:0 auto;font-size:14px;line-height:20px;overflow:hidden}.JKg95G_searchResultMeta{min-width:0;margin-left:calc(16px + var(--dsh-sidebar-label-gap));align-items:center;gap:6px;display:flex}.JKg95G_searchResultWorkspace,.JKg95G_searchResultSnippet{text-overflow:ellipsis;white-space:nowrap;font-size:12px;line-height:17px;overflow:hidden}.JKg95G_searchResultWorkspace{max-width:40%;color:var(--dsw-alias-label-tertiary);flex:none}.JKg95G_searchResultWorkspace:only-child{max-width:100%}.JKg95G_searchResultSnippet{min-width:0;color:var(--dsw-alias-label-secondary);flex:1}.JKg95G_projectRow{box-sizing:border-box;align-items:center;height:34px}.JKg95G_projectRow .JKg95G_rowActions{height:20px}.JKg95G_sessionRow{gap:0;height:32px}.JKg95G_sessionRow .JKg95G_title{margin:0 6px 0 var(--dsh-sidebar-label-gap)}.JKg95G_slot{width:16px;height:20px;color:var(--dsw-alias-label-tertiary);flex:none;justify-content:center;align-items:center;display:inline-flex}.JKg95G_visuallyHidden{clip:rect(0 0 0 0);white-space:nowrap;width:1px;height:1px;position:absolute;overflow:hidden}.JKg95G_folderActive{color:var(--dsw-alias-state-business-primary)}.JKg95G_projectRow .JKg95G_chevron{display:none}@media (hover:hover){.JKg95G_projectRow:hover .JKg95G_chevron{display:inline-flex}.JKg95G_projectRow:hover .JKg95G_folder{display:none}}.JKg95G_arrow{transition:transform .15s var(--ds-ease-in-out)}.JKg95G_arrowOpen{transform:rotate(90deg)}.JKg95G_projectText{flex-direction:column;flex:1;gap:2px;min-width:0;display:flex}.JKg95G_title{text-overflow:ellipsis;white-space:nowrap;min-width:0;font-size:14px;line-height:20px;overflow:hidden}.JKg95G_renameInput{border:.5px solid var(--dsw-alias-border-l4);border-radius:var(--dsw-radius-sm);background:var(--dsw-alias-button-elevated-fill);min-width:0;color:inherit;outline:none;padding:0 2px;font-size:14px;line-height:20px}.JKg95G_sessionRow .JKg95G_title{flex:1}.JKg95G_sessionRow .JKg95G_title[data-scrolled]{mask-image:linear-gradient(90deg,#0000,#000 12px)}.JKg95G_sessionRow .JKg95G_title[data-clipped]{mask-image:linear-gradient(270deg,#0000,#000 12px)}.JKg95G_sessionRow .JKg95G_title[data-scrolled][data-clipped]{mask-image:linear-gradient(90deg,#0000,#000 12px calc(100% - 12px),#0000)}.JKg95G_meta{text-overflow:ellipsis;white-space:nowrap;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:20px;overflow:hidden}.JKg95G_time{color:var(--dsw-alias-label-tertiary);flex:none;margin-inline-end:-1px;font-size:10px;line-height:16px}.JKg95G_pinIndicator{width:16px;height:20px;color:var(--dsw-alias-label-caption);flex:none;justify-content:center;align-items:center;margin-left:6px;display:inline-flex}.JKg95G_sessionRow.JKg95G_archived .JKg95G_title,.JKg95G_searchResultRow.JKg95G_archived .JKg95G_searchResultTitle,.JKg95G_searchResultRow.JKg95G_archived .JKg95G_searchResultWorkspace,.JKg95G_searchResultRow.JKg95G_archived .JKg95G_searchResultSnippet{color:var(--dsw-alias-label-caption)}.JKg95G_dot{flex:none}.JKg95G_rowActions{flex:none;align-items:center;gap:13px;display:none}@media (hover:hover){.JKg95G_projectRow:hover .JKg95G_rowActions,.JKg95G_searchResultRow:hover .JKg95G_rowActions{display:inline-flex}}.JKg95G_projectRow.JKg95G_menuOpen .JKg95G_rowActions{display:inline-flex}.JKg95G_rowQuickActions{display:contents}.JKg95G_searchResultHeading .JKg95G_rowActions{margin-left:auto}.JKg95G_rowResting{color:var(--dsw-alias-label-tertiary);flex:none;align-items:center;gap:6px;display:inline-flex}.JKg95G_rowResting .JKg95G_pinIndicator{margin-left:0}@media (hover:hover){.JKg95G_sessionRow:hover{background-color:var(--dsw-alias-interactive-bg-hover)}.JKg95G_sessionRow:hover .JKg95G_rowActions,.JKg95G_sessionRow.JKg95G_menuOpen .JKg95G_rowActions,html[data-input-modality=keyboard] .JKg95G_sessionRow:focus-within .JKg95G_rowActions{display:inline-flex}.JKg95G_sessionRow:hover .JKg95G_rowResting,.JKg95G_sessionRow.JKg95G_menuOpen .JKg95G_rowResting,html[data-input-modality=keyboard] .JKg95G_sessionRow:focus-within .JKg95G_rowResting{display:none}.JKg95G_sessionRow:hover .JKg95G_title,.JKg95G_sessionRow.JKg95G_menuOpen .JKg95G_title{text-overflow:clip}}@media (hover:none){.JKg95G_projectRow .JKg95G_rowActions,.JKg95G_searchResultRow .JKg95G_rowActions,.JKg95G_sessionRow .JKg95G_rowActions{display:inline-flex}.JKg95G_sessionRow .JKg95G_rowQuickActions{display:none}}.JKg95G_projectRow.JKg95G_menuOpen,.JKg95G_sessionRow.JKg95G_menuOpen{background-color:var(--dsw-alias-interactive-bg-hover)}.JKg95G_sessionRow.JKg95G_dropBefore,.JKg95G_sessionRow.JKg95G_dropAfter{position:relative}.JKg95G_sessionRow.JKg95G_dropBefore:before,.JKg95G_sessionRow.JKg95G_dropAfter:after{content:\"\";z-index:1;left:calc(-1 * var(--dsh-sidebar-paint-inset));right:calc(4px - var(--dsh-sidebar-paint-inset));background:linear-gradient(55deg, transparent calc(50% - 1px), var(--dsw-alias-state-business-primary) calc(50% - 1px) calc(50% + 1px), transparent calc(50% + 1px)) 0 0 / 5px 7px no-repeat, linear-gradient(125deg, transparent calc(50% - 1px), var(--dsw-alias-state-business-primary) calc(50% - 1px) calc(50% + 1px), transparent calc(50% + 1px)) 0 5px / 5px 7px no-repeat, linear-gradient(var(--dsw-alias-state-business-primary) 0 0) 4px 5px / calc(100% - 4px) 2px no-repeat;pointer-events:none;height:12px;position:absolute}.JKg95G_sessionRow.JKg95G_dropBefore:before{top:-7px}.JKg95G_sessionRow.JKg95G_dropAfter:after{bottom:-7px}.JKg95G_hoverContent{flex-direction:column;gap:8px;display:flex}.JKg95G_hoverTitle{color:#fff;overflow-wrap:break-word;font-size:14px;line-height:20px}.JKg95G_hoverPath{color:#cfd3d6;word-break:break-all;font-size:12px;line-height:16px}.JKg95G_hoverTime{color:#cfd3d6;font-size:12px;line-height:16px}.JKg95G_hoverStatus{color:#adb2b8;align-items:center;gap:8px;font-size:12px;line-height:20px;display:flex}.JKg95G_hoverArchived svg{flex-shrink:0;margin:0 -4px}.JKg95G_iconButton{border-radius:var(--dsw-radius-xs);cursor:pointer;width:24px;height:24px;color:var(--dsw-alias-label-tertiary);background:0 0;border:none;flex:none;justify-content:center;align-items:center;margin:-4px;padding:0;display:inline-flex}.JKg95G_iconButton:focus-visible{outline-offset:-2px}@media (hover:hover){.JKg95G_iconButton:hover{color:var(--dsw-alias-label-primary)}}.JKg95G_chevron{color:var(--dsw-alias-label-caption)}@media (prefers-reduced-motion:reduce){.JKg95G_arrow{transition:none;animation:none}}";
-		const tagId$2 = "dshui-client-ui-workspace/Rows.module.css";
-		if (typeof document !== "undefined" && document.querySelector("style[data-plugin-css=" + JSON.stringify(tagId$2) + "]") === null) {
+		const css$1 = ".JKg95G_projectRow,.JKg95G_sessionRow{align-items:center;gap:var(--dsh-sidebar-label-gap);border-radius:var(--dsw-radius-md);border-inline:var(--dsh-sidebar-paint-inset) solid transparent;box-sizing:border-box;padding:0 8px;cursor:pointer;-webkit-user-select:none;user-select:none;color:var(--dsw-alias-label-primary);background-clip:padding-box;padding-inline-start:calc(var(--dsh-sidebar-row-padding) - var(--dsh-sidebar-paint-inset) + var(--dsh-workspace-indent,0px));display:flex}@media (hover:hover){.JKg95G_projectRow:hover{background-color:var(--dsw-alias-interactive-bg-hover)}}.JKg95G_sessionRow.JKg95G_selected{background-color:var(--dsw-alias-interactive-bg-hover)}.JKg95G_dragPreview{background:var(--dsw-specific-sidebar-fill)}.JKg95G_searchResultRow{box-sizing:border-box;border-radius:var(--dsw-radius-lg);width:100%;min-height:48px;padding:4px calc(var(--dsh-sidebar-row-padding) - var(--dsh-sidebar-paint-inset));border:none;border-inline:var(--dsh-sidebar-paint-inset) solid transparent;cursor:pointer;text-align:left;color:var(--dsw-alias-label-primary);background:padding-box padding-box;flex-direction:column;align-items:stretch;display:flex}@media (hover:hover){.JKg95G_searchResultRow:hover{background-color:var(--dsw-alias-interactive-bg-hover)}}.JKg95G_searchResultRow.JKg95G_selected{background-color:var(--dsw-alias-interactive-bg-hover)}.JKg95G_searchResultHeading{align-items:center;min-width:0;display:flex}.JKg95G_searchResultTitle{min-width:0;margin:0 var(--dsh-sidebar-label-gap);text-overflow:ellipsis;white-space:nowrap;flex:0 auto;font-size:14px;line-height:20px;overflow:hidden}.JKg95G_searchResultMeta{min-width:0;margin-left:calc(16px + var(--dsh-sidebar-label-gap));align-items:center;gap:6px;display:flex}.JKg95G_searchResultWorkspace,.JKg95G_searchResultSnippet{text-overflow:ellipsis;white-space:nowrap;font-size:12px;line-height:17px;overflow:hidden}.JKg95G_searchResultWorkspace{max-width:40%;color:var(--dsw-alias-label-tertiary);flex:none}.JKg95G_searchResultWorkspace:only-child{max-width:100%}.JKg95G_searchResultSnippet{min-width:0;color:var(--dsw-alias-label-secondary);flex:1}.JKg95G_projectRow{box-sizing:border-box;align-items:center;height:34px}.JKg95G_projectRow .JKg95G_rowActions{height:20px}.JKg95G_sessionRow{gap:0;height:32px}.JKg95G_sessionRow .JKg95G_title{margin:0 6px 0 var(--dsh-sidebar-label-gap)}.JKg95G_slot{width:16px;height:20px;color:var(--dsw-alias-label-tertiary);flex:none;justify-content:center;align-items:center;display:inline-flex}.JKg95G_visuallyHidden{clip:rect(0 0 0 0);white-space:nowrap;width:1px;height:1px;position:absolute;overflow:hidden}.JKg95G_folderActive{color:var(--dsw-alias-state-business-primary)}.JKg95G_projectRow .JKg95G_chevron{display:none}@media (hover:hover){.JKg95G_projectRow:hover .JKg95G_chevron{display:inline-flex}.JKg95G_projectRow:hover .JKg95G_folder{display:none}}.JKg95G_arrow{transition:transform .15s var(--ds-ease-in-out)}.JKg95G_arrowOpen{transform:rotate(90deg)}.JKg95G_projectText{flex-direction:column;flex:1;gap:2px;min-width:0;display:flex}.JKg95G_title{text-overflow:ellipsis;white-space:nowrap;min-width:0;font-size:14px;line-height:20px;overflow:hidden}.JKg95G_renameInput{border:.5px solid var(--dsw-alias-border-l4);border-radius:var(--dsw-radius-sm);background:var(--dsw-alias-button-elevated-fill);min-width:0;color:inherit;outline:none;padding:0 2px;font-size:14px;line-height:20px}.JKg95G_sessionRow .JKg95G_title{flex:1}.JKg95G_sessionRow .JKg95G_title[data-scrolled]{mask-image:linear-gradient(90deg,#0000,#000 12px)}.JKg95G_sessionRow .JKg95G_title[data-clipped]{mask-image:linear-gradient(270deg,#0000,#000 12px)}.JKg95G_sessionRow .JKg95G_title[data-scrolled][data-clipped]{mask-image:linear-gradient(90deg,#0000,#000 12px calc(100% - 12px),#0000)}.JKg95G_meta{text-overflow:ellipsis;white-space:nowrap;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:20px;overflow:hidden}.JKg95G_time{color:var(--dsw-alias-label-tertiary);flex:none;margin-inline-end:-1px;font-size:10px;line-height:16px}.JKg95G_pinIndicator{width:16px;height:20px;color:var(--dsw-alias-label-caption);flex:none;justify-content:center;align-items:center;margin-left:6px;display:inline-flex}.JKg95G_sessionRow.JKg95G_archived .JKg95G_title,.JKg95G_searchResultRow.JKg95G_archived .JKg95G_searchResultTitle,.JKg95G_searchResultRow.JKg95G_archived .JKg95G_searchResultWorkspace,.JKg95G_searchResultRow.JKg95G_archived .JKg95G_searchResultSnippet{color:var(--dsw-alias-label-caption)}.JKg95G_dot{flex:none}.JKg95G_rowActions{flex:none;align-items:center;gap:13px;display:none}@media (hover:hover){.JKg95G_projectRow:hover .JKg95G_rowActions,.JKg95G_searchResultRow:hover .JKg95G_rowActions{display:inline-flex}}.JKg95G_projectRow.JKg95G_menuOpen .JKg95G_rowActions{display:inline-flex}.JKg95G_rowQuickActions{display:contents}.JKg95G_searchResultHeading .JKg95G_rowActions{margin-left:auto}.JKg95G_rowResting{color:var(--dsw-alias-label-tertiary);flex:none;align-items:center;gap:6px;display:inline-flex}.JKg95G_rowResting .JKg95G_pinIndicator{margin-left:0}@media (hover:hover){.JKg95G_sessionRow:hover{background-color:var(--dsw-alias-interactive-bg-hover)}.JKg95G_sessionRow:hover .JKg95G_rowActions,.JKg95G_sessionRow.JKg95G_menuOpen .JKg95G_rowActions,html[data-input-modality=keyboard] .JKg95G_sessionRow:focus-within .JKg95G_rowActions{display:inline-flex}.JKg95G_sessionRow:hover .JKg95G_rowResting,.JKg95G_sessionRow.JKg95G_menuOpen .JKg95G_rowResting,html[data-input-modality=keyboard] .JKg95G_sessionRow:focus-within .JKg95G_rowResting{display:none}.JKg95G_sessionRow:hover .JKg95G_title,.JKg95G_sessionRow.JKg95G_menuOpen .JKg95G_title{text-overflow:clip}}@media (hover:none){.JKg95G_projectRow .JKg95G_rowActions,.JKg95G_searchResultRow .JKg95G_rowActions,.JKg95G_sessionRow .JKg95G_rowActions{display:inline-flex}.JKg95G_sessionRow .JKg95G_timestamp,.JKg95G_sessionRow:has(.JKg95G_pinnedAction) .JKg95G_pinIndicator,.JKg95G_sessionRow .JKg95G_rowQuickActions>[data-slot]>:not(.JKg95G_pinnedAction),.JKg95G_projectRow[aria-expanded=false] .JKg95G_rowActions{display:none}.JKg95G_sessionRow .JKg95G_pinnedAction{order:-1}}.JKg95G_projectRow.JKg95G_menuOpen,.JKg95G_sessionRow.JKg95G_menuOpen{background-color:var(--dsw-alias-interactive-bg-hover)}.JKg95G_sessionRow.JKg95G_dropBefore,.JKg95G_sessionRow.JKg95G_dropAfter{position:relative}.JKg95G_sessionRow.JKg95G_dropBefore:before,.JKg95G_sessionRow.JKg95G_dropAfter:after{content:\"\";z-index:1;left:calc(-1 * var(--dsh-sidebar-paint-inset));right:calc(4px - var(--dsh-sidebar-paint-inset));background:linear-gradient(55deg, transparent calc(50% - 1px), var(--dsw-alias-state-business-primary) calc(50% - 1px) calc(50% + 1px), transparent calc(50% + 1px)) 0 0 / 5px 7px no-repeat, linear-gradient(125deg, transparent calc(50% - 1px), var(--dsw-alias-state-business-primary) calc(50% - 1px) calc(50% + 1px), transparent calc(50% + 1px)) 0 5px / 5px 7px no-repeat, linear-gradient(var(--dsw-alias-state-business-primary) 0 0) 4px 5px / calc(100% - 4px) 2px no-repeat;pointer-events:none;height:12px;position:absolute}.JKg95G_sessionRow.JKg95G_dropBefore:before{top:-7px}.JKg95G_sessionRow.JKg95G_dropAfter:after{bottom:-7px}.JKg95G_hoverContent{flex-direction:column;gap:8px;display:flex}.JKg95G_hoverTitle{color:#fff;overflow-wrap:break-word;font-size:14px;line-height:20px}.JKg95G_hoverPath{color:#cfd3d6;word-break:break-all;font-size:12px;line-height:16px}.JKg95G_hoverTime{color:#cfd3d6;font-size:12px;line-height:16px}.JKg95G_hoverStatus{color:#adb2b8;align-items:center;gap:8px;font-size:12px;line-height:20px;display:flex}.JKg95G_hoverArchived svg{flex-shrink:0;margin:0 -4px}.JKg95G_iconButton{border-radius:var(--dsw-radius-xs);cursor:pointer;width:24px;height:24px;color:var(--dsw-alias-label-tertiary);background:0 0;border:none;flex:none;justify-content:center;align-items:center;margin:-4px;padding:0;display:inline-flex}.JKg95G_iconButton:focus-visible{outline-offset:-2px}@media (hover:hover){.JKg95G_iconButton:hover{color:var(--dsw-alias-label-primary)}}.JKg95G_chevron{color:var(--dsw-alias-label-caption)}@media (prefers-reduced-motion:reduce){.JKg95G_arrow{transition:none;animation:none}}";
+		const tagId$1 = "dshui-client-ui-workspace/Rows.module.css";
+		if (typeof document !== "undefined" && document.querySelector("style[data-plugin-css=" + JSON.stringify(tagId$1) + "]") === null) {
 			const tag = document.createElement("style");
 			tag.dataset.plugin = "dshui-client-ui-workspace";
-			tag.dataset.pluginCss = tagId$2;
-			tag.textContent = css$2;
+			tag.dataset.pluginCss = tagId$1;
+			tag.textContent = css$1;
 			document.head.appendChild(tag);
 		}
 		var Rows_module_css_default = {
@@ -1823,6 +2038,7 @@ window.__ModuleLoader__.load({
 			"menuOpen": "JKg95G_menuOpen",
 			"meta": "JKg95G_meta",
 			"pinIndicator": "JKg95G_pinIndicator",
+			"pinnedAction": "JKg95G_pinnedAction",
 			"projectRow": "JKg95G_projectRow",
 			"projectText": "JKg95G_projectText",
 			"renameInput": "JKg95G_renameInput",
@@ -1839,6 +2055,7 @@ window.__ModuleLoader__.load({
 			"sessionRow": "JKg95G_sessionRow",
 			"slot": "JKg95G_slot",
 			"time": "JKg95G_time",
+			"timestamp": "JKg95G_timestamp",
 			"title": "JKg95G_title",
 			"visuallyHidden": "JKg95G_visuallyHidden"
 		};
@@ -1849,7 +2066,7 @@ window.__ModuleLoader__.load({
 		* all data and callbacks arrive via props. Hover swaps (folder->chevron,
 		* time->ellipsis, action buttons) are CSS-only, and a session row's clipped
 		* title marquees programmatically while the row is hovered. Workspace row
-		* menus are visual-only except Rename/Delete. A Session row's "..." menu and
+		* menus share captured Workspace actions with right-click. A Session row's "..." menu and
 		* its hover buttons are the `sidebar.workspaces.session.menu.item` and
 		* `sidebar.workspaces.session.row.action` lists, rendered through the
 		* browser's `renderSlot` with the menu's open state as the occurrence's hook
@@ -1915,13 +2132,17 @@ window.__ModuleLoader__.load({
 		*/
 		function useTitleMarquee(title) {
 			const frame = (0, react.useRef)(0);
+			const revealing = (0, react.useRef)(false);
 			(0, react.useEffect)(() => () => {
 				cancelAnimationFrame(frame.current);
 			}, []);
 			return (0, react.useMemo)(() => ({
-				enter: () => {
+				enter: (event) => {
+					if (event?.pointerType === "touch") return;
 					/* v8 ignore next -- defensive: the title span renders unconditionally. */
 					if (title.current === null) return;
+					if (revealing.current) return;
+					revealing.current = true;
 					const element = title.current;
 					const range = element.scrollWidth - element.clientWidth;
 					if (range <= MIN_TITLE_REVEAL_PX) return;
@@ -1941,6 +2162,7 @@ window.__ModuleLoader__.load({
 					frame.current = requestAnimationFrame(step);
 				},
 				leave: () => {
+					revealing.current = false;
 					cancelAnimationFrame(frame.current);
 					/* v8 ignore next -- defensive: the title span renders unconditionally. */
 					if (title.current === null) return;
@@ -2002,9 +2224,8 @@ window.__ModuleLoader__.load({
 		* hover reveals the chevron and create button, and dwelling on a real
 		* Workspace shows its hover card (the ungrouped bucket has none).
 		* `containsCurrent` arrives on the node (derivation fact, no renderer scan).
-		* The create button, each Workspace menu row, and the drag handle are absent
-		* while the access snapshot excludes their endpoint: a real Workspace asks
-		* its own resource, and the ungrouped bucket asks the global resource.
+		* Create and drag follow the Workspace access snapshot. Menu providers own
+		* their access checks; the ungrouped bucket has no Workspace menu.
 		* @param props.group - derived group node.
 		* @param props.containsCurrentDescendant - highlight an ancestor even when its subtree is collapsed.
 		* @param props.onToggle - expand/collapse the group.
@@ -2028,8 +2249,6 @@ window.__ModuleLoader__.load({
 				...props,
 				access: {
 					create,
-					rename: false,
-					delete: false,
 					reorder: false
 				}
 			});
@@ -2039,8 +2258,6 @@ window.__ModuleLoader__.load({
 			const { useWorkspaceAccess } = props;
 			const access = {
 				create: useWorkspaceAccess(workspaceId, "session/create"),
-				rename: useWorkspaceAccess(workspaceId, "workspace/rename"),
-				delete: useWorkspaceAccess(workspaceId, "workspace/delete"),
 				reorder: useWorkspaceAccess(workspaceId, "workspace/insertBefore")
 			};
 			return (0, react_jsx_runtime.jsx)(ProjectRow, {
@@ -2048,29 +2265,31 @@ window.__ModuleLoader__.load({
 				access
 			});
 		}
-		function ProjectRow({ group, containsCurrentDescendant = false, onToggle, onCreate, actions, drag: offeredDrag, home, newShortcut, t, access }) {
+		function ProjectRow({ group, containsCurrentDescendant = false, onToggle, onCreate, drag: offeredDrag, home, newShortcut, t, access, openWorkspaceMenu, useContextMenuTarget, useContextMenu }) {
+			const { getTriggerProps } = useContextMenu();
 			const drag = access.reorder ? offeredDrag : void 0;
 			const row = group;
 			const label = row.workspaceId === void 0 ? t("group.ungrouped") : row.label;
 			const active = containsCurrentDescendant || group.expanded && group.containsCurrent;
-			const [menuOpen, setMenuOpen] = (0, react.useState)(false);
+			const menuOpen = useContextMenuTarget((target) => target?.kind === "workspace" && target.value.workspaceId === row.workspaceId);
 			const dragPreview = (0, _deepseek_ai_dsh_client_ui_primitives.useRowDragPreview)(Rows_module_css_default.dragPreview, DRAG_PREVIEW_PROPERTIES);
-			const workspaceMenuItems = [...access.rename ? [{
-				id: "rename",
-				label: t("rename"),
-				icon: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconEditOutlineRegular, {})
-			}] : [], ...access.delete ? [{
-				id: "delete",
-				label: t("delete.workspace"),
-				icon: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconTrashOutlineRegular, {}),
-				danger: true
-			}] : []];
+			const workspaceMenuTarget = row.workspaceId !== void 0 && row.cwd !== void 0 ? {
+				workspaceId: row.workspaceId,
+				path: row.cwd
+			} : void 0;
 			const ownRow = (0, react_jsx_runtime.jsxs)("div", {
 				className: clsx(Rows_module_css_default.projectRow, menuOpen && Rows_module_css_default.menuOpen),
 				"data-row-key": `workspace:${group.key}`,
 				role: "treeitem",
 				"aria-expanded": row.expanded,
 				onClick: onToggle,
+				...getTriggerProps(workspaceMenuTarget === void 0 ? void 0 : {
+					kind: "workspace",
+					value: {
+						...workspaceMenuTarget,
+						displayTitle: label
+					}
+				}),
 				draggable: drag !== void 0,
 				onDragStart: drag === void 0 ? void 0 : (e) => {
 					e.dataTransfer.effectAllowed = "move";
@@ -2099,31 +2318,22 @@ window.__ModuleLoader__.load({
 					}),
 					(0, react_jsx_runtime.jsxs)("span", {
 						className: Rows_module_css_default.rowActions,
-						children: [actions !== void 0 && workspaceMenuItems.length > 0 && (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Menu, {
-							open: menuOpen,
-							onClose: () => {
-								setMenuOpen(false);
+						children: [workspaceMenuTarget !== void 0 && (0, react_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: Rows_module_css_default.iconButton,
+							"data-context-menu-trigger": true,
+							"aria-label": t("actions.workspace.aria", { name: label }),
+							"aria-haspopup": "menu",
+							"aria-expanded": menuOpen,
+							onClick: (event) => {
+								event.stopPropagation();
+								const rect = event.currentTarget.getBoundingClientRect();
+								openWorkspaceMenu(workspaceMenuTarget.workspaceId, workspaceMenuTarget.path, label, {
+									x: rect.left,
+									y: rect.bottom
+								}, "toggle");
 							},
-							items: workspaceMenuItems,
-							onSelect: (id) => {
-								setMenuOpen(false);
-								/* v8 ignore next -- Menu can emit only the rename and delete rows supplied above. */
-								if (id !== "rename" && id !== "delete") return;
-								if (id === "rename") actions.rename();
-								else actions.delete();
-							},
-							portal: true,
-							closeOnPointerLeave: true,
-							anchor: (0, react_jsx_runtime.jsx)("button", {
-								type: "button",
-								className: Rows_module_css_default.iconButton,
-								"aria-label": t("actions.workspace.aria", { name: label }),
-								onClick: (e) => {
-									e.stopPropagation();
-									setMenuOpen((v) => !v);
-								},
-								children: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconEllipsisOutlineRegular, {})
-							})
+							children: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconEllipsisOutlineRegular, {})
 						}), access.create && (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Tooltip, {
 							label: t("actions.newSession"),
 							shortcutKeys: newShortcut?.keys,
@@ -2371,7 +2581,8 @@ window.__ModuleLoader__.load({
 		* @param props.t - the browser root's locale seat.
 		* @returns the session row.
 		*/
-		function SessionNodeItem({ node, currentId, now, onOpen, onRenameRequest, renderSlot, onReveal, drag, home, useSessionAccess, t }) {
+		function SessionNodeItem({ node, currentId, now, onOpen, onRenameRequest, renderSlot, openSessionMenu, useContextMenuTarget, useContextMenu, onReveal, drag, home, useSessionAccess, t }) {
+			const { getTriggerProps } = useContextMenu();
 			const row = node;
 			const title = displayTitle(node, t);
 			const selected = node.id === currentId;
@@ -2381,9 +2592,8 @@ window.__ModuleLoader__.load({
 			const renamable = useSessionAccess(node.id, "session/rename");
 			const reorderable = useSessionAccess(node.id, "workspace/insertSessionBefore");
 			const draggable = drag !== void 0 && reorderable && !row.blank && !row.archived;
-			const [menuOpen, setMenuOpen] = (0, react.useState)(false);
+			const menuOpen = useContextMenuTarget((target) => target?.kind === "session" && target.value.sessionId === node.id);
 			const dragPreview = (0, _deepseek_ai_dsh_client_ui_primitives.useRowDragPreview)(Rows_module_css_default.dragPreview, DRAG_PREVIEW_PROPERTIES);
-			const menuOpenState = (0, react.useMemo)(() => [menuOpen, setMenuOpen], [menuOpen]);
 			const rowRef = (0, react.useRef)(null);
 			const titleRef = (0, react.useRef)(null);
 			const renameArmed = (0, react.useRef)(false);
@@ -2391,6 +2601,10 @@ window.__ModuleLoader__.load({
 				renameArmed.current = false;
 			}).current;
 			const marquee = useTitleMarquee(titleRef);
+			(0, react.useEffect)(() => {
+				if (menuOpen || rowRef.current?.matches(":hover")) marquee.enter();
+				else marquee.leave();
+			}, [menuOpen, marquee]);
 			(0, react.useEffect)(() => {
 				if (onReveal === void 0) return;
 				rowRef.current?.scrollIntoView({ block: "nearest" });
@@ -2408,14 +2622,22 @@ window.__ModuleLoader__.load({
 					onClick: () => {
 						onOpen(node.id);
 					},
-					onKeyDown: (event) => {
+					...getTriggerProps(row.blank ? void 0 : {
+						kind: "session",
+						value: {
+							sessionId: node.id,
+							displayTitle: row.title
+						}
+					}, { onKeyDown: (event) => {
 						if (event.target !== event.currentTarget || event.key !== "Enter" && event.key !== " ") return;
 						if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
 						event.preventDefault();
 						onOpen(node.id);
-					},
+					} }),
 					onPointerEnter: marquee.enter,
-					onPointerLeave: marquee.leave,
+					onPointerLeave: () => {
+						if (!menuOpen) marquee.leave();
+					},
 					draggable,
 					onDragStart: !draggable ? void 0 : (e) => {
 						e.dataTransfer.effectAllowed = "move";
@@ -2462,7 +2684,7 @@ window.__ModuleLoader__.load({
 							className: Rows_module_css_default.rowResting,
 							children: [
 								(0, react_jsx_runtime.jsx)("span", {
-									className: Rows_module_css_default.time,
+									className: clsx(Rows_module_css_default.time, primaryStatus.trailingLabel === void 0 && Rows_module_css_default.timestamp),
 									"aria-hidden": primaryStatus.trailingLabel === void 0 ? void 0 : true,
 									children: primaryStatus.trailingLabel ?? timeLabel(row.updatedAt, now, t)
 								}),
@@ -2475,26 +2697,23 @@ window.__ModuleLoader__.load({
 							onClick: (e) => {
 								e.stopPropagation();
 							},
-							children: [(0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Menu, {
-								open: menuOpen,
-								onClose: () => {
-									setMenuOpen(false);
+							children: [(0, react_jsx_runtime.jsx)("button", {
+								type: "button",
+								className: Rows_module_css_default.iconButton,
+								"aria-label": t("actions.session.aria", { name: title }),
+								onPointerDown: (event) => {
+									event.stopPropagation();
 								},
-								portal: true,
-								closeOnPointerLeave: true,
-								anchor: (0, react_jsx_runtime.jsx)("button", {
-									type: "button",
-									className: Rows_module_css_default.iconButton,
-									"aria-label": t("actions.session.aria", { name: title }),
-									onClick: () => {
-										setMenuOpen((v) => !v);
-									},
-									children: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconEllipsisOutlineRegular, {})
-								}),
-								children: renderSlot("sidebar.workspaces.session.menu.item", {
-									sessionId: node.id,
-									displayTitle: row.title
-								}, { hookContext: menuOpenState })
+								"data-context-menu-trigger": "",
+								onClick: (event) => {
+									event.currentTarget.focus({ preventScroll: true });
+									const rect = event.currentTarget.getBoundingClientRect();
+									openSessionMenu(node.id, row.title, {
+										x: rect.left,
+										y: rect.bottom
+									}, "toggle");
+								},
+								children: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconEllipsisOutlineRegular, {})
 							}), (0, react_jsx_runtime.jsx)("span", {
 								className: Rows_module_css_default.rowQuickActions,
 								children: renderSlot("sidebar.workspaces.session.row.action", {
@@ -2549,13 +2768,13 @@ window.__ModuleLoader__.load({
 		}
 		//#endregion
 		//#region \0dsh-css:/Volumes/Development/LLM/dsh-plugin/vscode/dshui_for_vscode/.dsh-src/packages/client/ui-workspace/src/client/WorkspacePicker.module.css.mjs
-		const css$1 = ".AoNIzG_modalAction{min-width:72px}.AoNIzG_modalError,.AoNIzG_menuStatus{margin-top:8px;font-size:12px;line-height:18px}.AoNIzG_modalError{color:var(--dsw-alias-state-error-primary)}.AoNIzG_menuStatus,.AoNIzG_pathSuffix{color:var(--dsw-alias-label-secondary)}.AoNIzG_disambiguated{gap:4px;min-width:0;display:flex}.AoNIzG_title,.AoNIzG_pathSuffix{text-overflow:ellipsis;min-width:0;overflow:hidden}.AoNIzG_pathSuffix{flex:none;max-width:75%}";
-		const tagId$1 = "dshui-client-ui-workspace/WorkspacePicker.module.css";
-		if (typeof document !== "undefined" && document.querySelector("style[data-plugin-css=" + JSON.stringify(tagId$1) + "]") === null) {
+		const css = ".AoNIzG_modalAction{min-width:72px}.AoNIzG_modalError,.AoNIzG_menuStatus{margin-top:8px;font-size:12px;line-height:18px}.AoNIzG_modalError{color:var(--dsw-alias-state-error-primary)}.AoNIzG_menuStatus,.AoNIzG_pathSuffix{color:var(--dsw-alias-label-secondary)}.AoNIzG_disambiguated{gap:4px;min-width:0;display:flex}.AoNIzG_title,.AoNIzG_pathSuffix{text-overflow:ellipsis;min-width:0;overflow:hidden}.AoNIzG_pathSuffix{flex:none;max-width:75%}";
+		const tagId = "dshui-client-ui-workspace/WorkspacePicker.module.css";
+		if (typeof document !== "undefined" && document.querySelector("style[data-plugin-css=" + JSON.stringify(tagId) + "]") === null) {
 			const tag = document.createElement("style");
 			tag.dataset.plugin = "dshui-client-ui-workspace";
-			tag.dataset.pluginCss = tagId$1;
-			tag.textContent = css$1;
+			tag.dataset.pluginCss = tagId;
+			tag.textContent = css;
 			document.head.appendChild(tag);
 		}
 		var WorkspacePicker_module_css_default = {
@@ -2756,65 +2975,6 @@ window.__ModuleLoader__.load({
 			});
 		}
 		//#endregion
-		//#region \0dsh-css:/Volumes/Development/LLM/dsh-plugin/vscode/dshui_for_vscode/.dsh-src/packages/client/ui-workspace/src/client/rows/WorkspaceBrowser.module.css.mjs
-		const css = "._3IzFYa_root{--dsh-session-list-edge-inset:var(--dsh-sidebar-inline-padding);--dsh-session-list-scrollbar-width:5px;--dsh-session-list-scrollbar-offset:2px;box-sizing:border-box;min-height:0;padding-right:var(--dsh-session-list-edge-inset);flex-direction:column;flex:1;display:flex}._3IzFYa_root._3IzFYa_rail{padding-right:0}._3IzFYa_iconButton{border-radius:var(--dsw-radius-sm);cursor:pointer;width:28px;height:28px;color:var(--dsw-alias-label-secondary);background:0 0;border:none;flex:none;justify-content:center;align-items:center;padding:0;display:inline-flex}._3IzFYa_iconButton:focus-visible,._3IzFYa_searchButton:focus-visible,._3IzFYa_clearButton:focus-visible{outline:var(--dsw-focus-ring-width) solid var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary));outline-offset:-2px}@media (hover:hover){._3IzFYa_iconButton:hover{background:var(--dsw-alias-interactive-bg-hover)}}._3IzFYa_viewOptionsMenu{min-width:200px}._3IzFYa_sectionHeader{height:36px;padding-left:var(--dsh-sidebar-row-padding);box-sizing:border-box;border-radius:var(--dsw-radius-md);color:var(--dsw-alias-label-tertiary);flex:none;justify-content:flex-end;align-items:center;gap:4px;margin-bottom:4px;display:flex;overflow:hidden}._3IzFYa_root:not(._3IzFYa_rail) ._3IzFYa_sectionHeader{margin-top:2px;margin-right:-4px}._3IzFYa_root:not(._3IzFYa_rail) ._3IzFYa_sectionHeader._3IzFYa_searchSpacingMotion{transition:margin-right .18s var(--ds-ease-in-out), padding-inline .18s var(--ds-ease-in-out), gap .18s var(--ds-ease-in-out)}._3IzFYa_root:not(._3IzFYa_rail) ._3IzFYa_sectionHeader:not(:has(._3IzFYa_searchExpanded)){padding-right:1px}._3IzFYa_sectionLabel{white-space:nowrap;opacity:1;visibility:visible;min-width:0;max-width:45%;transition:max-width .18s var(--ds-ease-in-out), margin-right .18s var(--ds-ease-in-out), opacity .12s var(--ds-ease-in-out), transform .18s var(--ds-ease-in-out), visibility 0s linear;flex:none;line-height:20px;position:relative;left:-1px;overflow:hidden}._3IzFYa_sectionLabelHidden{opacity:0;visibility:hidden;max-width:0;margin-right:-4px;transition-delay:0s,0s,0s,0s,.18s;transform:translate(-4px)}._3IzFYa_searchSlot{box-sizing:border-box;min-width:0;max-width:28px;transition:max-width .18s var(--ds-ease-in-out), padding-left .18s var(--ds-ease-in-out);flex:1;align-items:center;margin-left:auto;padding-left:0;display:flex}._3IzFYa_searchSlotExpanded{max-width:100%;padding-left:0}._3IzFYa_headerActions{opacity:1;visibility:visible;max-width:60px;transition:max-width .18s var(--ds-ease-in-out), opacity .12s var(--ds-ease-in-out), transform .18s var(--ds-ease-in-out), visibility 0s linear;flex:none;align-items:center;gap:4px;display:flex;overflow:hidden}._3IzFYa_headerActionsHidden{opacity:0;visibility:hidden;pointer-events:none;max-width:0;transition-delay:0s,0s,0s,.18s;transform:translate(4px)}._3IzFYa_search{box-sizing:border-box;border-radius:var(--dsw-radius-sm);cursor:text;width:100%;height:28px;color:var(--dsw-alias-label-secondary);transition:width .18s var(--ds-ease-in-out), padding .18s var(--ds-ease-in-out), border-color .18s var(--ds-ease-in-out), background-color .18s var(--ds-ease-in-out);background:0 0;border:none;flex:none;align-items:center;gap:0;margin:0;padding:0;display:flex;overflow:hidden}._3IzFYa_root:not(._3IzFYa_rail) ._3IzFYa_sectionHeader:has(._3IzFYa_searchExpanded){padding-inline:calc(var(--dsh-sidebar-paint-inset) + 1px);gap:0;margin-right:0}._3IzFYa_sectionHeader:has(._3IzFYa_searchExpanded) ._3IzFYa_sectionLabelHidden{margin-right:0}._3IzFYa_searchExpanded{border:.5px solid var(--dsw-alias-border-l4);border-radius:var(--dsw-radius-md);width:100%;height:32px;color:var(--dsw-alias-label-caption);background:0 0;margin-inline:0;padding:0 4px 0 0}._3IzFYa_searchButton{border-radius:var(--dsw-radius-sm);cursor:pointer;width:28px;height:28px;color:inherit;background:0 0;border:none;flex:none;justify-content:center;align-items:center;padding:0;display:inline-flex}._3IzFYa_searchExpanded ._3IzFYa_searchButton{width:28px;height:32px}@media (hover:hover){._3IzFYa_searchButton:hover{background:var(--dsw-alias-interactive-bg-hover)}._3IzFYa_searchExpanded ._3IzFYa_searchButton:hover{background:0 0}}._3IzFYa_searchInput{opacity:0;pointer-events:none;width:0;min-width:0;color:var(--dsw-alias-label-primary);transition:opacity .12s var(--ds-ease-in-out);background:0 0;border:none;outline:none;flex:1;font-size:13px;line-height:18px}._3IzFYa_searchExpanded ._3IzFYa_searchInput{opacity:1;pointer-events:auto;margin-left:-2px}._3IzFYa_searchInput::placeholder{color:var(--dsw-alias-label-tertiary)}._3IzFYa_clearButton{border-radius:var(--dsw-radius-sm);cursor:pointer;width:24px;height:24px;color:var(--dsw-alias-label-secondary);background:0 0;border:none;flex:none;justify-content:center;align-items:center;padding:0;display:inline-flex}@media (hover:hover){._3IzFYa_clearButton:hover{background:var(--dsw-alias-interactive-bg-hover)}}._3IzFYa_rail ._3IzFYa_sectionHeader{justify-content:flex-start;gap:0;margin-bottom:12px;padding-left:0}._3IzFYa_rail ._3IzFYa_headerActions{max-width:none}._3IzFYa_rail ._3IzFYa_iconButton{border-radius:var(--dsw-radius-md);width:36px;height:36px;color:var(--dsw-alias-label-primary)}._3IzFYa_rail ._3IzFYa_search{border-radius:var(--dsw-radius-md);background:0 0;border-color:#0000;gap:0;width:36px;height:36px;margin:0 0 12px;padding:0}._3IzFYa_rail ._3IzFYa_searchButton{border-radius:var(--dsw-radius-md);width:36px;height:36px;color:var(--dsw-alias-label-primary)}@media (hover:hover){._3IzFYa_rail ._3IzFYa_searchButton:hover{background:var(--dsw-alias-interactive-bg-hover)}}._3IzFYa_listArea{min-height:0;margin-left:-4px;margin-right:calc(-1 * var(--dsh-session-list-edge-inset));flex-direction:column;flex:1;padding-left:4px;display:flex;overflow:visible}._3IzFYa_rail ._3IzFYa_listArea{margin-left:0;margin-right:0;padding-left:0}._3IzFYa_treeBody{flex-direction:column;flex:1;min-height:0;display:flex;position:relative}._3IzFYa_fade{left:0;right:var(--dsh-session-list-edge-inset);background:linear-gradient(to bottom, transparent, var(--dsw-specific-sidebar-fill));pointer-events:none;height:24px;position:absolute;bottom:0}[data-platform=darwin] ._3IzFYa_fade{display:none}._3IzFYa_wide{animation:_3IzFYa_wide-in .2s var(--ds-ease-in-out)}@keyframes _3IzFYa_wide-in{0%{opacity:0}}._3IzFYa_list{min-height:0;margin-left:-4px;margin-right:var(--dsh-session-list-scrollbar-offset);padding-left:4px;padding-right:calc(var(--dsh-session-list-edge-inset) - var(--dsh-session-list-scrollbar-width) - var(--dsh-session-list-scrollbar-offset));scrollbar-gutter:stable;flex:1;padding-bottom:16px;overflow-y:auto}._3IzFYa_flatList>*+*,._3IzFYa_searchTree>[role=treeitem]+[role=treeitem],._3IzFYa_groupSection>*+*{margin-top:2px}._3IzFYa_searchStatus{color:var(--dsw-alias-label-tertiary);padding:10px 12px;font-size:12px;line-height:18px}._3IzFYa_skeletonRow{align-items:flex-start;gap:var(--dsh-sidebar-label-gap);box-sizing:border-box;min-height:48px;padding:6px var(--dsh-sidebar-row-padding) 7px;display:flex}._3IzFYa_skeletonDot{corner-shape:round;border-radius:50%;flex:none;width:16px;height:16px}._3IzFYa_skeletonBars{flex-direction:column;flex:1;gap:6px;min-width:0;display:flex}._3IzFYa_skeletonDot,._3IzFYa_skeletonBar{background:var(--dsw-alias-bg-skeleton);animation:2s cubic-bezier(.36,0,.64,1) infinite _3IzFYa_search-skeleton}._3IzFYa_skeletonBar{border-radius:var(--dsw-radius-xs);width:65%;height:16px}._3IzFYa_skeletonBarWide{width:90%;height:13px}@keyframes _3IzFYa_search-skeleton{0%{opacity:1}40%{opacity:.6}80%,to{opacity:1}}._3IzFYa_groupSection{position:relative}._3IzFYa_groupSection+._3IzFYa_groupSection{margin-top:4px}._3IzFYa_listTopDropIndicator,._3IzFYa_workspaceDropBefore:before,._3IzFYa_workspaceDropAfter:after{content:\"\";z-index:1;background:linear-gradient(55deg, transparent calc(50% - 1px), var(--dsw-alias-state-business-primary) calc(50% - 1px) calc(50% + 1px), transparent calc(50% + 1px)) 0 0 / 5px 7px no-repeat, linear-gradient(125deg, transparent calc(50% - 1px), var(--dsw-alias-state-business-primary) calc(50% - 1px) calc(50% + 1px), transparent calc(50% + 1px)) 0 5px / 5px 7px no-repeat, linear-gradient(var(--dsw-alias-state-business-primary) 0 0) 4px 5px / calc(100% - 4px) 2px no-repeat;pointer-events:none;height:12px;position:absolute;left:0;right:0}._3IzFYa_listTopDropIndicator{top:-8px;left:0;right:var(--dsh-session-list-edge-inset)}._3IzFYa_listTopDropActive>._3IzFYa_workspaceDropBefore:first-child:before{display:none}._3IzFYa_workspaceDropBefore:before{top:-8px}._3IzFYa_workspaceDropAfter:after{bottom:-8px}._3IzFYa_sessionOverflowButton{border-radius:var(--dsw-radius-sm);width:100%;height:28px;padding:0 var(--dsh-sidebar-row-padding) 0 calc(var(--dsh-sidebar-row-padding) + 16px + var(--dsh-sidebar-label-gap) + var(--dsh-workspace-indent,0px));cursor:pointer;text-align:left;color:var(--dsw-alias-label-tertiary);background:0 0;border:none;font-size:12px}._3IzFYa_groupSection>._3IzFYa_sessionOverflowButton{margin-top:0}@media (hover:hover){._3IzFYa_sessionOverflowButton:hover{color:var(--dsw-alias-label-secondary);background:0 0}}._3IzFYa_empty{color:var(--dsw-alias-label-tertiary);padding:16px 12px;font-size:13px}._3IzFYa_emptyState{color:var(--dsw-alias-label-tertiary);flex-direction:column;align-items:center;gap:8px;margin-top:80px;padding:0 12px;font-size:13px;line-height:20px;display:flex}._3IzFYa_emptyState>svg{color:var(--dsw-alias-label-caption);margin-bottom:4px}._3IzFYa_emptyAction{cursor:pointer;color:var(--dsw-alias-link);background:0 0;border:none;padding:0;font-size:13px;line-height:20px}._3IzFYa_renameInput{box-sizing:border-box;border:.5px solid var(--dsw-alias-border-l4);border-radius:var(--dsw-radius-lg);width:100%;height:44px;color:var(--dsw-alias-label-primary);background:0 0;outline:none;padding:7px 14px;font-size:14px;font-weight:400;line-height:22px}._3IzFYa_renameInput:disabled{color:var(--dsw-alias-label-dimmed)}._3IzFYa_renameError{color:var(--dsw-alias-state-error-primary);margin-top:8px;font-size:12px;line-height:18px}._3IzFYa_deleteAction:not(:disabled){color:var(--dsw-alias-state-error-primary)}._3IzFYa_deleteStatus{color:var(--dsw-alias-label-secondary);font-size:12px;line-height:18px}._3IzFYa_archiveActivity{color:var(--dsw-alias-label-primary);margin:0 0 8px;padding-left:18px;font-size:13px;line-height:20px}._3IzFYa_archiveActivity li{overflow-wrap:anywhere}@media (prefers-reduced-motion:reduce){._3IzFYa_wide,._3IzFYa_skeletonDot,._3IzFYa_skeletonBar{animation:none}._3IzFYa_root:not(._3IzFYa_rail) ._3IzFYa_sectionHeader._3IzFYa_searchSpacingMotion,._3IzFYa_search,._3IzFYa_sectionLabel,._3IzFYa_searchSlot,._3IzFYa_searchInput,._3IzFYa_headerActions{transition:none}}";
-		const tagId = "dshui-client-ui-workspace/WorkspaceBrowser.module.css";
-		if (typeof document !== "undefined" && document.querySelector("style[data-plugin-css=" + JSON.stringify(tagId) + "]") === null) {
-			const tag = document.createElement("style");
-			tag.dataset.plugin = "dshui-client-ui-workspace";
-			tag.dataset.pluginCss = tagId;
-			tag.textContent = css;
-			document.head.appendChild(tag);
-		}
-		var WorkspaceBrowser_module_css_default = {
-			"archiveActivity": "_3IzFYa_archiveActivity",
-			"clearButton": "_3IzFYa_clearButton",
-			"deleteAction": "_3IzFYa_deleteAction",
-			"deleteStatus": "_3IzFYa_deleteStatus",
-			"empty": "_3IzFYa_empty",
-			"emptyAction": "_3IzFYa_emptyAction",
-			"emptyState": "_3IzFYa_emptyState",
-			"fade": "_3IzFYa_fade",
-			"flatList": "_3IzFYa_flatList",
-			"groupSection": "_3IzFYa_groupSection",
-			"headerActions": "_3IzFYa_headerActions",
-			"headerActionsHidden": "_3IzFYa_headerActionsHidden",
-			"iconButton": "_3IzFYa_iconButton",
-			"list": "_3IzFYa_list",
-			"listArea": "_3IzFYa_listArea",
-			"listTopDropActive": "_3IzFYa_listTopDropActive",
-			"listTopDropIndicator": "_3IzFYa_listTopDropIndicator",
-			"rail": "_3IzFYa_rail",
-			"renameError": "_3IzFYa_renameError",
-			"renameInput": "_3IzFYa_renameInput",
-			"root": "_3IzFYa_root",
-			"search": "_3IzFYa_search",
-			"search-skeleton": "_3IzFYa_search-skeleton",
-			"searchButton": "_3IzFYa_searchButton",
-			"searchExpanded": "_3IzFYa_searchExpanded",
-			"searchInput": "_3IzFYa_searchInput",
-			"searchSlot": "_3IzFYa_searchSlot",
-			"searchSlotExpanded": "_3IzFYa_searchSlotExpanded",
-			"searchSpacingMotion": "_3IzFYa_searchSpacingMotion",
-			"searchStatus": "_3IzFYa_searchStatus",
-			"searchTree": "_3IzFYa_searchTree",
-			"sectionHeader": "_3IzFYa_sectionHeader",
-			"sectionLabel": "_3IzFYa_sectionLabel",
-			"sectionLabelHidden": "_3IzFYa_sectionLabelHidden",
-			"sessionOverflowButton": "_3IzFYa_sessionOverflowButton",
-			"skeletonBar": "_3IzFYa_skeletonBar",
-			"skeletonBarWide": "_3IzFYa_skeletonBarWide",
-			"skeletonBars": "_3IzFYa_skeletonBars",
-			"skeletonDot": "_3IzFYa_skeletonDot",
-			"skeletonRow": "_3IzFYa_skeletonRow",
-			"treeBody": "_3IzFYa_treeBody",
-			"viewOptionsMenu": "_3IzFYa_viewOptionsMenu",
-			"wide": "_3IzFYa_wide",
-			"wide-in": "_3IzFYa_wide-in",
-			"workspaceDropAfter": "_3IzFYa_workspaceDropAfter",
-			"workspaceDropBefore": "_3IzFYa_workspaceDropBefore"
-		};
-		//#endregion
 		//#region lib/types/client/rows/WorkspaceBrowser.js
 		/**
 		* The workspace/session browsing region filling the sidebar shell's
@@ -3012,6 +3172,7 @@ window.__ModuleLoader__.load({
 					label: t("viewOptions.label"),
 					side: "bottom",
 					delayMs: 500,
+					portal: true,
 					children: (0, react_jsx_runtime.jsx)("button", {
 						type: "button",
 						className: clsx(WorkspaceBrowser_module_css_default.iconButton, WorkspaceBrowser_module_css_default.wide),
@@ -3062,7 +3223,7 @@ window.__ModuleLoader__.load({
 			});
 		}
 		/** The scrolling session tree; unmounting drops the sessions subscription and the session watermarks. */
-		function SessionTree({ list, useSessionStatus, startSession, open, workspaces, ungroupedSessionIds, rowState, onLeaveArchivedOnly, workspaceReady, animationResetKey, usePanelInfo, useRemoteAccess, useSessionAccess, useWorkspaceAccess, onRenameRequest, onDeleteRequest, onSessionRenameRequest, renderSlot, insertWorkspaceBefore, nestWorkspaces, groupExpansion, setGroupExpanded, setSessionOrder, scope, deletedSessionIds, home, t, revealSessionId, onSessionRevealed, shortcuts }) {
+		function SessionTree({ list, useSessionStatus, startSession, open, workspaces, ungroupedSessionIds, rowState, onLeaveArchivedOnly, workspaceReady, animationResetKey, usePanelInfo, useRemoteAccess, useSessionAccess, useWorkspaceAccess, onSessionRenameRequest, renderSlot, openSessionMenu, openWorkspaceMenu, useContextMenuTarget, useContextMenu, insertWorkspaceBefore, nestWorkspaces, groupExpansion, setGroupExpanded, setSessionOrder, scope, deletedSessionIds, home, t, revealSessionId, onSessionRevealed, shortcuts }) {
 			const panelActive = usePanelInfo((info) => info.activePanelId !== null);
 			const statuses = useSessionStatus((s) => s);
 			const current = panelActive ? void 0 : Object.values(list.byId).find((session) => (session.retainedBy.mainView ?? 0) > 0)?.id;
@@ -3266,6 +3427,9 @@ window.__ModuleLoader__.load({
 						(0, react_jsx_runtime.jsx)(ProjectRowItem, {
 							newShortcut: shortcuts.find((row) => row.id === "session.new"),
 							group,
+							openWorkspaceMenu,
+							useContextMenu,
+							useContextMenuTarget,
 							useRemoteAccess,
 							useWorkspaceAccess,
 							containsCurrentDescendant: currentAncestors.has(group.key),
@@ -3281,17 +3445,7 @@ window.__ModuleLoader__.load({
 									startSession(group.workspaceId);
 								}
 							},
-							drag: workspaceDragProps,
-							actions: group.workspaceId === void 0 ? void 0 : {
-								rename: () => {
-									/* v8 ignore next -- narrowing guard: the actions object exists only for real-workspace groups. */
-									if (group.workspaceId !== void 0) onRenameRequest(group.workspaceId, group.label);
-								},
-								delete: () => {
-									/* v8 ignore next -- narrowing guard: the actions object exists only for real-workspace groups. */
-									if (group.workspaceId !== void 0) onDeleteRequest(group.workspaceId, group.label);
-								}
-							}
+							drag: workspaceDragProps
 						}),
 						childRows.length > 0 && (0, react_jsx_runtime.jsx)("div", {
 							role: "group",
@@ -3344,6 +3498,9 @@ window.__ModuleLoader__.load({
 								onOpen: open,
 								onRenameRequest: onSessionRenameRequest,
 								renderSlot,
+								openSessionMenu,
+								useContextMenu,
+								useContextMenuTarget,
 								onReveal: node.id === revealSessionId && group.key === revealGroup ? () => {
 									onSessionRevealed(node.id);
 								} : void 0,
@@ -3400,7 +3557,7 @@ window.__ModuleLoader__.load({
 			});
 		}
 		/** The flat "In one list" body: every session is one draggable top-level row. */
-		function FlatList({ list, sessionIds, rowState, onLeaveArchivedOnly, useSessionStatus, useSessionAccess, open, onSessionRenameRequest, usePanelInfo, setSessionOrder, workspaceReady, animationResetKey, scope, deletedSessionIds, revealSessionId, onSessionRevealed, renderSlot, home, t }) {
+		function FlatList({ list, sessionIds, rowState, onLeaveArchivedOnly, useSessionStatus, useSessionAccess, open, onSessionRenameRequest, usePanelInfo, setSessionOrder, workspaceReady, animationResetKey, revealSessionId, onSessionRevealed, renderSlot, openSessionMenu, useContextMenuTarget, useContextMenu, scope, deletedSessionIds, home, t }) {
 			const panelActive = usePanelInfo((info) => info.activePanelId !== null);
 			const statuses = useSessionStatus((s) => s);
 			const rows = (0, react.useMemo)(() => deriveFlat(list, sessionIds, rowState, statuses, scope, deletedSessionIds), [
@@ -3446,6 +3603,9 @@ window.__ModuleLoader__.load({
 							onOpen: open,
 							onRenameRequest: onSessionRenameRequest,
 							renderSlot,
+							openSessionMenu,
+							useContextMenu,
+							useContextMenuTarget,
 							onReveal: node.id === revealSessionId ? () => {
 								onSessionRevealed(node.id);
 							} : void 0,
@@ -3562,7 +3722,7 @@ window.__ModuleLoader__.load({
 		* @param props - composed slot props (shell owner share + store + injected actions).
 		* @returns the region element tree.
 		*/
-		function WorkspaceBrowser({ wide, usePanelInfo, expandSidebar, useSessions, useSessionStatus, useRemoteAccess, useSessionAccess, useWorkspaceAccess, useWorkspaces, useStore, actions, startSession, open, requestSessionRename, notifyArchivedNotOpenable, renameWorkspace, deleteWorkspace, insertWorkspaceBefore, unarchiveSession, createWorkspace, searchSessions, searchResultLimit, useDirectoryFlow, useHostInfo, useShortcuts, useWorkspaceShortcuts, requestSearch, requestAddWorkspace, closeAddWorkspace, setDirectoryBusy, useDeletedSessions, renderSlot, t }) {
+		function WorkspaceBrowser({ wide, usePanelInfo, expandSidebar, useSessions, useSessionStatus, useRemoteAccess, useSessionAccess, useWorkspaceAccess, useWorkspaces, useStore, actions, startSession, open, requestSessionRename, notifyArchivedNotOpenable, renameWorkspace, useWorkspaceActionRequest, settleWorkspaceAction, deleteWorkspace, insertWorkspaceBefore, unarchiveSession, createWorkspace, searchSessions, searchResultLimit, useDirectoryFlow, useHostInfo, useShortcuts, useWorkspaceShortcuts, requestSearch, requestAddWorkspace, closeAddWorkspace, setDirectoryBusy, useDeletedSessions, renderSlot, openSessionMenu, openWorkspaceMenu, useContextMenuTarget, useContextMenu, t }) {
 			const home = useHostInfo((info) => info.home);
 			const shortcuts = useShortcuts((rows) => rows);
 			const searchShortcut = shortcuts.find((row) => row.id === "session.search");
@@ -3735,7 +3895,7 @@ window.__ModuleLoader__.load({
 			const searchInput = (0, react.useRef)(null);
 			const wsPickerOpen = shortcutState.addRequested;
 			const wsPlusRef = (0, react.useRef)(null);
-			const composingRef = (0, react.useRef)(false);
+			const workspaceActionRequest = useWorkspaceActionRequest((value) => value);
 			const openSearchResult = (sessionId) => {
 				if (archivedSessionIds.includes(sessionId)) {
 					notifyArchivedNotOpenable();
@@ -3766,8 +3926,10 @@ window.__ModuleLoader__.load({
 			(0, react.useEffect)(() => {
 				if (shortcutState.searchRequest === 0) return;
 				closeAddWorkspace();
-				if (!wide) expandSidebar();
-				else searchInput.current?.focus({ preventScroll: true });
+				if (!wide || searchInput.current?.closest("[inert]")) {
+					setSearchOnExpand(true);
+					expandSidebar();
+				} else searchInput.current?.focus({ preventScroll: true });
 			}, [shortcutState.searchRequest]);
 			(0, react.useEffect)(() => {
 				if (!wide || !searchExpanded || searchOnExpand) return;
@@ -3836,61 +3998,9 @@ window.__ModuleLoader__.load({
 					controller.abort();
 				};
 			}, [normalizedQuery, searchSessions]);
-			const [renameTarget, setRenameTarget] = (0, react.useState)(null);
-			const [renameDraft, setRenameDraft] = (0, react.useState)("");
-			const [renaming, setRenaming] = (0, react.useState)(false);
-			const [renameError, setRenameError] = (0, react.useState)(null);
-			const renameTrimmed = renameDraft.trim();
-			const renameDuplicate = renameTarget !== null && renameTrimmed !== "" && workspaces.some((w) => w.workspaceId !== renameTarget.workspaceId && w.title === renameTrimmed);
-			const renameBlocked = renaming || renameTrimmed === "" || renameTarget === null || renameTrimmed === renameTarget.storedTitle || renameDuplicate;
-			const closeRename = () => {
-				if (renaming) return;
-				setRenameTarget(null);
-				setRenameError(null);
-			};
-			const confirmRename = () => {
-				if (renameBlocked) return;
-				setRenaming(true);
-				setRenameError(null);
-				renameWorkspace(renameTarget.workspaceId, renameTrimmed).then(() => {
-					setRenaming(false);
-					setRenameTarget(null);
-				}).catch((reason) => {
-					setRenaming(false);
-					setRenameError(reason instanceof Error ? reason.message : String(reason));
-				});
-			};
 			const onSessionUnarchive = (sessionId) => {
 				unarchiveSession(sessionId).catch((reason) => {
 					console.warn("session unarchive rejected:", reason);
-				});
-			};
-			const [deleteTarget, setDeleteTarget] = (0, react.useState)(null);
-			const [deleting, setDeleting] = (0, react.useState)(false);
-			const [deleteCommittedId, setDeleteCommittedId] = (0, react.useState)(null);
-			const [deleteError, setDeleteError] = (0, react.useState)(null);
-			(0, react.useEffect)(() => {
-				if (deleteCommittedId === null || workspaces.some((workspace) => workspace.workspaceId === deleteCommittedId)) return;
-				setDeleting(false);
-				setDeleteCommittedId(null);
-				setDeleteTarget(null);
-			}, [deleteCommittedId, workspaces]);
-			const closeDelete = () => {
-				if (deleting) return;
-				setDeleteTarget(null);
-				setDeleteError(null);
-			};
-			const confirmDelete = () => {
-				/* v8 ignore next -- the Modal is absent without a target and its button is disabled while deleting. */
-				if (deleting || deleteTarget === null) return;
-				setDeleting(true);
-				setDeleteCommittedId(null);
-				setDeleteError(null);
-				deleteWorkspace(deleteTarget.workspaceId).then(() => {
-					setDeleteCommittedId(deleteTarget.workspaceId);
-				}).catch((reason) => {
-					setDeleting(false);
-					setDeleteError(reason instanceof Error ? reason.message : String(reason));
 				});
 			};
 			return (0, react_jsx_runtime.jsxs)("div", {
@@ -3920,6 +4030,7 @@ window.__ModuleLoader__.load({
 											side: "bottom",
 											delayMs: 500,
 											disabled: searchExpanded,
+											portal: true,
 											children: (0, react_jsx_runtime.jsx)("button", {
 												type: "button",
 												className: WorkspaceBrowser_module_css_default.searchButton,
@@ -3980,6 +4091,7 @@ window.__ModuleLoader__.load({
 									shortcutKeys: addShortcut?.keys,
 									side: "bottom",
 									delayMs: 500,
+									portal: true,
 									children: (0, react_jsx_runtime.jsx)("button", {
 										ref: wsPlusRef,
 										type: "button",
@@ -4019,6 +4131,7 @@ window.__ModuleLoader__.load({
 						children: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Tooltip, {
 							label: t("search"),
 							shortcutKeys: searchShortcut?.keys,
+							portal: true,
 							children: (0, react_jsx_runtime.jsx)("button", {
 								type: "button",
 								className: WorkspaceBrowser_module_css_default.searchButton,
@@ -4062,6 +4175,9 @@ window.__ModuleLoader__.load({
 							open: guardedOpen,
 							onSessionRenameRequest: requestSessionRename,
 							renderSlot,
+							openSessionMenu,
+							useContextMenu,
+							useContextMenuTarget,
 							setSessionOrder: saveSessionOrder,
 							scope,
 							deletedSessionIds,
@@ -4079,6 +4195,10 @@ window.__ModuleLoader__.load({
 							useSessionStatus,
 							onSessionRenameRequest: requestSessionRename,
 							renderSlot,
+							openSessionMenu,
+							useContextMenu,
+							openWorkspaceMenu,
+							useContextMenuTarget,
 							workspaces: orderedWorkspaces,
 							ungroupedSessionIds: orderedUngroupedSessionIds,
 							workspaceReady,
@@ -4097,141 +4217,23 @@ window.__ModuleLoader__.load({
 							revealSessionId,
 							onSessionRevealed: acknowledgeSessionReveal,
 							home,
-							t,
-							onRenameRequest: (workspaceId, displayTitle) => {
-								setRenameTarget({
-									workspaceId,
-									storedTitle: storedWorkspaces.find((w) => w.workspaceId === workspaceId)?.title ?? displayTitle
-								});
-								setRenameDraft(displayTitle);
-								setRenameError(null);
-							},
-							onDeleteRequest: (workspaceId, title) => {
-								setDeleteTarget({
-									workspaceId,
-									title
-								});
-								setDeleteError(null);
-							}
+							t
 						}))
 					}),
-					(0, react_jsx_runtime.jsxs)(_deepseek_ai_dsh_client_ui_primitives.Modal, {
-						open: renameTarget !== null,
-						onClose: closeRename,
-						closeLabel: t("close"),
-						title: t("rename.workspace.title"),
-						footer: (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [(0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Button, {
-							variant: "outline",
-							disabled: renaming,
-							onClick: closeRename,
-							children: t("cancel")
-						}), (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Button, {
-							variant: "primary",
-							disabled: renameBlocked,
-							onClick: confirmRename,
-							children: t("rename")
-						})] }),
-						children: [
-							(0, react_jsx_runtime.jsx)("input", {
-								className: WorkspaceBrowser_module_css_default.renameInput,
-								value: renameDraft,
-								"aria-label": t("field.workspaceName"),
-								"data-modal-autofocus": true,
-								disabled: renaming,
-								onFocus: (e) => {
-									e.target.select();
-								},
-								onChange: (e) => {
-									setRenameDraft(e.target.value);
-									setRenameError(null);
-								},
-								onCompositionStart: () => {
-									composingRef.current = true;
-								},
-								onCompositionEnd: () => {
-									composingRef.current = false;
-								},
-								onKeyDown: (e) => {
-									if (e.key === "Enter" && !composingRef.current) {
-										e.preventDefault();
-										confirmRename();
-									}
-								}
-							}),
-							renameDuplicate && (0, react_jsx_runtime.jsx)("div", {
-								className: WorkspaceBrowser_module_css_default.renameError,
-								role: "alert",
-								children: t("conflict.named", { name: renameTrimmed })
-							}),
-							renameError !== null && (0, react_jsx_runtime.jsx)("div", {
-								className: WorkspaceBrowser_module_css_default.renameError,
-								role: "alert",
-								children: renameError
-							})
-						]
-					}),
-					(0, react_jsx_runtime.jsxs)(_deepseek_ai_dsh_client_ui_primitives.Modal, {
-						open: deleteTarget !== null,
-						onClose: closeDelete,
-						closeLabel: t("close"),
-						title: t("delete.workspace"),
-						...deleteTarget === null ? {} : { description: t("delete.desc", { name: deleteTarget.title }) },
-						footer: (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [(0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Button, {
-							variant: "outline",
-							disabled: deleting,
-							onClick: closeDelete,
-							children: t("cancel")
-						}), (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Button, {
-							variant: "outline",
-							className: WorkspaceBrowser_module_css_default.deleteAction,
-							disabled: deleting,
-							onClick: confirmDelete,
-							children: t("delete.workspace")
-						})] }),
-						children: [deleting && (0, react_jsx_runtime.jsx)("div", {
-							className: WorkspaceBrowser_module_css_default.deleteStatus,
-							role: "status",
-							children: t("delete.pending")
-						}), deleteError !== null && (0, react_jsx_runtime.jsx)("div", {
-							className: WorkspaceBrowser_module_css_default.renameError,
-							role: "alert",
-							children: deleteError
-						})]
-					})
+					workspaceActionRequest !== null && (0, react_jsx_runtime.jsx)(WorkspaceDialogs, {
+						request: workspaceActionRequest,
+						workspaces,
+						renameWorkspace,
+						deleteWorkspace,
+						settleWorkspaceAction,
+						t
+					}, `${workspaceActionRequest.action}/${workspaceActionRequest.workspaceId}`)
 				]
 			});
 		}
 		//#endregion
 		//#region lib/types/client/session-actions/ArchiveSession.js
-		/**
-		* The archive action: a `sidebar.workspaces.session.menu.item` row and a
-		* `sidebar.workspaces.session.row.action` button over one injected behavior,
-		* plus the `shell.overlay` dialog that confirms stopping a Session's running
-		* work before archiving it. The same entries restore an archived row; the
-		* notice a successful archive raises and the diagnostics for Host rejections
-		* live in the injected callbacks, not here.
-		*/
-		/**
-		* Menu row (order 400): archive, or restore an archived row. Absent while the Session's access
-		* snapshot excludes that toggle.
-		* @param props - owner share, the archive share, the access Hook, and the menu open state.
-		* @returns the row, or nothing when the caller may not toggle this Session's archival.
-		*/
-		function ArchiveSessionMenuItem({ sessionId, useArchived, useMenuOpenState, useShortcuts, useSessionAccess, archiveSession, unarchiveSession, t }) {
-			const [, setMenuOpen] = useMenuOpenState();
-			const shortcut = useShortcuts((rows) => rows.find((row) => row.id === "session.archive"));
-			const archived = useArchived((set) => set.has(sessionId));
-			if (!useSessionAccess(sessionId, archived ? "workspace/unarchiveSession" : "workspace/archiveSession")) return null;
-			return (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.MenuItemButton, {
-				shortcut: archived ? void 0 : shortcut,
-				icon: archived ? (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconUnarchiveOutlineRegular, { size: 14 }) : (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconArchiveOutlineRegular, { size: 14 }),
-				onSelect: () => {
-					setMenuOpen(false);
-					(archived ? unarchiveSession : archiveSession)(sessionId);
-				},
-				children: t(archived ? "menu.unarchiveSession" : "menu.archiveSession")
-			});
-		}
+		/** Archive hover button and confirmation for stopping the Session’s running work. */
 		/**
 		* Hover button (order 100): archive, or restore an archived row. Absent while the Session's access
 		* snapshot excludes that toggle.
@@ -4437,39 +4439,85 @@ window.__ModuleLoader__.load({
 			};
 		}
 		//#endregion
-		//#region lib/types/client/session-actions/ForkSession.js
-		/** The fork action: one `sidebar.workspaces.session.menu.item` row. */
+		//#region lib/types/client/session-actions/context-menus.js
 		/**
-		* Menu row (order 300): fork at the Session's last completed turn; the child
-		* arrives through the Host list beside its source. Absent when the access
-		* snapshot excludes `session/fork` for this Session.
-		* @param props - owner share, menu open state, access Hook, and the fork share.
-		* @returns the row, or nothing when the caller may not fork this Session.
+		* Register built-in actions while retaining the legacy Slot for external components.
+		* @param ctx - workspace plugin context owning menus, access, membership, and locale.
+		* @param actions - shared row and dialog callbacks; execution always uses the captured Session.
 		*/
-		function ForkSessionMenuItem({ sessionId, useMenuOpenState, useShortcuts, useSessionAccess, forkSession, t }) {
-			const [, setMenuOpen] = useMenuOpenState();
-			const shortcut = useShortcuts((rows) => rows.find((row) => row.id === "session.fork"));
-			if (!useSessionAccess(sessionId, "session/fork")) return null;
-			return (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.MenuItemButton, {
-				shortcut,
-				icon: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconBranchOutlineRegular, {}),
-				onSelect: () => {
-					setMenuOpen(false);
-					forkSession(sessionId);
-				},
-				children: t("menu.fork")
+		function registerSessionMenus(ctx, actions) {
+			const t = ctx.locale.bind("workspace");
+			const register = (id, order, endpoints, resolve) => {
+				ctx.effect(() => ctx.contextMenus.register({
+					id: `session.${id}`,
+					target: "session",
+					order,
+					observe: ({ sessionId }) => [
+						ctx.workspaces.list,
+						ctx.locale,
+						...endpoints.map((action) => ctx.remoteAccess.source("session", sessionId, action))
+					],
+					resolve
+				}), `ui-workspace: ${id} menu`);
+			};
+			const allowed = (target, action) => ctx.remoteAccess.source("session", target.sessionId, action).getSnapshot();
+			const archived = (target) => ctx.workspaces.list.getSnapshot().archivedSessionIds.includes(target.sessionId);
+			register("pin", 100, ["workspace/pinSession", "workspace/unpinSession"], (target) => {
+				const pinned = ctx.workspaces.list.getSnapshot().pinnedSessionIds.includes(target.sessionId);
+				if (archived(target) || !allowed(target, pinned ? "workspace/unpinSession" : "workspace/pinSession")) return [];
+				return [{
+					id: "pin",
+					label: t(pinned ? "menu.unpinSession" : "menu.pinSession"),
+					icon: { key: pinned ? "workspace.unpin" : "workspace.pin" },
+					run: () => {
+						(pinned ? actions.unpinSession : actions.pinSession)(target.sessionId);
+					}
+				}];
+			});
+			register("rename", 200, ["session/rename"], (target) => allowed(target, "session/rename") ? [{
+				id: "rename",
+				label: t("rename"),
+				icon: { key: "workspace.rename" },
+				commandId: "session.rename",
+				run: () => {
+					actions.requestSessionRename(target.sessionId, target.displayTitle);
+				}
+			}] : []);
+			register("fork", 300, ["session/fork"], (target) => allowed(target, "session/fork") ? [{
+				id: "fork",
+				label: t("menu.fork"),
+				icon: { key: "workspace.fork" },
+				commandId: "session.fork",
+				run: () => {
+					actions.forkSession(target.sessionId);
+				}
+			}] : []);
+			register("id", 450, [], (target) => [{
+				id: "copy",
+				label: t("menu.sessionId"),
+				icon: { key: "workspace.copy" },
+				separatorBefore: true,
+				run: () => actions.copySessionId(target.sessionId)
+			}]);
+			register("archive", 600, ["workspace/archiveSession", "workspace/unarchiveSession"], (target) => {
+				const restoring = archived(target);
+				if (!allowed(target, restoring ? "workspace/unarchiveSession" : "workspace/archiveSession")) return [];
+				return [{
+					id: "archive",
+					label: t(restoring ? "menu.unarchiveSession" : "menu.archiveSession"),
+					icon: { key: restoring ? "workspace.unarchive" : "workspace.archive" },
+					separatorBefore: true,
+					afterContent: true,
+					...restoring ? {} : { commandId: "session.archive" },
+					run: () => {
+						(restoring ? actions.unarchiveSession : actions.archiveSession)(target.sessionId);
+					}
+				}];
 			});
 		}
 		//#endregion
 		//#region lib/types/client/session-actions/PinSession.js
-		/**
-		* The pin action: a `sidebar.workspaces.session.menu.item` row and a
-		* `sidebar.workspaces.session.row.action` button over one injected behavior.
-		* Pin and archive are mutually exclusive on the Host, so the action reads both
-		* sets and does not offer itself on an archived row; what a pin does beyond
-		* the Host call (fronting the Session in its saved orders, the failure
-		* notice) lives in the injected callbacks, not here.
-		*/
+		/** Session pin hover button over the workspace owner’s shared callbacks. */
 		/** The row's pin and archive membership, one Set lookup each, and whether its access allows the toggle. */
 		function usePinState({ sessionId, usePinned, useArchived, useSessionAccess }) {
 			const pinned = usePinned((set) => set.has(sessionId));
@@ -4480,28 +4528,10 @@ window.__ModuleLoader__.load({
 			};
 		}
 		/**
-		* Menu row (order 100): pin or unpin by the row's current state; absent on archived rows and while
-		* the Session's access snapshot excludes that toggle.
-		* @param props - owner share, the pin share, the access Hook, and the menu open state.
-		* @returns the row, or null for an archived or refused Session.
-		*/
-		function PinSessionMenuItem(props) {
-			const { sessionId, useMenuOpenState, pinSession, unpinSession, t } = props;
-			const [, setMenuOpen] = useMenuOpenState();
-			const { pinned, archived, allowed } = usePinState(props);
-			if (archived || !allowed) return null;
-			return (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.MenuItemButton, {
-				icon: pinned ? (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconPinFillRegular, {}) : (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconPinOutlineRegular, {}),
-				onSelect: () => {
-					setMenuOpen(false);
-					(pinned ? unpinSession : pinSession)(sessionId);
-				},
-				children: t(pinned ? "menu.unpinSession" : "menu.pinSession")
-			});
-		}
-		/**
-		* Hover button (order 200, rightmost: it lands where the rest-state pin marker sits); absent on
+		* Hover button (order 200), also visible without hover when pinned; absent on
 		* archived rows and while the Session's access snapshot excludes that toggle.
+		* Tooltip forwards the class to the button. Keep that button directly inside
+		* the display-contents slot anchor so hoverless rows can retain the Unpin action.
 		* @param props - owner share, the access Hook, and the pin share.
 		* @returns the button, or null for an archived or refused Session.
 		*/
@@ -4517,7 +4547,7 @@ window.__ModuleLoader__.load({
 				portal: true,
 				children: (0, react_jsx_runtime.jsx)("button", {
 					type: "button",
-					className: Rows_module_css_default.iconButton,
+					className: clsx(Rows_module_css_default.iconButton, pinned && Rows_module_css_default.pinnedAction),
 					"aria-label": t(pinned ? "menu.unpinSession" : "menu.pinSession"),
 					onClick: () => {
 						(pinned ? unpinSession : pinSession)(sessionId);
@@ -4528,32 +4558,7 @@ window.__ModuleLoader__.load({
 		}
 		//#endregion
 		//#region lib/types/client/session-actions/RenameSession.js
-		/**
-		* The rename action: a `sidebar.workspaces.session.menu.item` row that raises
-		* the rename request, and the `shell.overlay` dialog entry that answers it.
-		* The dialog lives outside the row menu because the row unmounts with the
-		* menu; the browser raises the same request from a title double-click.
-		*/
-		/**
-		* Menu row (order 200): ask for the rename dialog, seeded with the row's current title. Absent while
-		* the Session's access snapshot excludes `session/rename`.
-		* @param props - owner share, menu open state, access Hook, and the rename share.
-		* @returns the row, or nothing when the caller may not rename this Session.
-		*/
-		function RenameSessionMenuItem({ sessionId, displayTitle, useMenuOpenState, useShortcuts, useSessionAccess, requestSessionRename, t }) {
-			const [, setMenuOpen] = useMenuOpenState();
-			const shortcut = useShortcuts((rows) => rows.find((row) => row.id === "session.rename"));
-			if (!useSessionAccess(sessionId, "session/rename")) return null;
-			return (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.MenuItemButton, {
-				shortcut,
-				icon: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconEditOutlineRegular, {}),
-				onSelect: () => {
-					setMenuOpen(false);
-					requestSessionRename(sessionId, displayTitle);
-				},
-				children: t("rename")
-			});
-		}
+		/** Rename dialog shared by Session menus, shortcuts, and title double-clicks. */
 		/**
 		* The `shell.overlay` entry: nothing while no rename is requested, otherwise
 		* one dialog per request (keyed by the Session, so a new request starts a
@@ -4860,25 +4865,6 @@ window.__ModuleLoader__.load({
 						filterAction: archiveFilterAction
 					})
 				}, ArchiveToastEntry);
-			});
-		}
-		//#endregion
-		//#region lib/types/client/session-actions/SessionId.js
-		/** Copy the row's Session ID without opening its history. */
-		/**
-		* Copy the complete ID after dismissing the row menu.
-		* @param props - Row identity, menu dismissal, clipboard action, and locale.
-		* @returns The final built-in menu item.
-		*/
-		function SessionIdMenuItem({ sessionId, useMenuOpenState, copySessionId, t }) {
-			const [, setMenuOpen] = useMenuOpenState();
-			return (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.MenuItemButton, {
-				icon: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconCopyOutlineRegular, {}),
-				onSelect: () => {
-					setMenuOpen(false);
-					copySessionId(sessionId);
-				},
-				children: t("menu.sessionId")
 			});
 		}
 		//#endregion
@@ -5893,6 +5879,7 @@ window.__ModuleLoader__.load({
 		* declaration through `slots.inject()` instead of assuming order.
 		*/
 		const inject = [
+			"contextMenus",
 			"slots",
 			"sessions",
 			"workspaces",
@@ -6075,6 +6062,60 @@ window.__ModuleLoader__.load({
 					rowToast.set(null);
 				}
 			});
+			const workspaceActionRequest = (0, _deepseek_ai_dsh_client_store.createSnapshotStore)(null);
+			const requestWorkspaceAction = (workspaceId, displayTitle, action) => {
+				const workspace = workspaces.list.getSnapshot().items.find((row) => row.workspaceId === workspaceId);
+				if (workspace === void 0 || !ctx.remoteAccess.source("workspace", workspaceId, `workspace/${action}`).getSnapshot()) return;
+				workspaceActionRequest.set({
+					action,
+					workspaceId,
+					displayTitle,
+					storedTitle: workspace.title
+				});
+			};
+			ctx.slots.inject("contextMenu.icon", function* () {
+				for (const [key, Icon] of Object.entries({
+					"workspace.rename": _deepseek_ai_dsh_client_ui_primitives.IconEditOutlineRegular,
+					"workspace.delete": _deepseek_ai_dsh_client_ui_primitives.IconTrashOutlineRegular,
+					"workspace.pin": _deepseek_ai_dsh_client_ui_primitives.IconPinOutlineRegular,
+					"workspace.unpin": _deepseek_ai_dsh_client_ui_primitives.IconPinFillRegular,
+					"workspace.archive": _deepseek_ai_dsh_client_ui_primitives.IconArchiveOutlineRegular,
+					"workspace.unarchive": _deepseek_ai_dsh_client_ui_primitives.IconUnarchiveOutlineRegular,
+					"workspace.fork": _deepseek_ai_dsh_client_ui_primitives.IconBranchOutlineRegular,
+					"workspace.copy": _deepseek_ai_dsh_client_ui_primitives.IconCopyOutlineRegular
+				})) yield ctx.slots.register({
+					name: "contextMenu.icon",
+					key
+				}, Icon);
+			});
+			ctx.effect(() => ctx.contextMenus.register({
+				id: "workspace.rename",
+				target: "workspace",
+				order: 100,
+				resolve: ({ workspaceId, displayTitle }) => ctx.remoteAccess.source("workspace", workspaceId, "workspace/rename").getSnapshot() ? [{
+					id: "rename",
+					label: ctx.locale.bind(NS)("rename"),
+					icon: { key: "workspace.rename" },
+					run: () => {
+						requestWorkspaceAction(workspaceId, displayTitle, "rename");
+					}
+				}] : []
+			}), "workspace: rename menu action");
+			ctx.effect(() => ctx.contextMenus.register({
+				id: "workspace.delete",
+				target: "workspace",
+				order: 300,
+				resolve: ({ workspaceId, displayTitle }) => ctx.remoteAccess.source("workspace", workspaceId, "workspace/delete").getSnapshot() ? [{
+					id: "delete",
+					label: ctx.locale.bind(NS)("delete.workspace"),
+					icon: { key: "workspace.delete" },
+					danger: true,
+					separatorBefore: true,
+					run: () => {
+						requestWorkspaceAction(workspaceId, displayTitle, "delete");
+					}
+				}] : []
+			}), "workspace: delete menu action");
 			const deletedSessions = (0, _deepseek_ai_dsh_client_store.createSnapshotStore)(/* @__PURE__ */ new Set());
 			const markSessionDeleted = (sessionId) => {
 				const current = deletedSessions.getSnapshot();
@@ -6093,6 +6134,32 @@ window.__ModuleLoader__.load({
 			};
 			const deleteInjected = () => ({ deleteSession });
 			const browserInjected = () => ({
+				openWorkspaceMenu: (workspaceId, path, displayTitle, point, mode) => {
+					const target = ctx.contextMenus.active.getSnapshot();
+					if (mode === "toggle" && target?.kind === "workspace" && target.value.workspaceId === workspaceId) ctx.contextMenus.close();
+					else ctx.contextMenus.open({
+						kind: "workspace",
+						value: {
+							workspaceId,
+							path,
+							displayTitle
+						}
+					}, point);
+				},
+				settleWorkspaceAction: () => {
+					workspaceActionRequest.set(null);
+				},
+				openSessionMenu: (sessionId, displayTitle, point, mode) => {
+					const target = ctx.contextMenus.active.getSnapshot();
+					if (mode === "toggle" && target?.kind === "session" && target.value.sessionId === sessionId) ctx.contextMenus.close();
+					else ctx.contextMenus.open({
+						kind: "session",
+						value: {
+							sessionId,
+							displayTitle
+						}
+					}, point);
+				},
 				startSession: (workspaceId, options) => {
 					uiWorkspace.startSession(workspaceId, options);
 				},
@@ -6121,6 +6188,8 @@ window.__ModuleLoader__.load({
 				closeAddWorkspace: shortcutControls.closeAdd,
 				setDirectoryBusy: shortcutControls.directoryBusy,
 				hooks: {
+					workspaceActionRequest,
+					contextMenuTarget: ctx.contextMenus.active,
 					directoryFlow: browserFlowSource,
 					hostInfo,
 					workspaceShortcuts: shortcutControls.state,
@@ -6138,14 +6207,6 @@ window.__ModuleLoader__.load({
 					"sidebar.workspaces.directoryFlow": {
 						kind: "single",
 						scope: "root"
-					},
-					"sidebar.workspaces.session.menu.item": {
-						kind: "list",
-						scope: "root",
-						inject: { hooks: {
-							menuOpenState: menuOpenStateFactory,
-							shortcuts: ctx.shortcuts.catalog
-						} }
 					},
 					"sidebar.workspaces.session.row.action": {
 						kind: "list",
@@ -6170,42 +6231,26 @@ window.__ModuleLoader__.load({
 				inject: browserInjected,
 				locale: NS
 			}, WorkspaceBrowser));
+			ctx.slots.inject("contextMenu.content", () => ctx.slots.register({
+				name: "contextMenu.content",
+				key: "session",
+				children: { "sidebar.workspaces.session.menu.item": {
+					kind: "list",
+					scope: "root",
+					inject: { hooks: {
+						menuOpenState: menuOpenStateFactory,
+						shortcuts: ctx.shortcuts.catalog
+					} }
+				} }
+			}, SessionMenu));
+			registerSessionMenus(ctx, {
+				...pinInjected(),
+				...archiveInjected(),
+				...renameInjected(),
+				...forkInjected(),
+				...sessionIdInjected()
+			});
 			ctx.slots.inject("sidebar.workspaces.session.menu.item", function* () {
-				yield ctx.slots.register({
-					name: "sidebar.workspaces.session.menu.item",
-					id: "pin",
-					order: 100,
-					locale: NS,
-					inject: pinInjected
-				}, PinSessionMenuItem);
-				yield ctx.slots.register({
-					name: "sidebar.workspaces.session.menu.item",
-					id: "rename",
-					order: 200,
-					locale: NS,
-					inject: renameInjected
-				}, RenameSessionMenuItem);
-				yield ctx.slots.register({
-					name: "sidebar.workspaces.session.menu.item",
-					id: "fork",
-					order: 300,
-					locale: NS,
-					inject: forkInjected
-				}, ForkSessionMenuItem);
-				yield ctx.slots.register({
-					name: "sidebar.workspaces.session.menu.item",
-					id: "archive",
-					order: 400,
-					locale: NS,
-					inject: archiveInjected
-				}, ArchiveSessionMenuItem);
-				yield ctx.slots.register({
-					name: "sidebar.workspaces.session.menu.item",
-					id: "session-id",
-					order: 450,
-					locale: NS,
-					inject: sessionIdInjected
-				}, SessionIdMenuItem);
 				yield ctx.slots.register({
 					name: "sidebar.workspaces.session.menu.item",
 					id: "delete",
