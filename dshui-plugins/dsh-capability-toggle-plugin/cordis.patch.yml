@@ -1,6 +1,15 @@
 # dsh bundle patch: inserts this plugin's Host half into a profile's layer
 # stack. The client half is discovered through the package's `dsh.client`
 # manifest and loaded into the Web GUI; only the Node half is a loader entry.
+#
+# This file is the ONLY mount path: the extension registers the package in the
+# web profile's `dsh.profile.bundles`, so this row lands at layer 1. Do NOT
+# also insert the row from the extension's `--patch` overlay (layer 4):
+# `configEditor` persists switches into the profile patch (layer 2) and then
+# re-composes the tree to verify the write; a row that exists only in the
+# overlay is absent from that composition, so every toggle is rejected as
+# "overridden by a home patch or command-line overlay" (the whole panel then
+# appears unclickable).
 - insert:
     - id: dsh-capability-toggle-plugin
       name: 'dsh-capability-toggle-plugin'

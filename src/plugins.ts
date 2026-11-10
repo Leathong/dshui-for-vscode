@@ -130,7 +130,8 @@ export function installPlugins(
         if (fs.existsSync(from)) fs.copyFileSync(from, path.join(target, file))
       }
       // The bundle overlay declared by `dsh.bundle.patch` (e.g.
-      // dsh-whitelist-sandbox/cordis.patch.yml). dsh-app-boot reads it for every
+      // dsh-whitelist-sandbox/cordis.patch.yml, dsh-capability-toggle-plugin/
+      // cordis.patch.yml). dsh-app-boot reads it for every
       // package listed in a profile's `dsh.profile.bundles`, so a package
       // that declares it must ship the file, or that profile fails to load.
       const bundlePatch = path.join(source, 'cordis.patch.yml')
@@ -168,13 +169,19 @@ export function installPlugins(
 /** The profile `dshServer` boots (`dsh --profile web`). */
 const PROFILE_NAME = 'web'
 
-/** The one dshui plugin that must be a PROFILE BUNDLE rather than a `--patch`
- * row: only a bundle-layer row (layer 1) is visible when `configEditor` writes
- * the settings row into the profile patch (layer 2). Its own
- * `cordis.patch.yml` atomically disables `bash-sandbox` / `fs-sandbox` and
- * inserts the whitelist replacement, so a missing package degrades to the
- * stock sandbox instead of stripping `shell`/`fs`. */
-const PROFILE_BUNDLE_PLUGIN = 'dsh-whitelist-sandbox'
+/** dshui plugins that must be PROFILE BUNDLES rather than `--patch` rows.
+ * `configEditor` persists a settings row into the profile patch (layer 2) and
+ * then re-composes the tree; a row that exists only in the `--patch` overlay
+ * (layer 4) is missing from that composition, so every save is rejected as
+ * "overridden by a home patch or command-line overlay". Both of these plugins
+ * own a `configEditor`-edited row, so their rows must come from their own
+ * bundle patch (layer 1):
+ *   - `dsh-whitelist-sandbox` edits `extraWritableRoots`; its patch atomically
+ *     disables `bash-sandbox` / `fs-sandbox` and inserts the replacement, so a
+ *     missing package degrades to the stock sandbox.
+ *   - `dsh-capability-toggle-plugin` edits the three override maps behind the
+ *     capability panel; its patch inserts the panel's Host row. */
+const PROFILE_BUNDLE_PLUGINS = ['dsh-whitelist-sandbox', 'dsh-capability-toggle-plugin'] as const
 
 /** Bundles the shipped `web` profile template starts from, mirrored from
  * `@deepseek-ai/dsh-app-boot`'s `PROFILE_TEMPLATES.web`. The extension host is
@@ -196,8 +203,8 @@ interface ProfileManifestLike {
 }
 
 /**
- * Ensure the booted profile lists {@link PROFILE_BUNDLE_PLUGIN} in
- * `dsh.profile.bundles`, so the plugin's own bundle patch (layer 1) runs
+ * Ensure the booted profile lists every {@link PROFILE_BUNDLE_PLUGINS} entry in
+ * `dsh.profile.bundles`, so each plugin's own bundle patch (layer 1) runs
  * before the user patch (layer 2) the settings page edits. Also bootstraps the
  * profile's companion files when it does not exist yet, mirroring
  * `initProfile`; existing files are only ever extended, never replaced.
@@ -218,8 +225,9 @@ export function ensureProfileBundle(dshHome = resolveDshHome(), profileName = PR
     : { name: `dsh-profile-${profileName}`, private: true, dependencies: {}, dsh: { profile: { bundles: [...WEB_PROFILE_BUNDLES] } } }
   const declared = manifest.dsh?.profile?.bundles
   const bundles = Array.isArray(declared) ? declared : [...WEB_PROFILE_BUNDLES]
-  if (bundles.includes(PROFILE_BUNDLE_PLUGIN)) return false
-  manifest.dsh = { ...manifest.dsh, profile: { ...manifest.dsh?.profile, bundles: [...bundles, PROFILE_BUNDLE_PLUGIN] } }
+  const missing = PROFILE_BUNDLE_PLUGINS.filter(name => !bundles.includes(name))
+  if (missing.length === 0) return false
+  manifest.dsh = { ...manifest.dsh, profile: { ...manifest.dsh?.profile, bundles: [...bundles, ...missing] } }
   fs.writeFileSync(manifestPath, JSON.stringify(manifest, undefined, 2) + '\n')
   return true
 }

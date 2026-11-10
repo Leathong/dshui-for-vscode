@@ -629,6 +629,11 @@ npm run compile && npx @vscode/vsce package
   `cordis.patch.yml` 在同一层完成「停用原生 + 插入白名单」；因为设置页要通过 `configEditor` 编辑该行
   的 `extraWritableRoots`，而 overlay 层在 profile 层之后应用，行插在 overlay 里会让每次保存都被判为
   「overridden by a home patch or command-line overlay」。
+- **能力开关插件同理，必须挂成 profile bundle**：`dsh-capability-toggle-plugin` 的三级开关也由
+  `configEditor` 写入 profile patch。它曾由本 overlay 的 insert 行挂载，结果每次切换都返回
+  `overridden by a home patch or command-line overlay`，面板上所有开关点了没反应。
+  `ensureProfileBundle()` 现在把它和 `dsh-whitelist-sandbox` 一起登记进 `dsh.profile.bundles`，
+  行由插件自己的 `cordis.patch.yml` 插入；`verify-overlay.mjs` 会拦住把它塞回 overlay 的回归。
 - **白名单的 operator 私有路径不写进本仓库**：`extraWritableRoots` 属于运维数据，放
   `$DSH_HOME/profiles/web/cordis.patch.yml`。注意补丁层是「后层整体覆盖前层」的语义：profile 层
   在本 overlay **之前**应用，既不能给 overlay 插入的行配 config，也无法覆盖 overlay 已给的

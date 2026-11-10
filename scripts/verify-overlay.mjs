@@ -132,6 +132,39 @@ for (const entry of inserts) {
   }
 }
 
+// 设置页要通过 configEditor 编辑其 config 的插件不能挂在 --patch overlay（第 4 层）：
+// 保存会写 profile patch（第 2 层）再重组整棵树做比对，只在 overlay 里存在的行
+// 在重组结果里找不到 config，于是每次保存都被判为
+// "overridden by a home patch or command-line overlay"。这类插件必须由
+// ensureProfileBundle() 挂成 profile bundle（第 1 层），行由插件自己的
+// cordis.patch.yml 插入。这里拦住“又把它塞回 overlay”的回归。
+const BUNDLE_ONLY_PLUGINS = ['dsh-capability-toggle-plugin']
+
+for (const name of BUNDLE_ONLY_PLUGINS) {
+  if (inserted(name) !== undefined) {
+    violations.push(
+      `${name} 不能由 patch.yml 的 insert 行挂载：它的 config 要经 configEditor 写入，`
+      + 'overlay 层的行会让每次保存都被判为 "overridden by a home patch or command-line overlay"；'
+      + '应由 ensureProfileBundle() 挂成 profile bundle。',
+    )
+  }
+  const bundlePatchPath = path.join(pluginsDir, name, 'cordis.patch.yml')
+  if (!fs.existsSync(bundlePatchPath)) {
+    violations.push(
+      `缺少 bundle patch dshui-plugins/${name}/cordis.patch.yml：`
+      + '作为 profile bundle 挂载时，它必须自己插入自己的行（否则插件不会加载）。',
+    )
+    continue
+  }
+  const bundle = scanRows(fs.readFileSync(bundlePatchPath, 'utf8'))
+  if (!bundle.inserts.some(entry => entry.name === name || entry.id === name)) {
+    violations.push(
+      `bundle patch dshui-plugins/${name}/cordis.patch.yml 必须插入 ${name} 行`
+      + '（该插件作为 profile bundle 挂载时没有 overlay 行兜底）。',
+    )
+  }
+}
+
 // 需要由插件的 profile bundle patch 自行「停用 + 插入」的配对：它必须在第 1 层
 // （bundle），设置页写的 profile patch 是第 2 层；若由 --patch overlay（第 4 层）
 // 插入，configEditor 在第 2 层匹配不到该行，每次保存都会被判为
