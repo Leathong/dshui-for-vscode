@@ -1,35 +1,44 @@
 /**
  * Whitelist settings store: the browser-side projection of this plugin's own
  * profile entry, read and written through the shared `configForms` service.
- * The entry id IS the settings namespace (0.1.7 moved settings from
+ * The entry id IS the settings namespace (0.1.7+ moved settings from
  * `$DSH_HOME/settings.yaml` sections into the profile patch document, keyed by
- * loader entry id), and `extraWritableRoots` is the one volatile field.
+ * loader entry id), and the two volatile fields are `extraWritableRoots` and
+ * `unsandboxedCommands`.
  * Split from the React section so the logic is unit-testable without pulling
  * in the browser bundle.
  */
 /** This plugin's profile entry id — the settings namespace its Host row
  * carries. Must match `cordis.patch.yml`'s inserted id. */
 export declare const SETTINGS_NS = "dsh-whitelist-sandbox";
-/** The single config field this page edits. */
-export declare const SETTINGS_FIELD = "extraWritableRoots";
+/** Extra writable roots field. */
+export declare const SETTINGS_FIELD_ROOTS = "extraWritableRoots";
+/** Commands that run outside the sandbox field. */
+export declare const SETTINGS_FIELD_COMMANDS = "unsandboxedCommands";
 export type WhitelistStatus = 'loading' | 'ready' | 'unavailable';
 export interface WhitelistStoreState {
     status: WhitelistStatus;
     writable: boolean;
+    /** Extra writable roots (`workspace-write` only). */
     roots: string[];
+    /** Command prefixes whose bash invocations run outside the sandbox. */
+    commands: string[];
     revision: number | undefined;
 }
 export interface WhitelistSaveOutcome {
     ok: boolean;
     error?: string;
 }
+/** The two config fields this page reads, as the form resolves them. */
+export interface WhitelistFormValue {
+    extraWritableRoots?: string[];
+    unsandboxedCommands?: string[];
+}
 /** One `ConfigForm<T>` snapshot, narrowed to the fields this page reads. */
 export interface WhitelistFormSnapshot {
     status: WhitelistStatus;
     /** Last accepted schema-resolved section; undefined before the first acceptance. */
-    value?: {
-        extraWritableRoots?: string[];
-    };
+    value?: WhitelistFormValue;
     revision: number | undefined;
     writable: boolean;
 }
@@ -46,9 +55,9 @@ export interface WhitelistConfigForm {
     set(field: string, value: unknown): Promise<boolean>;
 }
 /**
- * Read-only projection plus the one write of `extraWritableRoots`. The derived
- * snapshot is cached by the underlying form snapshot's identity so
- * `useSyncExternalStore` sees a stable reference between real changes.
+ * Read-only projection plus the two field writes. The derived snapshot is
+ * cached by the underlying form snapshot's identity so `useSyncExternalStore`
+ * sees a stable reference between real changes.
  */
 export declare class WhitelistSettingsStore {
     private readonly form;
@@ -57,7 +66,11 @@ export declare class WhitelistSettingsStore {
     constructor(form: WhitelistConfigForm);
     getSnapshot(): WhitelistStoreState;
     subscribe(listener: () => void): () => void;
-    save(roots: string[]): Promise<WhitelistSaveOutcome>;
+    /** Write the extra writable roots. */
+    saveRoots(roots: string[]): Promise<WhitelistSaveOutcome>;
+    /** Write the commands that run outside the sandbox. */
+    saveCommands(commands: string[]): Promise<WhitelistSaveOutcome>;
+    private write;
     /** The form is owned by the shared `configForms` provider; nothing to release. */
     dispose(): void;
 }

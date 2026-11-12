@@ -129,7 +129,7 @@
     # `ensureProfileBundle()`, so its own `cordis.patch.yml` owns the
     # disable-stock + insert-whitelist pairing. (The capability toggle plugin
     # is mounted the same way, for the configEditor reason given above.)
-    # Operator roots live in the
+    # Operator roots and unsandboxed command prefixes live in the
     # `dsh-whitelist-sandbox` row of `$DSH_HOME/profiles/web/cordis.patch.yml`
     # (layer 2, after the bundles), editable from the settings page.
 

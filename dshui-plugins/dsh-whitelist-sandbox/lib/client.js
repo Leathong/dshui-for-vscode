@@ -49,21 +49,27 @@ window.__ModuleLoader__.load({
 		/**
 		* Whitelist settings store: the browser-side projection of this plugin's own
 		* profile entry, read and written through the shared `configForms` service.
-		* The entry id IS the settings namespace (0.1.7 moved settings from
+		* The entry id IS the settings namespace (0.1.7+ moved settings from
 		* `$DSH_HOME/settings.yaml` sections into the profile patch document, keyed by
-		* loader entry id), and `extraWritableRoots` is the one volatile field.
+		* loader entry id), and the two volatile fields are `extraWritableRoots` and
+		* `unsandboxedCommands`.
 		* Split from the React section so the logic is unit-testable without pulling
 		* in the browser bundle.
 		*/
 		/** This plugin's profile entry id — the settings namespace its Host row
 		* carries. Must match `cordis.patch.yml`'s inserted id. */
 		const SETTINGS_NS = "dsh-whitelist-sandbox";
-		/** The single config field this page edits. */
-		const SETTINGS_FIELD = "extraWritableRoots";
+		/** Extra writable roots field. */
+		const SETTINGS_FIELD_ROOTS = "extraWritableRoots";
+		/** Commands that run outside the sandbox field. */
+		const SETTINGS_FIELD_COMMANDS = "unsandboxedCommands";
+		function listOf(value) {
+			return Array.isArray(value) ? [...value] : [];
+		}
 		/**
-		* Read-only projection plus the one write of `extraWritableRoots`. The derived
-		* snapshot is cached by the underlying form snapshot's identity so
-		* `useSyncExternalStore` sees a stable reference between real changes.
+		* Read-only projection plus the two field writes. The derived snapshot is
+		* cached by the underlying form snapshot's identity so `useSyncExternalStore`
+		* sees a stable reference between real changes.
 		*/
 		var WhitelistSettingsStore = class {
 			constructor(form) {
@@ -73,6 +79,7 @@ window.__ModuleLoader__.load({
 					status: "loading",
 					writable: false,
 					roots: [],
+					commands: [],
 					revision: void 0
 				});
 				this.form = form;
@@ -81,10 +88,12 @@ window.__ModuleLoader__.load({
 				const snapshot = this.form.getSnapshot();
 				if (snapshot !== this.lastForm) {
 					this.lastForm = snapshot;
+					const ready = snapshot.status === "ready";
 					this.cached = {
 						status: snapshot.status,
 						writable: snapshot.writable,
-						roots: snapshot.status === "ready" && Array.isArray(snapshot.value?.extraWritableRoots) ? [...snapshot.value.extraWritableRoots] : [],
+						roots: ready ? listOf(snapshot.value?.extraWritableRoots) : [],
+						commands: ready ? listOf(snapshot.value?.unsandboxedCommands) : [],
 						revision: snapshot.revision
 					};
 				}
@@ -93,10 +102,18 @@ window.__ModuleLoader__.load({
 			subscribe(listener) {
 				return this.form.subscribe(listener);
 			}
-			async save(roots) {
+			/** Write the extra writable roots. */
+			saveRoots(roots) {
+				return this.write(SETTINGS_FIELD_ROOTS, roots);
+			}
+			/** Write the commands that run outside the sandbox. */
+			saveCommands(commands) {
+				return this.write(SETTINGS_FIELD_COMMANDS, commands);
+			}
+			async write(field, values) {
 				let accepted;
 				try {
-					accepted = await this.form.set(SETTINGS_FIELD, roots);
+					accepted = await this.form.set(field, values);
 				} catch (error) {
 					return {
 						ok: false,
@@ -117,28 +134,40 @@ window.__ModuleLoader__.load({
 		const COPY_NS = "dshui-ui-whitelist";
 		const zh = {
 			nav: "沙箱白名单",
-			hint: "在 workspace-write 之外额外允许写入的路径。最终生效由宿主守卫校验：覆盖 $DSH_HOME 或其下 settings.yaml 的路径会被拒绝，并保留上次生效值（详见服务器日志）。",
+			hint: "两组操作员白名单：额外可写路径，以及直接在本机执行（不经沙箱）的命令前缀。最终生效由宿主守卫校验：非法条目会被拒绝保存，已存在的坏条目会被忽略并保留其余生效值（详见服务器日志）。",
+			rootsTitle: "额外可写路径",
+			rootsHint: "在 workspace-write 之外额外允许写入的路径（bash 与 write/edit 同时遵守）。覆盖 $DSH_HOME 或其下 settings.yaml 的路径会被拒绝。",
+			commandsTitle: "免沙箱命令",
+			commandsHint: "按命令前缀匹配：整行会拆成多条简单命令，全部命中才直接在本机执行，否则整行仍走沙箱。除「目标为 /dev/null」与 fd 复制/关闭（2>&1、2>&-）外的重定向、$ 展开、注释、后台、子 shell 一律走沙箱；bash、env、xargs、sudo 等壳/转发器不可加白。注意：把 node、python、flutter 之类的执行器加白，等同完全信任它能运行的任意代码。",
 			addPlaceholder: "输入绝对路径…",
+			commandAddPlaceholder: "输入命令前缀，如 git status…",
 			add: "添加",
 			remove: "移除",
 			save: "保存",
 			unsaved: "有未保存的修改",
 			saved: "已保存，经宿主守卫校验后生效",
 			saveFailed: "保存失败：",
+			empty: "（空）",
 			readonly: "当前连接不可写（非本机回环），仅可查看",
 			notLoaded: "白名单插件未加载（设置段不可用）",
 			loading: "加载中…"
 		};
 		const en = {
 			nav: "Sandbox Whitelist",
-			hint: "Extra writable paths on top of workspace-write. Final application is subject to the host guard: roots covering $DSH_HOME or its settings.yaml are rejected and the previous whitelist is kept (see server log).",
+			hint: "Two operator-owned whitelists: extra writable paths, and command prefixes that run directly on the host outside the sandbox. Final application is subject to the host guard: unusable entries are refused on save, and a bad stored entry is ignored while the rest stays effective (see the server log).",
+			rootsTitle: "Extra writable paths",
+			rootsHint: "Extra writable paths on top of workspace-write (honored by both bash and write/edit). Roots covering $DSH_HOME or its settings.yaml are rejected.",
+			commandsTitle: "Unsandboxed commands",
+			commandsHint: "Prefix-matched: the line is split into simple commands and runs on the host only when every one is covered; otherwise the whole line stays sandboxed. Redirections other than /dev/null targets and fd duplication/close (2>&1, 2>&-) always stay sandboxed. Shells and forwarders (bash, env, xargs, sudo, …) cannot be whitelisted. Note: whitelisting an executor such as node, python or flutter means fully trusting the code it can run.",
 			addPlaceholder: "Absolute path…",
+			commandAddPlaceholder: "Command prefix, e.g. git status…",
 			add: "Add",
 			remove: "Remove",
 			save: "Save",
 			unsaved: "Unsaved changes",
 			saved: "Saved; applied after host validation",
 			saveFailed: "Save failed: ",
+			empty: "(empty)",
 			readonly: "Read-only connection (non-loopback); viewing only",
 			notLoaded: "Whitelist plugin not loaded (section unavailable)",
 			loading: "Loading…"
@@ -147,30 +176,32 @@ window.__ModuleLoader__.load({
 		//#region lib/types/client/index.js
 		/**
 		* dsh-whitelist-sandbox, browser half: a `settings.section` for the sandbox
-		* whitelist.
+		* whitelist — extra writable paths plus commands that run outside the sandbox.
 		*
 		* Security contract (mirrors the host plugin's):
 		*  - The form reads/writes ONLY this plugin's own profile entry through the
 		*    shared `configForms` service (`get(entryId)` + the form's `set`) — the
 		*    same settings transport the stock Shell page uses. There is no second,
-		*    bypass write path, and no direct `remote.settings` access (0.1.7 removed
-		*    `settingsScope` and moved writes behind the provider-owned form).
-		*  - The authoritative guard (reject roots covering $DSH_HOME /
-		*    the policy document, refuse before persist) runs host-side in
-		*    dsh-whitelist-sandbox when the change is applied; the UI shows the
-		*    document value and a notice that final application is subject to it.
+		*    bypass write path, and no direct `remote.settings` access.
+		*  - The authoritative guard (safe roots, usable command entries, refuse
+		*    before persist) runs host-side in dsh-whitelist-sandbox when the change is
+		*    applied; the UI shows the document value and a notice that final
+		*    application is subject to it.
 		*  - Nothing model-controlled is ever rendered into this form; inputs are
-		*    operator-typed paths only.
+		*    operator-typed paths and command prefixes only.
 		*/
-		/** The settings-page section: edit the whitelist path list, save via the document. */
-		function WhitelistSection({ controller, t }) {
-			const state = (0, react.useSyncExternalStore)((listener) => controller.subscribe(listener), () => controller.getSnapshot());
+		/**
+		* One editable string list with its own draft/pending/save state. Both lists
+		* write through the same shared form; each keeps its own unsaved edits so
+		* editing one never discards the other's draft.
+		*/
+		function ListEditor(props) {
+			const { items, editable, onSave } = props;
 			const [draft, setDraft] = (0, react.useState)("");
 			const [pending, setPending] = (0, react.useState)(null);
 			const [saving, setSaving] = (0, react.useState)(false);
 			const [notice, setNotice] = (0, react.useState)(null);
-			const storeRoots = state.status === "ready" ? state.roots : [];
-			const roots = pending === null ? storeRoots : pending;
+			const values = pending === null ? [...items] : pending;
 			const dirty = pending !== null;
 			const mark = (next) => {
 				setPending(next);
@@ -179,31 +210,31 @@ window.__ModuleLoader__.load({
 			const add = () => {
 				const value = draft.trim();
 				if (value === "") return;
-				mark([...roots, value]);
+				mark([...values, value]);
 				setDraft("");
 			};
 			const remove = (index) => {
-				mark(roots.filter((_, cursor) => cursor !== index));
+				mark(values.filter((_, cursor) => cursor !== index));
 			};
 			const save = async () => {
 				setSaving(true);
 				try {
-					const result = await controller.save(roots);
+					const result = await onSave(values);
 					if (result.ok) {
 						setPending(null);
 						setNotice({
 							ok: true,
-							message: t("saved")
+							message: props.savedLabel
 						});
 					} else setNotice({
 						ok: false,
-						message: t("saveFailed") + result.error
+						message: props.saveFailedLabel + result.error
 					});
 				} finally {
 					setSaving(false);
 				}
 			};
-			const row = (index, path) => (0, react_jsx_runtime.jsx)("li", {
+			const row = (index, value) => (0, react_jsx_runtime.jsx)("li", {
 				key: index,
 				style: {
 					display: "flex",
@@ -218,21 +249,129 @@ window.__ModuleLoader__.load({
 						fontFamily: "monospace",
 						fontSize: "12px"
 					},
-					children: path
+					children: value
 				}), (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Button, {
 					variant: "ghost",
 					size: "sm",
 					icon: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconTrashOutlineRegular, {}),
-					"aria-label": t("remove"),
+					"aria-label": props.removeLabel,
 					onClick: () => remove(index)
 				})]
 			});
-			const editable = state.writable && state.status === "ready";
+			return (0, react_jsx_runtime.jsxs)("section", {
+				style: {
+					display: "flex",
+					flexDirection: "column",
+					gap: "8px"
+				},
+				children: [
+					(0, react_jsx_runtime.jsx)("h3", {
+						style: {
+							margin: 0,
+							fontSize: "13px"
+						},
+						children: props.title
+					}),
+					(0, react_jsx_runtime.jsx)("p", {
+						style: {
+							margin: 0,
+							color: "var(--dsw-alias-label-secondary)",
+							fontSize: "12px",
+							lineHeight: "1.6"
+						},
+						children: props.hint
+					}),
+					values.length === 0 ? (0, react_jsx_runtime.jsx)("p", {
+						style: {
+							margin: 0,
+							color: "var(--dsw-alias-label-tertiary)",
+							fontSize: "12px"
+						},
+						children: props.emptyLabel
+					}) : (0, react_jsx_runtime.jsx)("ul", {
+						style: {
+							listStyle: "none",
+							margin: 0,
+							padding: 0
+						},
+						children: values.map((value, index) => row(index, value))
+					}),
+					(0, react_jsx_runtime.jsxs)("div", {
+						style: {
+							display: "flex",
+							gap: "8px",
+							alignItems: "center"
+						},
+						children: [(0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Input, {
+							style: { flex: "1" },
+							value: draft,
+							placeholder: props.placeholder,
+							disabled: !editable,
+							onChange: (event) => setDraft(event.target.value),
+							onKeyDown: (event) => {
+								if (event.key === "Enter") add();
+							}
+						}), (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Button, {
+							variant: "outline",
+							size: "sm",
+							icon: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconPlusOutlineRegular, {}),
+							disabled: !editable || draft.trim() === "",
+							onClick: add,
+							children: props.addLabel
+						})]
+					}),
+					(0, react_jsx_runtime.jsxs)("div", {
+						style: {
+							display: "flex",
+							gap: "12px",
+							alignItems: "center"
+						},
+						children: [
+							(0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Button, {
+								variant: "primary",
+								size: "sm",
+								disabled: !editable || saving || !dirty,
+								onClick: save,
+								children: props.saveLabel
+							}),
+							dirty && (0, react_jsx_runtime.jsx)("span", {
+								style: {
+									color: "var(--dsw-alias-label-tertiary)",
+									fontSize: "12px"
+								},
+								children: props.unsavedLabel
+							}),
+							notice !== null && (0, react_jsx_runtime.jsx)("span", {
+								role: notice.ok ? "status" : "alert",
+								style: {
+									color: notice.ok ? "var(--dsw-alias-ok)" : "var(--dsw-alias-danger)",
+									fontSize: "12px"
+								},
+								children: notice.message
+							})
+						]
+					})
+				]
+			});
+		}
+		/** The settings-page section: edit both whitelists, save each through the document. */
+		function WhitelistSection({ controller, t }) {
+			const state = (0, react.useSyncExternalStore)((listener) => controller.subscribe(listener), () => controller.getSnapshot());
+			const common = {
+				editable: state.writable && state.status === "ready",
+				addLabel: t("add"),
+				removeLabel: t("remove"),
+				saveLabel: t("save"),
+				unsavedLabel: t("unsaved"),
+				savedLabel: t("saved"),
+				saveFailedLabel: t("saveFailed"),
+				emptyLabel: t("empty")
+			};
 			return (0, react_jsx_runtime.jsxs)("div", {
 				style: {
 					display: "flex",
 					flexDirection: "column",
-					gap: "12px",
+					gap: "20px",
 					maxWidth: "720px"
 				},
 				children: [
@@ -250,68 +389,21 @@ window.__ModuleLoader__.load({
 						role: "alert",
 						children: t("notLoaded")
 					}),
-					(0, react_jsx_runtime.jsx)("ul", {
-						style: {
-							listStyle: "none",
-							margin: 0,
-							padding: 0
-						},
-						children: roots.map((path, index) => row(index, path))
+					(0, react_jsx_runtime.jsx)(ListEditor, {
+						...common,
+						title: t("rootsTitle"),
+						hint: t("rootsHint"),
+						items: state.roots,
+						placeholder: t("addPlaceholder"),
+						onSave: (values) => controller.saveRoots(values)
 					}),
-					(0, react_jsx_runtime.jsxs)("div", {
-						style: {
-							display: "flex",
-							gap: "8px",
-							alignItems: "center"
-						},
-						children: [(0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Input, {
-							style: { flex: "1" },
-							value: draft,
-							placeholder: t("addPlaceholder"),
-							disabled: !editable,
-							onChange: (event) => setDraft(event.target.value),
-							onKeyDown: (event) => {
-								if (event.key === "Enter") add();
-							}
-						}), (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Button, {
-							variant: "outline",
-							size: "sm",
-							icon: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconPlusOutlineRegular, {}),
-							disabled: !editable || draft.trim() === "",
-							onClick: add,
-							children: t("add")
-						})]
-					}),
-					(0, react_jsx_runtime.jsxs)("div", {
-						style: {
-							display: "flex",
-							gap: "12px",
-							alignItems: "center"
-						},
-						children: [
-							(0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Button, {
-								variant: "primary",
-								size: "sm",
-								disabled: !editable || saving || !dirty,
-								onClick: save,
-								children: t("save")
-							}),
-							dirty && (0, react_jsx_runtime.jsx)("span", {
-								style: {
-									color: "var(--dsw-alias-label-tertiary)",
-									fontSize: "12px"
-								},
-								children: t("unsaved")
-							}),
-							notice !== null && (0, react_jsx_runtime.jsx)("span", {
-								role: notice.ok ? "status" : "alert",
-								style: {
-									color: notice.ok ? "var(--dsw-alias-ok)" : "var(--dsw-alias-danger)",
-									fontSize: "12px"
-								},
-								children: notice.message
-							})
-						]
+					(0, react_jsx_runtime.jsx)(ListEditor, {
+						...common,
+						title: t("commandsTitle"),
+						hint: t("commandsHint"),
+						items: state.commands,
+						placeholder: t("commandAddPlaceholder"),
+						onSave: (values) => controller.saveCommands(values)
 					}),
 					!state.writable && state.status !== "loading" && (0, react_jsx_runtime.jsx)("p", {
 						style: {

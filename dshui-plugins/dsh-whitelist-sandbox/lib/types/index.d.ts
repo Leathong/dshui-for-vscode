@@ -6,6 +6,7 @@ import type { Config as SandboxedFileSystemConfig } from '@deepseek-ai/dsh-fs-sa
 import { SandboxBashExecutor } from '@deepseek-ai/dsh-bash-sandbox';
 import type { Config as SandboxBashConfig } from '@deepseek-ai/dsh-bash-sandbox';
 import z from '@deepseek-ai/schemastery';
+import { CommandWhitelist } from './command-whitelist.ts';
 /**
  * Inject the extra writable grants into a stock-confined runner argv. The
  * runner shapes are the `dsh-sandbox-local` dialects (Seatbelt SBPL string,
@@ -37,12 +38,16 @@ export declare function canonicalizeExtraRoots(roots: readonly string[] | undefi
  */
 export declare function assertSafeWhitelistRoots(roots: readonly string[], store: WhitelistGuardStore): void;
 /** Reject a non-empty whitelist on Windows: the ACL restricted-token runner
- * grants per-workspace write SIDs only, so extra roots cannot be enforced. */
-export declare function assertSupportedWhitelistPlatform(roots: readonly string[]): void;
-/** Logger surface the whitelist source uses; a cordis logger satisfies it. */
+ * grants per-workspace write SIDs only, so extra roots cannot be enforced, and
+ * the mounted shell there is `pwsh-sandbox`, not the bash executor this plugin
+ * replaces. */
+export declare function assertSupportedWhitelistPlatform(roots: readonly string[], commands?: readonly string[]): void;
+/** Logger surface the whitelist sources use; a cordis logger satisfies it
+ * (`debug` is optional so test fakes can omit it). */
 export interface WhitelistLogger {
     warn(message: string): void;
     error(message: string): void;
+    debug?(message: string): void;
 }
 /** Policy-state locations the security guard must keep unwritable. */
 export interface WhitelistGuardStore {
@@ -77,13 +82,34 @@ export declare class WhitelistRoots {
      */
     private refresh;
 }
+/** The resolved spec/result types of the shell seam, taken from the stock
+ * executor's own signature: `@deepseek-ai/dsh-shell` is a transitive package
+ * this plugin does not depend on directly, and these aliases keep the override
+ * structurally identical to the base method. */
+type BashExecSpec = Parameters<SandboxBashExecutor['execute']>[0];
+type BashExecution = Awaited<ReturnType<SandboxBashExecutor['execute']>>;
 /**
  * bash side: keeps the stock wrap, injects the extra grants into the selected
- * runner's argv. Constructing it registers `ctx.shell` (Service name chain).
+ * runner's argv, and routes wholly-whitelisted command lines through the
+ * inherited local executor (the stock `danger-full-access` path) instead of the
+ * sandbox. Constructing it registers `ctx.shell` (Service name chain).
  */
 export declare class WhitelistBashExecutor extends SandboxBashExecutor {
     private readonly rootsSource;
-    constructor(ctx: Context, config: SandboxBashConfig, rootsSource: WhitelistRoots);
+    private readonly commands;
+    private readonly logger;
+    constructor(ctx: Context, config: SandboxBashConfig, rootsSource: WhitelistRoots, commands: CommandWhitelist, logger: WhitelistLogger | undefined);
+    /**
+     * Route one resolved call. A command line wholly covered by the command
+     * whitelist runs on the inherited local executor — the same code path the
+     * stock executor uses under `danger-full-access` — so it is genuinely
+     * unconfined and its result carries no `sandbox` facts. Everything else,
+     * including every mode the whitelist does not cover, keeps the stock
+     * confinement and its result facts.
+     * @param spec - the fully-specified spec from {@link SandboxBashExecutor.resolve}.
+     * @returns the prepared handle from whichever side runs the command.
+     */
+    execute(spec: BashExecSpec): Promise<BashExecution>;
     confine(command: string, policy: SandboxPolicy, signal?: AbortSignal): Promise<ConfinedArgv>;
 }
 /**
@@ -105,15 +131,21 @@ export declare const inject: string[];
  * layer mounts this plugin (the extension registers the package as a profile
  * bundle, whose `cordis.patch.yml` inserts exactly this id). */
 export declare const SETTINGS_ENTRY = "dsh-whitelist-sandbox";
-/** Plugin config: extra writable roots, a volatile field so the settings page
- * can edit it live without remounting the plugin. */
+/** Plugin config: the two operator-owned whitelists, both volatile fields so
+ * the settings page can edit them live without remounting the plugin. */
 export interface WhitelistConfig {
+    /** Extra writable roots under `workspace-write` (bash and fs both honor them). */
     extraWritableRoots: Volatile<string[]>;
+    /** Command prefixes whose bash invocations run on the host, outside the sandbox. */
+    unsandboxedCommands: Volatile<string[]>;
 }
 /** Runtime schema for {@link WhitelistConfig}. */
 export declare const Config: z<Schemastery.ObjectS<NoInfer<{
     extraWritableRoots: z<NoInfer<string[]>, NoInfer<string[]>, "volatile-defined">;
+    unsandboxedCommands: z<NoInfer<string[]>, NoInfer<string[]>, "volatile-defined">;
 }>>, Schemastery.ObjectT<NoInfer<{
     extraWritableRoots: z<NoInfer<string[]>, NoInfer<string[]>, "volatile-defined">;
+    unsandboxedCommands: z<NoInfer<string[]>, NoInfer<string[]>, "volatile-defined">;
 }>>, "plain">;
 export declare function apply(ctx: Context, config: WhitelistConfig): void;
+export {};

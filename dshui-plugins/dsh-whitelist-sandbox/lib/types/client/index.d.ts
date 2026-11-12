@@ -29,7 +29,7 @@ interface WhitelistClientContext {
         }, component: unknown): () => void;
     };
 }
-/** The settings-page section: edit the whitelist path list, save via the document. */
+/** The settings-page section: edit both whitelists, save each through the document. */
 export declare function WhitelistSection({ controller, t }: {
     controller: WhitelistSettingsStore;
     t: (key: string) => string;

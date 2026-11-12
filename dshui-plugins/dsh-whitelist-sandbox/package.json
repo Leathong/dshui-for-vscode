@@ -1,7 +1,7 @@
 {
   "name": "dsh-whitelist-sandbox",
-  "description": "Additive writable-path whitelist for the DSH sandbox: extra roots under workspace-write, honored by both bash and write/edit tools, plus a settings-page section to edit them",
-  "version": "0.2.0",
+  "description": "Two operator whitelists for the DSH sandbox: extra writable roots under workspace-write (bash + write/edit), and command prefixes whose bash invocations run outside the sandbox in every mode, plus a settings-page section to edit both",
+  "version": "0.3.0",
   "type": "module",
   "main": "lib/index.js",
   "types": "lib/types/index.d.ts",

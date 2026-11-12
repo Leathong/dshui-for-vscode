@@ -176,9 +176,9 @@ const PROFILE_NAME = 'web'
  * "overridden by a home patch or command-line overlay". Both of these plugins
  * own a `configEditor`-edited row, so their rows must come from their own
  * bundle patch (layer 1):
- *   - `dsh-whitelist-sandbox` edits `extraWritableRoots`; its patch atomically
- *     disables `bash-sandbox` / `fs-sandbox` and inserts the replacement, so a
- *     missing package degrades to the stock sandbox.
+ *   - `dsh-whitelist-sandbox` edits `extraWritableRoots` / `unsandboxedCommands`;
+ *     its patch atomically disables `bash-sandbox` / `fs-sandbox` and inserts the
+ *     replacement, so a missing package degrades to the stock sandbox.
  *   - `dsh-capability-toggle-plugin` edits the three override maps behind the
  *     capability panel; its patch inserts the panel's Host row. */
 const PROFILE_BUNDLE_PLUGINS = ['dsh-whitelist-sandbox', 'dsh-capability-toggle-plugin'] as const
