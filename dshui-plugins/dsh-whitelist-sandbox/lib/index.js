@@ -1,6 +1,6 @@
-import { stat } from "node:fs/promises";
+import { lstat, realpath, stat } from "node:fs/promises";
 import { existsSync } from "node:fs";
-import { basename, dirname, join, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { canonicalPath } from "@deepseek-ai/dsh-sandbox";
 import { FsError } from "@deepseek-ai/dsh-fs";
 import { SandboxedFileSystem } from "@deepseek-ai/dsh-fs-sandbox";
@@ -9,6 +9,7 @@ import { LocalBashExecutor } from "@deepseek-ai/dsh-bash-local";
 import { LocalFileSystem } from "@deepseek-ai/dsh-fs-local";
 import { resolveDshHome } from "@deepseek-ai/dsh-home-paths";
 import z from "@deepseek-ai/schemastery";
+import { tmpdir } from "node:os";
 //#region lib/types/command-whitelist.js
 /**
 * Command whitelist mechanics for the bash executor: decide whether one raw
@@ -28,12 +29,13 @@ import z from "@deepseek-ai/schemastery";
 *    Background jobs (`&`), subshells/groups (`(`, `)`, `{`, `}`), comments
 *    (`#`), backslash escapes, and any `$` expansion or backtick (which could
 *    hide command substitution) are refused outright.
-*  - Redirections are refused as well, with one exception: the shell — not the
-*    whitelisted program — performs a redirection, so ANY file target would be
-*    an unconfined write primitive. Only a target that is exactly `/dev/null`
-*    (which has no file effect) and file-descriptor duplication/close
-*    (`2>&1`, `2>&-`) are accepted; every other redirect keeps the line
-*    sandboxed.
+*  - Redirections are parsed and classified, not judged here: the shell — not
+*    the whitelisted program — performs a redirection, so a file target is an
+*    unconfined read/write primitive. `/dev/null` and file-descriptor
+*    duplication/close have no file effect and never block the exemption; a
+*    file target is handed to the executor's asynchronous writable-root check
+*    (single simple commands only). Entries themselves may not contain
+*    redirects at all.
 *  - Quotes are honored (the entry and the command are compared as argv
 *    tokens, not as raw text), but nothing inside a command is ever evaluated
 *    here.
@@ -123,7 +125,7 @@ const RESERVED = new Set([
 /** Unquoted glob syntax is refused in entries: a glob in the command word is
 * expanded by bash before PATH lookup, so the program that actually runs can
 * differ from the text that matched. */
-const GLOB_CHARACTER = /[*?[\]]/;
+const GLOB_CHARACTER$1 = /[*?[\]]/;
 function rejection(reason) {
 	return {
 		ok: false,
@@ -145,6 +147,7 @@ function rejection(reason) {
 function parseCommandLine(raw, options = {}) {
 	const allowRedirections = options.allowRedirections !== false;
 	const segments = [];
+	const redirects = [];
 	let segment = [];
 	let word = "";
 	let inWord = false;
@@ -238,7 +241,7 @@ function parseCommandLine(raw, options = {}) {
 					const operator = append ? "&>>" : "&>";
 					const target = readRedirectTarget(raw, index + (append ? 3 : 2));
 					if (!target.ok) return rejection(target.reason);
-					if (!isAllowedRedirect(operator, target.token)) return rejection(`redirection "${operator}${target.token}" would write a file outside the sandbox`);
+					redirects.push(classifyRedirect(operator, target));
 					index = target.next;
 					continue;
 				}
@@ -265,7 +268,7 @@ function parseCommandLine(raw, options = {}) {
 				}
 				const target = readRedirectTarget(raw, after);
 				if (!target.ok) return rejection(target.reason);
-				if (!isAllowedRedirect(operator, target.token)) return rejection(`redirection "${operator}${target.token}" would write a file outside the sandbox`);
+				redirects.push(classifyRedirect(operator, target));
 				index = target.next;
 				continue;
 			}
@@ -277,7 +280,7 @@ function parseCommandLine(raw, options = {}) {
 				const operator = raw[index + 1] === "&" ? "<&" : "<";
 				const target = readRedirectTarget(raw, index + operator.length);
 				if (!target.ok) return rejection(target.reason);
-				if (!isAllowedRedirect(operator, target.token)) return rejection(`redirection "${operator}${target.token}" is not supported`);
+				redirects.push(classifyRedirect(operator, target));
 				index = target.next;
 				continue;
 			}
@@ -301,7 +304,10 @@ function parseCommandLine(raw, options = {}) {
 	for (const entry of segments) if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(entry[0])) return rejection("an environment assignment prefix is not supported");
 	return {
 		ok: true,
-		value: { segments }
+		value: {
+			segments,
+			redirects
+		}
 	};
 }
 /** The null device: the only redirection target with no file effect. */
@@ -319,11 +325,13 @@ function readRedirectTarget(raw, start) {
 	while (index < raw.length && (raw[index] === " " || raw[index] === "	")) index += 1;
 	let token = "";
 	let started = false;
+	let quoted = false;
 	while (index < raw.length) {
 		const character = raw[index];
 		if (character === " " || character === "	" || character === "\n" || character === ";" || character === "|" || character === "&" || character === "<" || character === ">" || character === "(" || character === ")" || character === "{" || character === "}") break;
 		if (character === "'") {
 			started = true;
+			quoted = true;
 			index += 1;
 			while (index < raw.length && raw[index] !== "'") {
 				token += raw[index];
@@ -338,6 +346,7 @@ function readRedirectTarget(raw, start) {
 		}
 		if (character === "\"") {
 			started = true;
+			quoted = true;
 			index += 1;
 			while (index < raw.length && raw[index] !== "\"") {
 				const inner = raw[index];
@@ -386,22 +395,68 @@ function readRedirectTarget(raw, start) {
 	return {
 		ok: true,
 		token,
+		quoted,
 		next: index
 	};
 }
 /**
-* Whether one redirection has no file effect: a `/dev/null` target, or a file
-* descriptor duplication/close (`2>&1`, `2>&-`, `0<&1`). Any other target can
-* write (or read) an arbitrary path with the shell's full, unsandboxed
-* privileges, so the whole line stays sandboxed instead.
-* @param operator - the redirection operator as written.
-* @param token - the parsed target token.
-* @returns true when the redirection cannot touch a file path.
+* Classify one parsed redirection. `fd`/`close` are bash fd duplication and
+* close; `null` is `/dev/null` (also `>&/dev/null`/`&>/dev/null`, which bash
+* treats as "both streams to the file"); everything else touches a real path
+* and is validated against the writable roots before the line may stay
+* unsandboxed.
+* @param operator - the operator as written.
+* @param target - the parsed target token.
+* @returns the classified redirection.
 */
-function isAllowedRedirect(operator, token) {
-	if (operator === ">" || operator === ">>" || operator === "<" || operator === "&>" || operator === "&>>") return token === NULL_DEVICE;
-	if (operator === ">&" && token === NULL_DEVICE) return true;
-	return /^[0-9]+$/.test(token) || token === "-";
+function classifyRedirect(operator, target) {
+	const { token, quoted } = target;
+	if (operator === ">&" || operator === "<&") {
+		if (/^[0-9]+$/.test(token)) return {
+			kind: "fd",
+			operator,
+			target: token,
+			quoted
+		};
+		if (token === "-") return {
+			kind: "close",
+			operator,
+			target: token,
+			quoted
+		};
+		if (operator === ">&" && token === NULL_DEVICE) return {
+			kind: "null",
+			operator,
+			target: token,
+			quoted
+		};
+		return {
+			kind: "file",
+			operator,
+			target: token,
+			quoted
+		};
+	}
+	return token === NULL_DEVICE ? {
+		kind: "null",
+		operator,
+		target: token,
+		quoted
+	} : {
+		kind: "file",
+		operator,
+		target: token,
+		quoted
+	};
+}
+/**
+* Whether one redirection has no file effect at all; such redirects never need
+* a target check.
+* @param redirect - one classified redirection.
+* @returns true for a `/dev/null` target, fd duplication or close.
+*/
+function redirectHasNoFileEffect(redirect) {
+	return redirect.kind !== "file";
 }
 /**
 * Validate one operator-typed whitelist entry: exactly one simple command,
@@ -420,7 +475,7 @@ function parseEntry(raw) {
 	if (program === "") return rejection("the entry has an empty command word");
 	if (RESERVED.has(program)) return rejection(`"${program}" is a shell reserved word, not a command`);
 	if (FORWARDERS.has(basename(program).toLowerCase())) return rejection(`"${program}" is a shell or command forwarder; whitelisting it would forward arbitrary commands (use the permission mode instead)`);
-	if (tokens.some((token) => GLOB_CHARACTER.test(token))) return rejection("a glob character (\"*\", \"?\", \"[\", \"]\") in an entry would be expanded by bash before the command runs");
+	if (tokens.some((token) => GLOB_CHARACTER$1.test(token))) return rejection("a glob character (\"*\", \"?\", \"[\", \"]\") in an entry would be expanded by bash before the command runs");
 	return {
 		ok: true,
 		value: {
@@ -441,18 +496,33 @@ function entryAllows(argv, entry) {
 	return true;
 }
 /**
-* Whether the whole raw command line is covered by the whitelist: it must
-* decompose, contain at least one simple command, and EVERY simple command must
-* be allowed by at least one entry.
+* Analyze one raw line against the entries: it must decompose, contain at
+* least one simple command, and EVERY simple command must be allowed by at
+* least one entry. Redirections are returned unjudged so the caller can apply
+* its own target policy.
 * @param raw - the exact `bash -c` source.
 * @param entries - validated entries (empty means nothing is exempt).
-* @returns true only when the entire line may run without the sandbox.
+* @returns the parsed line when every segment matches, otherwise undefined.
+*/
+function analyzeWhitelistedLine(raw, entries) {
+	if (entries.length === 0) return void 0;
+	const parsed = parseCommandLine(raw);
+	if (!parsed.ok) return void 0;
+	return parsed.value.segments.every((segment) => entries.some((entry) => entryAllows(segment, entry.tokens))) ? parsed.value : void 0;
+}
+/**
+* Strict pure check: the line must match the entries AND every redirection must
+* have no file effect. The executor uses {@link analyzeWhitelistedLine} plus an
+* asynchronous target check instead, so a file redirect into a writable root
+* can stay exempt; this function remains the fail-closed API for callers that
+* cannot do filesystem work.
+* @param raw - the exact `bash -c` source.
+* @param entries - validated entries (empty means nothing is exempt).
+* @returns true only when the line matches and no redirect touches a path.
 */
 function isCommandWhitelisted(raw, entries) {
-	if (entries.length === 0) return false;
-	const parsed = parseCommandLine(raw);
-	if (!parsed.ok) return false;
-	return parsed.value.segments.every((segment) => entries.some((entry) => entryAllows(segment, entry.tokens)));
+	const analysis = analyzeWhitelistedLine(raw, entries);
+	return analysis !== void 0 && analysis.redirects.every(redirectHasNoFileEffect);
 }
 /**
 * Validate a stored entry list before it persists. Throws on the first unusable
@@ -530,6 +600,127 @@ var CommandWhitelist = class {
 	}
 };
 //#endregion
+//#region lib/types/redirect-targets.js
+/**
+* Redirect target validation for the unsandboxed command whitelist.
+*
+* The shell — not the whitelisted program — performs each redirection, so a
+* file target is an unconfined read/write primitive. Before a line with file
+* redirects may skip the sandbox, every target must resolve (physically, with
+* symlinks followed) into a writable area: the session workspace root, the
+* operator's extra writable roots, or the system temp areas the stock
+* `workspace-write` policy already grants.
+*
+* Honest limits: this is a pre-spawn check. A concurrent process could still
+* swap a path component for a symlink between the check and the shell's
+* `open(2)` (TOCTOU), and the whitelisted program itself is unconfined anyway
+* (it can write wherever its own logic allows). The check keeps the *shell's*
+* redirect from widening the exemption to arbitrary paths; it is not a
+* substitute for the sandbox around non-whitelisted commands.
+*/
+/** Path comparison follows the host filesystem's case rules. */
+const CASE_SENSITIVE = process.platform !== "win32";
+/** A glob in a redirect target would be expanded by bash, not by this check. */
+const GLOB_CHARACTER = /[*?[\]]/;
+function comparable(path) {
+	return CASE_SENSITIVE ? path : path.toLowerCase();
+}
+/** Whether `path` is `root` itself or lives below it (both physical). */
+function isUnder(path, root) {
+	const target = comparable(path);
+	const base = comparable(root);
+	if (target === base) return true;
+	return target.startsWith(base.endsWith(sep) ? base : base + sep);
+}
+/** Filesystem failures that mean "the path does not exist" rather than "cannot
+* check": only those map to undefined; every other error propagates so the
+* caller can fail closed. */
+const MISSING_CODES$1 = new Set(["ENOENT", "ENOTDIR"]);
+function isMissing$1(error) {
+	const code = error?.code;
+	return typeof code === "string" && MISSING_CODES$1.has(code);
+}
+/** `realpath` where a missing path yields undefined, other errors propagate. */
+async function physicalPath(path) {
+	try {
+		return await realpath(path);
+	} catch (error) {
+		if (isMissing$1(error)) return void 0;
+		throw error;
+	}
+}
+/** `lstat` where a missing path yields undefined, other errors propagate. */
+async function entryInfo(path) {
+	try {
+		return await lstat(path);
+	} catch (error) {
+		if (isMissing$1(error)) return void 0;
+		throw error;
+	}
+}
+/**
+* Whether every file redirect of one whitelisted line targets a writable area.
+*
+* Call this only with file redirects taken from a line whose simple commands
+* all matched the whitelist, and only when the line is a SINGLE simple command:
+* a simple command's redirections are performed before the command runs, so a
+* relative target resolves against `workdir`, while an earlier segment of a
+* compound line could create a symlink or change the cwd first.
+* @param redirects - every redirect the line carries (effect-free ones are ignored).
+* @param workdir - the shell's starting directory (the resolved spec workdir).
+* @param roots - workspace root, policy extra roots and this plugin's roots.
+* @returns true when every file target is physically inside a writable area.
+*/
+async function redirectsWithinWritableRoots(redirects, workdir, roots) {
+	try {
+		return await evaluate(redirects, workdir, roots);
+	} catch {
+		return false;
+	}
+}
+/** The throwing core of {@link redirectsWithinWritableRoots}. */
+async function evaluate(redirects, workdir, roots) {
+	const fileRedirects = redirects.filter((redirect) => redirect.kind === "file");
+	if (fileRedirects.length === 0) return true;
+	if (!isAbsolute(workdir)) return false;
+	const allowed = [];
+	for (const candidate of [
+		roots.workspaceRoot,
+		...roots.extraWritableRoots,
+		...roots.additionalWritableRoots ?? [],
+		tmpdir(),
+		"/tmp"
+	]) {
+		const physical = await physicalPath(candidate);
+		if (physical !== void 0 && !allowed.includes(physical)) allowed.push(physical);
+	}
+	if (allowed.length === 0) return false;
+	for (const redirect of fileRedirects) if (!await targetAllowed(redirect.target, workdir, allowed)) return false;
+	return true;
+}
+/**
+* Validate one redirect target: resolve it against the workdir, follow
+* symlinks for the parent directory and for the target itself when it already
+* exists, and require the physical result to stay inside a writable root.
+* @param target - the parsed, quote-removed target token.
+* @param workdir - absolute shell starting directory.
+* @param allowed - physical writable roots.
+* @returns true when the target cannot escape the writable areas.
+*/
+async function targetAllowed(target, workdir, allowed) {
+	if (target === "" || GLOB_CHARACTER.test(target) || target.includes("~")) return false;
+	const absolute = isAbsolute(target) ? target : resolve(workdir, target);
+	const parent = dirname(absolute);
+	const name = basename(absolute);
+	if (name === "" || name === "." || name === "..") return false;
+	const physicalParent = await physicalPath(parent);
+	if (physicalParent === void 0) return false;
+	const candidate = join(physicalParent, name);
+	if (!allowed.some((root) => isUnder(candidate, root))) return false;
+	if ((await entryInfo(candidate))?.isSymbolicLink() === true) return false;
+	return true;
+}
+//#endregion
 //#region lib/types/index.js
 /**
 * dsh-whitelist-sandbox
@@ -569,10 +760,12 @@ var CommandWhitelist = class {
 * `sandbox_permissions` escalation channel behave exactly as stock.
 *
 * The whitelist is deliberately conservative: a compound line must be fully
-* covered (both sides of a pipe too), and redirections aimed at any real file,
-* expansions, comments, background jobs, subshells, or escapes disqualify the
-* whole line. Redirections with no file effect are accepted: a `/dev/null`
-* target and file-descriptor duplication/close. The
+* covered (both sides of a pipe too), and expansions, comments, background
+* jobs, subshells, or escapes disqualify the whole line. Redirections with no
+* file effect (`/dev/null`, fd duplication/close) are always accepted; a FILE
+* redirect is accepted only on a single simple command whose physical target
+* resolves inside the workspace, an extra writable root, or a temp area (see
+* `redirect-targets.ts`). The
 * stock `sandbox` provider and `sandboxPolicy` service stay mounted; the
 * plugin replaces only the two consuming rows (`bash-sandbox`, `fs-sandbox`)
 * via the composition patch (disabled rows + a fresh plugin row).
@@ -808,19 +1001,42 @@ var WhitelistBashExecutor = class extends SandboxBashExecutor {
 	* Route one resolved call. A command line wholly covered by the command
 	* whitelist runs on the inherited local executor — the same code path the
 	* stock executor uses under `danger-full-access` — so it is genuinely
-	* unconfined and its result carries no `sandbox` facts. Everything else,
-	* including every mode the whitelist does not cover, keeps the stock
+	* unconfined and its result carries no `sandbox` facts. A line with file
+	* redirects must additionally pass the writable-root target check. Everything
+	* else, including every mode the whitelist does not cover, keeps the stock
 	* confinement and its result facts.
 	* @param spec - the fully-specified spec from {@link SandboxBashExecutor.resolve}.
 	* @returns the prepared handle from whichever side runs the command.
 	*/
 	async execute(spec) {
 		const policy = spec.sandboxPolicy;
-		if (policy !== void 0 && policy.mode !== "danger-full-access" && this.commands.allows(spec.command)) {
+		if (policy !== void 0 && policy.mode !== "danger-full-access" && await this.exemptFromSandbox(spec, policy)) {
 			this.logger?.debug?.(`dsh-whitelist-sandbox: running ${JSON.stringify(spec.command)} outside the sandbox (whitelisted command)`);
 			return LocalBashExecutor.prototype.execute.call(this, spec);
 		}
 		return super.execute(spec);
+	}
+	/**
+	* Decide whether one call may run outside the sandbox: every simple command
+	* must match an entry, and every file redirect must point into a writable
+	* area. Effect-free redirects (`/dev/null`, fd duplication/close) are always
+	* fine; a file redirect is only judged on a single simple command, because a
+	* compound line's earlier segments could create a symlink or change the cwd
+	* before the redirecting segment runs.
+	* @param spec - the resolved call.
+	* @param policy - the call's sandbox policy (workspace root and extra roots).
+	* @returns true when the whole line is exempt.
+	*/
+	async exemptFromSandbox(spec, policy) {
+		const analysis = analyzeWhitelistedLine(spec.command, this.commands.entries);
+		if (analysis === void 0) return false;
+		if (analysis.redirects.every(redirectHasNoFileEffect)) return true;
+		if (analysis.segments.length !== 1) return false;
+		return redirectsWithinWritableRoots(analysis.redirects, spec.workdir, {
+			workspaceRoot: policy.workspaceRoot,
+			additionalWritableRoots: policy.additionalWritableRoots,
+			extraWritableRoots: this.rootsSource.roots
+		});
 	}
 	async confine(command, policy, signal) {
 		const confined = await SandboxBashExecutor.prototype.confine.call(this, command, policy, signal);

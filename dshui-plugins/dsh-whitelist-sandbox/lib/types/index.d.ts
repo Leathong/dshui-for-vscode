@@ -103,13 +103,26 @@ export declare class WhitelistBashExecutor extends SandboxBashExecutor {
      * Route one resolved call. A command line wholly covered by the command
      * whitelist runs on the inherited local executor — the same code path the
      * stock executor uses under `danger-full-access` — so it is genuinely
-     * unconfined and its result carries no `sandbox` facts. Everything else,
-     * including every mode the whitelist does not cover, keeps the stock
+     * unconfined and its result carries no `sandbox` facts. A line with file
+     * redirects must additionally pass the writable-root target check. Everything
+     * else, including every mode the whitelist does not cover, keeps the stock
      * confinement and its result facts.
      * @param spec - the fully-specified spec from {@link SandboxBashExecutor.resolve}.
      * @returns the prepared handle from whichever side runs the command.
      */
     execute(spec: BashExecSpec): Promise<BashExecution>;
+    /**
+     * Decide whether one call may run outside the sandbox: every simple command
+     * must match an entry, and every file redirect must point into a writable
+     * area. Effect-free redirects (`/dev/null`, fd duplication/close) are always
+     * fine; a file redirect is only judged on a single simple command, because a
+     * compound line's earlier segments could create a symlink or change the cwd
+     * before the redirecting segment runs.
+     * @param spec - the resolved call.
+     * @param policy - the call's sandbox policy (workspace root and extra roots).
+     * @returns true when the whole line is exempt.
+     */
+    private exemptFromSandbox;
     confine(command: string, policy: SandboxPolicy, signal?: AbortSignal): Promise<ConfinedArgv>;
 }
 /**

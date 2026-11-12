@@ -6,9 +6,27 @@ export type ParseCommandLineResult = {
     readonly ok: false;
     readonly reason: string;
 };
-/** One decomposable command line: every simple command as its argv tokens. */
+/** One decomposable command line: every simple command as its argv tokens,
+ * plus every redirection it carries. */
 export interface ParsedCommandLine {
     readonly segments: readonly (readonly string[])[];
+    readonly redirects: readonly Redirect[];
+}
+/** Redirection operator shapes this scanner understands. */
+export type RedirectOperator = '>' | '>>' | '>&' | '<' | '<&' | '&>' | '&>>';
+/**
+ * One redirection. `kind` is the security-relevant part: `file` writes or reads
+ * a real path and therefore needs target validation; `null` is `/dev/null`,
+ * `fd` duplicates a file descriptor and `close` closes one — none of those
+ * touch a path.
+ */
+export interface Redirect {
+    readonly kind: 'file' | 'null' | 'fd' | 'close';
+    readonly operator: RedirectOperator;
+    readonly target: string;
+    /** Whether any part of the target word was quoted (the target check treats
+     * tilde/glob characters conservatively either way). */
+    readonly quoted: boolean;
 }
 /** One validated whitelist entry: its operator text plus parsed argv tokens. */
 export interface CommandEntry {
@@ -45,15 +63,12 @@ export declare function parseCommandLine(raw: string, options?: {
     readonly allowRedirections?: boolean;
 }): ParseCommandLineResult;
 /**
- * Whether one redirection has no file effect: a `/dev/null` target, or a file
- * descriptor duplication/close (`2>&1`, `2>&-`, `0<&1`). Any other target can
- * write (or read) an arbitrary path with the shell's full, unsandboxed
- * privileges, so the whole line stays sandboxed instead.
- * @param operator - the redirection operator as written.
- * @param token - the parsed target token.
- * @returns true when the redirection cannot touch a file path.
+ * Whether one redirection has no file effect at all; such redirects never need
+ * a target check.
+ * @param redirect - one classified redirection.
+ * @returns true for a `/dev/null` target, fd duplication or close.
  */
-export declare function isAllowedRedirect(operator: '>' | '>>' | '>&' | '<' | '<&' | '&>' | '&>>', token: string): boolean;
+export declare function redirectHasNoFileEffect(redirect: Redirect): boolean;
 /**
  * Validate one operator-typed whitelist entry: exactly one simple command,
  * no forwarder/shell as its program, no reserved word, no glob.
@@ -69,12 +84,24 @@ export declare function parseEntry(raw: string): ParseEntryResult;
  */
 export declare function entryAllows(argv: readonly string[], entry: readonly string[]): boolean;
 /**
- * Whether the whole raw command line is covered by the whitelist: it must
- * decompose, contain at least one simple command, and EVERY simple command must
- * be allowed by at least one entry.
+ * Analyze one raw line against the entries: it must decompose, contain at
+ * least one simple command, and EVERY simple command must be allowed by at
+ * least one entry. Redirections are returned unjudged so the caller can apply
+ * its own target policy.
  * @param raw - the exact `bash -c` source.
  * @param entries - validated entries (empty means nothing is exempt).
- * @returns true only when the entire line may run without the sandbox.
+ * @returns the parsed line when every segment matches, otherwise undefined.
+ */
+export declare function analyzeWhitelistedLine(raw: string, entries: readonly CommandEntry[]): ParsedCommandLine | undefined;
+/**
+ * Strict pure check: the line must match the entries AND every redirection must
+ * have no file effect. The executor uses {@link analyzeWhitelistedLine} plus an
+ * asynchronous target check instead, so a file redirect into a writable root
+ * can stay exempt; this function remains the fail-closed API for callers that
+ * cannot do filesystem work.
+ * @param raw - the exact `bash -c` source.
+ * @param entries - validated entries (empty means nothing is exempt).
+ * @returns true only when the line matches and no redirect touches a path.
  */
 export declare function isCommandWhitelisted(raw: string, entries: readonly CommandEntry[]): boolean;
 /**
