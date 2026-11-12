@@ -3,7 +3,7 @@
 > 中文 · [English](README.en.md)
 
 `dshui-bundles.patch` 是对 [deepseek-harness](https://github.com/deepseek-ai/deepseek-harness) 源码的
-dshui 改动（60 个文件、约 210 KB，含客户端 bundle + host 运行时两大部分，基提交为 dsh `0.2.2-rc.1`）。
+dshui 改动（61 个文件、约 217 KB，含客户端 bundle + host 运行时两大部分，基提交为 dsh `0.2.2-rc.2`）。
 客户端与 host 必须**对齐**到同一基提交并一起套用，因此合并为单个补丁——套一半都是不完整的。
 
 ## 客户端 bundle（浏览器 SPA）
@@ -13,15 +13,17 @@ dshui 改动（60 个文件、约 210 KB，含客户端 bundle + host 运行时�
   （`scopedWorkspacePath` / `useDeletedSessions` 接线、会话删除行隐藏）、
   `contract/slots.ts`（`DeleteSessionInjected` 与 `deletedSessions` 可观察量）、`index.ts`
   （dshui 的 deleted-sessions snapshot store + `deleteSession`：经 webview 外壳请求扩展宿主
-  删除会话日志，并把 id 记入本地隐藏集）、`session-actions/DeleteSession.tsx`（rc.1 起上游把内置
-  会话菜单项改为结构化 `ctx.contextMenus` 条目、只把 `sidebar.workspaces.session.menu.item` 留给外部
-  React 条目：本文件把「删除会话」注册进该 legacy 槽（order 460，排在结构化「复制 Session ID」450 之后）
-  与 `sidebar.workspaces.session.row.action`（order 300），与上游的 archive/pin 并存）、
+  删除会话日志，并把 id 记入本地隐藏集）、`session-actions/DeleteSession.tsx`（上游把内置会话菜单项
+  收进结构化 `ctx.contextMenus`，菜单本身由 `renderFactorySlot` 渲染，只把
+  `sidebar.workspaces.session.menu.item` 留给外部 React 条目：本文件把「删除会话」注册进该槽
+  （order 460，排在结构化「复制 Session ID」450 之后）与 `sidebar.workspaces.session.row.action`
+  （order 300），与上游的 archive/pin 并存）、
   `locales.ts`（新增 `menu.deleteSession` / `actions.delete`）、
   `tsdown.config.ts`（bundle id 改为 `dshui-client-ui-workspace`）；
 - `ui-conversation`：`apply.ts`（共享后端第二个窗口再入会话时 `conversation` 服务可能读到
-  `undefined`——旧实现会 throw 并一次性让出 composer 槽位（无重试），直到窗口重载 composer 永久
-  消失；改为降级到「无态回复」姿态，下一次绑定重解就恢复活跃 composer）、
+  `undefined`——上游 `concreteConversation` 直接 throw，会一次性让出 composer 槽位（无重试），直到
+  窗口重载 composer 永久消失；改为返回 `ConversationController | undefined` 并降级到「无态回复」
+  姿态，下一次绑定重解就恢复活跃 composer）、
   `skeleton/dshui-scope.ts`（0.1.7 起上游把会话界面拆成 ConversationRoot/MainPanel/Content，
   SCOPE 常量因此独立成模块：`DSHUI_SCOPE`）、`skeleton/ConversationMainPanel.tsx`
   （`data-dshui-scope` 根标记）、`skeleton/ConversationContent.tsx`（静态 chip、hero 隐藏、
@@ -48,8 +50,8 @@ dshui 改动（60 个文件、约 210 KB，含客户端 bundle + host 运行时�
   `contract/slots.ts`（`UserActionOwnerProps` 与 `conversation.chat.user-actions` 槽声明）、
   `tests/user-link.client.spec.tsx`（规则 + 渲染器 + 目标分类的用例）与其余测试的少量配套改动；
 - `packages/extensions/cordis-client-runner/src/client/slot-catalog.ts`：由
-  `pnpm run gen-client-catalog` 重新生成，登记 `conversation.chat.user-actions` 槽的目录条目
-  （供聊天界面「槽目录」文档展示）。
+  `pnpm run gen-client-catalog` 重新生成，登记 dshui 的 `conversation.chat.user-actions` 与上游
+  `conversation.chat.markdown.fence` 等槽的目录条目（供聊天界面「槽目录」文档展示）。
 - 构建预设：`packages/client/tsdown.client.ts`（rc.2 起 `clientBundle(packageDir, …)` 从包目录读
   `package.json` 的 name 作为 bundle id；dshui 的 profile 行名不是包名，因此新增 `pluginId` 选项，
   两个 `tsdown.config.ts` 用它把 id 钉回 `dshui-client-*`）。
@@ -122,7 +124,10 @@ RPC；上游 0.1.7 新增的归档/置顶行操作保留并存）、每条用户
   `#L10` / `:10` 后缀并把行号交给 `openFile`。
 - `packages/mcp/mcp-client/src/index.ts`：新增 `startup: 'eager' | 'lazy'` 配置（默认 `eager`）。
   `lazy` 时激活立即返回、由 supervisor 在后台连接并注册工具，慢速远端（如 OAuth 之后的服务器）
-  不再拖住 dsh 启动；配套更新 README 与少量测试。
+  不再拖住 dsh 启动；配套更新 README（中英）与测试。rc.2 起上游给同一配置加了
+  `startupTimeoutMs` / `closeTimeoutMs` / `expandTemplates` / `maxInstructionBytes` / `reconnect`，
+  合并后的 `Config` 同时带两套字段；新增的上游用例 `tests/generation.spec.ts` 里的
+  `Config` 字面量补了 `startup: 'eager'`，否则该必填字段会让 `build:lib:host` 的类型检查失败。
 
 这些包由扩展的 `scripts/sync-dsh.mjs` 以**源码编译产物**填充 `node_modules/@deepseek-ai/*`，
 而不再从 npm 下载。根 `package.json` 只声明**一个**锚点依赖 `@deepseek-ai/dsh`（其余 `@deepseek-ai/*`
@@ -131,16 +136,16 @@ RPC；上游 0.1.7 新增的归档/置顶行操作保留并存）、每条用户
 
 ## 应用（必须锁定基提交）
 
-补丁针对的基提交（**固定，不能漂移**）——dsh `0.2.2-rc.1` 的发布合并提交（tag `dsh-v0.2.2-rc.1`）：
+补丁针对的基提交（**固定，不能漂移**）——dsh `0.2.2-rc.2` 的发布合并提交（tag `dsh-v0.2.2-rc.2`）：
 
 ```
-66491b05e3f05ad35bcdd4f6cd7ed26041d9e3db
+ddac96760b6edf8fa0fe17cbdcf0b512f4c12b2c
 ```
 
 ```sh
 git clone https://github.com/deepseek-ai/deepseek-harness.git .dsh-src
 cd .dsh-src
-git fetch origin 66491b05e3f05ad35bcdd4f6cd7ed26041d9e3db && git checkout FETCH_HEAD
+git fetch origin ddac96760b6edf8fa0fe17cbdcf0b512f4c12b2c && git checkout FETCH_HEAD
 git apply --3way ../patches/dshui-bundles.patch     # 基提交不匹配会安全失败
 pnpm install                                        # 需要 pnpm 11.7.0、Node ^22.19 || >=24
 pnpm run clean                                      # 升级换基时必须清掉上一版的 lib/ 与 tsbuildinfo
@@ -155,7 +160,7 @@ npm run compile
 ```
 
 > 换基（上游版本跃迁）时用 `git apply --3way`：三方合并会把真正冲突的 hunk 标出来。
-> 0.2.2-alpha.2 → 0.2.2-rc.1 那次上游改了 2315 个文件，与本补丁相交 20 个；7 个文件需要手工对齐，
+> 0.2.2-rc.1 → 0.2.2-rc.2 上游改了 4645 个文件，与本补丁相交 33 个；11 个文件需要手工对齐，
 > 其余干净套用，`slot-catalog.ts` 随后由 `pnpm run gen-client-catalog` 重新生成（详见下方重基记录）。
 
 ### 重新导出补丁
@@ -187,44 +192,60 @@ git -C .dsh-src diff --binary <基提交> > patches/dshui-bundles.patch
 一节的清单逐个重套（改动都很小，按文件内注释即可）。dsh 是 MIT 协议，本补丁与其产物可自由
 修改/分发，保留上游版权声明即可。
 
-## 0.2.2-alpha.2 → 0.2.2-rc.1 重基记录
+## 0.2.2-rc.1 → 0.2.2-rc.2 重基记录
 
-上游 466 个提交、2315 个文件。主要变化：schedule 任务创建与编辑统一（`TaskDetail` / TaskEditor 重写）、
-forge 评审与 worktree 入口合并、设置页支持插件自定义导航图标、CUA 原生权限引导、
-`apply_patch` 默认开启并下线 observation policy、vendor 升到 cordis 4.1.0 等。
+上游 4645 个文件。主要变化：会话/工作区菜单改为 `renderFactorySlot` 的组件工厂（行上的
+`openSessionMenu` / `openWorkspaceMenu` prop 消失）、Markdown fence 层槽
+（`conversation.chat.markdown.fence`）、更早消息的「预备 / 消费」两段加载
+（`loadOlder({ deferConsumption: true })` + `consumeOlder`）、空 prompt 作为 `retry` 消息重发、
+MCP 客户端补齐 `startupTimeoutMs` / `closeTimeoutMs` / `expandTemplates` / `reconnect`、
+客户端 bundle 默认压缩（`minify: { compress: false, mangle: false }`，banner 走 `postBanner`）、
+profile 的安装自有 bundle 元组与退役 bundle 处理（`INSTALLATION_OWNED_PROFILE_TUPLES` /
+`RETIRED_BUNDLES`）、zod 4.6.6、`@deepseek-ai/libreoffice-kit` 0.2.3。
 
-与本补丁相交的 20 个文件里，7 个需要手工对齐：
+与本补丁相交的 33 个文件里，11 个需要手工对齐：
 
 | 文件 | 上游改动 | 处理 |
 |---|---|---|
-| `ui-workspace/src/client/index.ts` | 内置会话菜单项改为结构化 `ctx.contextMenus` 条目（`registerSessionMenus`），`SessionMenu` 只承载外部 legacy 槽 | 取上游结构；dshui 的 deleted-sessions store / `deleteInjected` 保留，「删除会话」继续注册进 `sidebar.workspaces.session.menu.item`（order 460） |
-| `ui-workspace/src/client/rows/WorkspaceBrowser.tsx` | `FlatList` 改收 `openSessionMenu` / `useContextMenuTarget` / `useContextMenu`，`home` 下移 | 与 dshui 的 `scope` / `deletedSessionIds` 合并，两边的 prop 都保留 |
-| `ui-workspace/tests/apply.client.spec.ts` | 内置菜单项不再是槽条目 | 断言改为「菜单槽只有 dshui 的 1 条 delete、行操作 3 条」 |
-| `ui-workspace/tests/rename-assembly.client.spec.tsx` | 菜单顺序为结构化条目 → legacy 槽 → afterContent 归档 | 期望顺序改为 pin / rename / fork / copy-id / delete / export / last / archive |
-| `ui-chat/src/client/apply.ts` | 删除 `fileMentions` 注入，新增 `resolveFilePath` | 保留 dshui 的 `openWorkspacePath` openFile 与 `resolveFilePath`，去掉 `fileMentions` |
-| `ui-chat/tests/apply-inject.client.spec.tsx` | 新增 `resolveFilePath` 断言 | 与 dshui 的 `openWorkspacePath` 断言并存 |
-| `extensions/cordis-client-runner/src/client/slot-catalog.ts` | 生成物 | 由 `pnpm run gen-client-catalog` 重新生成（含 `conversation.chat.user-actions`） |
+| `ui-workspace/src/client/rows/WorkspaceBrowser.tsx` | 行上的会话/工作区菜单 prop 换成 `renderFactorySlot` | 取上游结构，dshui 的 `scope` / `deletedSessionIds` 在新签名上逐层透传 |
+| `ui-conversation/src/client/apply.ts` | `concreteConversation` 改为服务缺失即 throw；composer 注入结果新增 `registerFileIntake` / `retry` | 保留 dshui 的 `ConversationController \| undefined` 与「降级到无态姿态」，`absent()` 补上上游新增的两个必填项 |
+| `mcp-client/src/index.ts` | `Config` 新增 `startupTimeoutMs` / `closeTimeoutMs` / `expandTemplates` / `maxInstructionBytes` / `reconnect`，激活逻辑重写 | dshui 的 `startup: 'eager' \| 'lazy'` 字段与 zod 行保留，`*ConfigInput` 同时省略两套字段，激活仍走 `if (config.startup === 'eager')` |
+| `mcp-client/README.md` / `README.zh.md` | 启动预算与重连段落重写 | 取上游措辞，补回 `startup: lazy` 的说明与限制条目 |
+| `mcp-client/tests/{apply,mcp-client,negotiation-lifecycle,protocol}.spec.ts` | 配置字面量补新字段 | 再补 `startup: 'eager'`，其余取上游 |
+| `mcp-client/tests/mcp-client.e2e.ts` | 同上 | 同上 |
+| `mcp-client/tests/generation.spec.ts`（新增文件） | 上游新用例的 `Config` 字面量没有 `startup` | 补 `startup: 'eager'`；否则 `build:lib:host` 的类型检查直接失败 |
+| `extensions/cordis-client-runner/src/client/slot-catalog.ts` | 生成物 | 由 `pnpm run gen-client-catalog` 重新生成（含 dshui 的 `conversation.chat.user-actions` 与上游的 `conversation.chat.markdown.fence`） |
 
-其余相交文件（session-controller 的 `index.ts` / `types.ts`、ui-chat 与 ui-workspace 的
-`contract/slots.ts`、`register-node-renderers.ts`、`ui-conversation/apply.ts`、
-`ConversationRoot.module.css`、`Rows.tsx`、`tsdown.client.ts` 及配套测试）干净套用。
+其余相交文件干净套用，但需按新结构复核（升级后已核对）：
+
+- `ui-workspace/src/client/index.ts`：上游删掉了 `browserInjected` 里的 `openSessionMenu` /
+  `openWorkspaceMenu`；dshui 的 deleted-sessions store、`deleteSession`、「删除会话」legacy 槽条目
+  （`sidebar.workspaces.session.menu.item`，order 460）与行操作条目不受影响。
+- `ui-chat/src/client/apply.ts`：上游把 `openFile` 改回 `fileAddressFor` / `resolveWorkspacePath` 的
+  右侧预览地址；dshui 保留 `remote.session.openWorkspacePath` 版本，连带那条 import 一并移除。
+  `registerFenceLayers` 与 `consumeOlder` 是新上游行为，原样保留。
+- `ui-conversation/src/client/skeleton/ConversationContent.tsx`：上游用 `conversation.hero.frame`
+  包住滚动区；dshui 的 scope 姿态（静态 chip、hero 隐藏、输入框恒不 inert）在新包裹层内不变。
+- `util/native-command/src/path-opener.ts`：上游把 `isWsl` 移到 `host-environment.ts` 并改签名，
+  dshui 的 darwin 分支调用点随之走新模块；`run` 的第 4 个参数 `'hidden'` 仍为必填。
+- `api/session-controller/src/{index,types}.ts`、`api/settings-controller/src/index.ts`：
+  `openWorkspacePath` / `openSettingsDocument` 的 `dshuiOrigin` / `dshuiLine` 透传保持原样。
 
 宿主侧补丁（`path-opener.ts`、`browser-auth.ts`、`settings-controller`、`mcp-client`、
-`session-controller` 的 commands/types）上游未动，按「应用」一节的顺序重跑构建即可。
+`session-controller` 的 commands/types）按「应用」一节的顺序重跑构建即可。
 
 ### 覆盖层下必然为红的上游用例（不是回归）
 
-`pnpm run test:gui`（`vitest run packages/client packages/host`，729 个文件 / 12545 个用例）在套用本补丁后
-固定有 3 个文件（3 个用例）失败，其余 725 个文件通过（另 1 个跳过）。它们都是**覆盖层有意改变上游行为**的
+`pnpm run test:gui`（`vitest run packages/client packages/host`，764 个文件 / 13642 个用例）在套用本补丁后
+固定有 2 个文件（2 个用例）失败，其余 762 个文件通过（另 1 个跳过）。它们都是**覆盖层有意改变上游行为**的
 必然结果，重基时不要当成回归去追：
 
 | 用例 | 原因 |
 |---|---|
 | `packages/client/ui-tool/tests/toolview-slot.client.spec.tsx` | 上游 0.2.x 把文件打开改成产品内右侧预览（断言 `sidebarRight.openResource('dsh-resource://file/session/…')` 被调用且 `openWorkspacePath` **不**被调用），而 dshui 的 `ui-chat/apply.ts` 把 `openFile` 改成走 `remote.session.openWorkspacePath`，交给扩展宿主在 VS Code 编辑器里打开——这正是本扩展的存在意义 |
 | `packages/client/ui-tool/tests/chat-ptc-subcalls.client.spec.tsx` | 同上，另一条 file-path 点击路径 |
-| `packages/client/ui-theme/tests/radius-styles.client.spec.ts` | dshui 在 `ui-conversation/src/client/skeleton/HeroShell.module.css` 的 `.workspaceStatic` 用了 `border-radius: 16px`，不在 `ui-theme/tests/expected/radius-exceptions.expected.json` 的例外表里。想消掉这个红就把该值换成 `--dsw-radius-*` token，或把例外加进那份 expected JSON |
 
-另外三类环境陷阱（本地跑门禁时踩过）：
+另外几类环境陷阱（本地跑门禁时踩过）：
 
 - **`packages/util/native-command/tests/path-opener.spec.ts` 在 dshui 宿主的终端里会假红**：该 shell 继承了
   `DSHUI_OPEN_ENDPOINT` / `DSHUI_BRIDGES_FILE` / `DSHUI_CODE_CLI`，于是 `dshuiHosted(process.env)` 为真，
@@ -233,10 +254,11 @@ forge 评审与 worktree 入口合并、设置页支持插件自定义导航图�
 - 客户端的用例走源码平面（tsconfig paths），但 `client-bundle` 一类用例读的是 `lib/client.js` 产物，
   必须先在 `.dsh-src` 跑过 `pnpm run build:lib:client` 才有意义。
 - **满负载并行时会有一批 5s 超时假红**：需要起真实 HTTP 服务、子进程或打包的用例在 700+ 个文件同时跑时
-  撞默认 5s 超时——本次是 `connection/tests/binary-rpc.host.spec.ts`、
-  `ui-deliverables/tests/review-tab.client.spec.tsx`、`ui-settings-general/tests/apply.client.spec.ts`、
-  `ui-sidebar-documentpreview/tests/document-preview-license-bundle.client.spec.ts`、
-  `ui-theme/tests/app-region-styles.client.spec.ts`；这 5 个文件单独跑 72/72 全过，不是回归。
+  撞默认 5s 超时——本次是 `connection/tests/binary-rpc.host.spec.ts`（2 个用例）、
+  `ui-secret-mask/tests/secret-rule-equivalence.client.spec.ts`、`ui-theme/tests/menu-surfaces.client.spec.ts`、
+  `ui-theme/tests/app-region-styles.client.spec.ts`、
+  `ui-sidebar-documentpreview/tests/document-preview-license-bundle.client.spec.ts`；这 5 个文件单独跑
+  57/57 全过（`pnpm exec vitest run <这些文件>`），不是回归。
 - **终端用例在文件沙箱里必然失败**：`packages/api/terminal-controller/tests/controller.spec.ts` 的
   `runs a real interactive shell…` 需要 `posix_openpt`，被沙箱拒绝时报
   `posix_openpt failed: Operation not permitted`；这是环境限制，不是回归，非沙箱环境跑即可。

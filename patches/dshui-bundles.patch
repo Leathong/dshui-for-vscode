@@ -1,8 +1,8 @@
 diff --git a/packages/api/session-controller/src/commands.ts b/packages/api/session-controller/src/commands.ts
-index 5309872331..7329e29995 100644
+index 921d71cd23..0190cd58e8 100644
 --- a/packages/api/session-controller/src/commands.ts
 +++ b/packages/api/session-controller/src/commands.ts
-@@ -259,7 +259,7 @@ export class SessionCommandController {
+@@ -276,7 +276,7 @@ export class SessionCommandController {
      const composition = await this.agents.composeAgent(this.agents.presetForObservation(source))
      try {
        const { provider, model } = this.ctx.agentDefaultModel.currentSelection()
@@ -11,7 +11,7 @@ index 5309872331..7329e29995 100644
          sessionId: childId,
          seed,
          inheritedEventCount: SessionLogOffset(boundary + 1),
-@@ -273,6 +273,12 @@ export class SessionCommandController {
+@@ -290,6 +290,12 @@ export class SessionCommandController {
          agentOptions: { provider, model },
          setup: composition.setup,
        })
@@ -25,7 +25,7 @@ index 5309872331..7329e29995 100644
        throw new RemoteError(
          'gateway/internal',
 diff --git a/packages/api/session-controller/src/index.ts b/packages/api/session-controller/src/index.ts
-index 8e81986f0b..55c2d11636 100644
+index 6303340cd8..79fa153ed1 100644
 --- a/packages/api/session-controller/src/index.ts
 +++ b/packages/api/session-controller/src/index.ts
 @@ -1,14 +1,15 @@
@@ -98,7 +98,7 @@ index 8e81986f0b..55c2d11636 100644
    private readonly fileApplications: typeof nativeFileApplications
    private readonly openFileApplication: typeof openNativeFileApplication
    private readonly revealPath: (path: string, signal: AbortSignal) => Promise<void>
-@@ -374,9 +410,19 @@ export class SessionController extends TypertRemoteService {
+@@ -377,9 +413,19 @@ export class SessionController extends TypertRemoteService {
    ): Promise<SessionOpenWorkspacePathValue> {
      try {
        const path = await this.verifyDesktopPath(request.path, signal)
@@ -119,7 +119,7 @@ index 8e81986f0b..55c2d11636 100644
        return { opened: true }
      } catch (error: unknown) {
        if (signal.aborted) throw new RemoteError('gateway/cancelled', 'path open was aborted', {})
-@@ -415,10 +461,17 @@ export class SessionController extends TypertRemoteService {
+@@ -418,10 +464,17 @@ export class SessionController extends TypertRemoteService {
    private async verifyDesktopPath(path: string, signal: AbortSignal): Promise<string> {
      if (path.length === 0) throw new RemoteError('gateway/bad-request', 'A non-empty file path is required', {})
      signal.throwIfAborted()
@@ -140,10 +140,10 @@ index 8e81986f0b..55c2d11636 100644
      }
      signal.throwIfAborted()
 diff --git a/packages/api/session-controller/src/types.ts b/packages/api/session-controller/src/types.ts
-index 1d846d4c9a..3f60f0efcf 100644
+index 49cd7c0f9d..72bf13bd80 100644
 --- a/packages/api/session-controller/src/types.ts
 +++ b/packages/api/session-controller/src/types.ts
-@@ -378,6 +378,19 @@ export interface SessionOpenWorkspacePathRequest {
+@@ -380,6 +380,19 @@ export interface SessionOpenWorkspacePathRequest {
    readonly application?: string
    /** Path after best-effort Session workspace resolution, in Host filesystem syntax. */
    readonly path: string
@@ -675,7 +675,7 @@ index 7af762a1cd..4ed6d67c94 100644
      const auth = await createAuth(new RecordCredentials())
      const mounted = new URL(auth.authenticatedUrl('https://gateway.example/tools/dsh/'))
 diff --git a/packages/client/tsdown.client.ts b/packages/client/tsdown.client.ts
-index 5eaf0b2a35..e6487cec6e 100644
+index 7df6b6f529..ba07c6f587 100644
 --- a/packages/client/tsdown.client.ts
 +++ b/packages/client/tsdown.client.ts
 @@ -140,7 +140,14 @@ export function clientBundle(
@@ -694,9 +694,9 @@ index 5eaf0b2a35..e6487cec6e 100644
      const node = [lib, ...(options.companions ?? [])]
      const clientFaces = options.dualClient === true
        ? [nodeClientConfig(manifest, clientEntry), client]
-@@ -241,6 +248,13 @@ interface ClientBundleOptions {
-   readonly lib?: UserConfig
-   /** Optional legal or attribution text selected by emitted client filename. */
+@@ -244,6 +251,13 @@ interface ClientBundleOptions {
+    * minification, so its comment lines reach the artifact byte for byte.
+    */
    readonly clientBanner?: (fileName: string) => string | undefined
 +  /**
 +   * dshui overlay: override the client plugin id stamped into the
@@ -708,7 +708,7 @@ index 5eaf0b2a35..e6487cec6e 100644
  }
  
  type BuildFace = 'host' | 'client' | undefined
-@@ -778,8 +792,9 @@ function clientConfig(
+@@ -781,8 +795,9 @@ function clientConfig(
    entry: string,
    clientBanner?: (fileName: string) => string | undefined,
    dualClient = false,
@@ -720,7 +720,7 @@ index 5eaf0b2a35..e6487cec6e 100644
    const isRequested = (specifier: string): boolean => (requested ??= clientExternals(manifest)).has(specifier)
    const isolation = clientInputIsolation(id)
 diff --git a/packages/client/ui-chat/src/client/apply.ts b/packages/client/ui-chat/src/client/apply.ts
-index d3a6df8b96..a2bb69fdcf 100644
+index 7e4a3a5f01..3c3d3a5f40 100644
 --- a/packages/client/ui-chat/src/client/apply.ts
 +++ b/packages/client/ui-chat/src/client/apply.ts
 @@ -14,7 +14,6 @@ import type {} from '@deepseek-ai/dsh-client-ui-sidebar-browser/client'
@@ -731,7 +731,7 @@ index d3a6df8b96..a2bb69fdcf 100644
  // Type-only service and declaration merges used by the apply world.
  import type {} from '@deepseek-ai/dsh-client-locale/client'
  import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
-@@ -51,6 +50,8 @@ import { PerformanceUsagePolicy } from './performance-usage.ts'
+@@ -52,6 +51,8 @@ import { PerformanceUsagePolicy } from './performance-usage.ts'
  import { useTurnDataValue } from './chat/use-turn-data.ts'
  import { bindDisclosure } from './chat/use-disclosure.ts'
  import { useFlowHidden, useMotionHidden } from './chat/flow-motion.ts'
@@ -740,7 +740,7 @@ index d3a6df8b96..a2bb69fdcf 100644
  
  /** Bind group and header visibility to the viewport of one flow render. */
  export const CHAT_FLOW_INJECT: ChatFlowInjected = {
-@@ -174,6 +175,7 @@ export function apply(ctx: Context): void {
+@@ -175,6 +176,7 @@ export function apply(ctx: Context): void {
    ctx.effect(() => () => { transcriptView.dispose(); performancePolicy.dispose() })
    const performanceUsage = performancePolicy.mode
    registerChatNodeRenderers(ctx, performanceUsage, presentation)
@@ -748,7 +748,7 @@ index d3a6df8b96..a2bb69fdcf 100644
    ctx.slots.registerFactory({
      name: 'conversation.chat.user.content', scope: 'session', locale: NS,
      children: { 'conversation.chat.user.images': { kind: 'single', scope: 'session' } },
-@@ -255,27 +257,33 @@ export function apply(ctx: Context): void {
+@@ -257,27 +259,33 @@ export function apply(ctx: Context): void {
            fileDrag: ctx.fileDrag.actions,
            hooks: { presentation, interactionIds: ctx.uiConversation.interactions },
            dispatchInteraction: gesture => ctx.uiConversation.interactions.dispatch(sessionId, gesture),
@@ -801,7 +801,7 @@ index d3a6df8b96..a2bb69fdcf 100644
            resolveFilePath: sessionFilePath(ctx, sessionId),
            openExternalLink: (url) => {
 diff --git a/packages/client/ui-chat/src/client/chat/MessageItem.module.css b/packages/client/ui-chat/src/client/chat/MessageItem.module.css
-index 5e0e99b0d3..f19c4340e4 100644
+index 9af20c8051..5dfa392455 100644
 --- a/packages/client/ui-chat/src/client/chat/MessageItem.module.css
 +++ b/packages/client/ui-chat/src/client/chat/MessageItem.module.css
 @@ -358,3 +358,28 @@
@@ -1186,7 +1186,7 @@ index 0000000000..48f880129a
 +  },
 +}
 diff --git a/packages/client/ui-chat/src/client/contract/slots.ts b/packages/client/ui-chat/src/client/contract/slots.ts
-index a879601747..de1c066df3 100644
+index 676bb3fb2d..15ba15ae99 100644
 --- a/packages/client/ui-chat/src/client/contract/slots.ts
 +++ b/packages/client/ui-chat/src/client/contract/slots.ts
 @@ -138,6 +138,17 @@ export type QuotaNoticeHostProps =
@@ -1207,7 +1207,7 @@ index a879601747..de1c066df3 100644
  /** Optional prose file-mention provider consumed by Chat. */
  export interface ChatFileMentions {
    /**
-@@ -499,5 +510,13 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
+@@ -504,5 +515,13 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
       * survives switching or closing the panel that reported it.
       */
      'shell.quota-notice': { kind: 'chain'; scope: 'root'; owner: QuotaNoticeOwnerProps }
@@ -1274,7 +1274,7 @@ index 0000000000..61e170079e
 +  return resolveWorkspacePath(cwd, path)
 +}
 diff --git a/packages/client/ui-chat/tests/apply-inject.client.spec.tsx b/packages/client/ui-chat/tests/apply-inject.client.spec.tsx
-index 8ee48b8f65..84a4e922b3 100644
+index 352e5d5042..dcfd4df428 100644
 --- a/packages/client/ui-chat/tests/apply-inject.client.spec.tsx
 +++ b/packages/client/ui-chat/tests/apply-inject.client.spec.tsx
 @@ -292,26 +292,58 @@ describe('Chat inject API', () => {
@@ -1433,7 +1433,7 @@ index 8ee48b8f65..84a4e922b3 100644
      const b = await bench()
      const entry = b.runtime.slots.entries('conversation.view')[0]!
 diff --git a/packages/client/ui-chat/tests/chat-branch-tails.client.spec.tsx b/packages/client/ui-chat/tests/chat-branch-tails.client.spec.tsx
-index 574fe82df9..05552e5d3f 100644
+index 88c42d6dc2..61341b662a 100644
 --- a/packages/client/ui-chat/tests/chat-branch-tails.client.spec.tsx
 +++ b/packages/client/ui-chat/tests/chat-branch-tails.client.spec.tsx
 @@ -1,6 +1,7 @@
@@ -1481,10 +1481,10 @@ index 574fe82df9..05552e5d3f 100644
        return <ContextMessageNodeView {...props as ChatNodeViewProps<'context'>} />
      case 'compaction':
 diff --git a/packages/client/ui-chat/tests/chat-view.client.spec.tsx b/packages/client/ui-chat/tests/chat-view.client.spec.tsx
-index 2bc8286e93..39c2b178a3 100644
+index 4cd6d1bb24..c1a34b6d2d 100644
 --- a/packages/client/ui-chat/tests/chat-view.client.spec.tsx
 +++ b/packages/client/ui-chat/tests/chat-view.client.spec.tsx
-@@ -45,7 +45,7 @@ import { en, zh, pt } from '../src/client/locale.ts'
+@@ -46,7 +46,7 @@ import { en, zh, pt } from '../src/client/locale.ts'
  import { AssistantNodeView } from '../src/client/chat/AssistantNodeView.tsx'
  import { CommandNodeView, ManualCompactionNodeView } from '../src/client/chat/CommandNodeView.tsx'
  import {
@@ -1493,7 +1493,7 @@ index 2bc8286e93..39c2b178a3 100644
    TurnMaxTokensNodeView, UnknownNodeView, UserMessageNodeView,
  } from '../src/client/chat/MessageItem.tsx'
  import { TurnTailNodeView } from '../src/client/chat/TurnTailNodeView.tsx'
-@@ -285,6 +285,10 @@ type ToolOwner = Pick<ChatNodeOwnerProps, 'openFile' | 'inspectCall'> & {
+@@ -288,6 +288,10 @@ type ToolOwner = Pick<ChatNodeOwnerProps, 'openFile' | 'inspectCall'> & {
  const renderCommandSlot: React.ComponentProps<typeof CommandNodeView>['renderSlot'] =
    (_key, _owner, opts) => opts?.fallback ?? null
  const renderTurnTailSlot: React.ComponentProps<typeof TurnTailNodeView>['renderSlot'] = () => null
@@ -1504,7 +1504,7 @@ index 2bc8286e93..39c2b178a3 100644
  
  function HarnessChatFlow({ standard, owner, hookContext, renderSlot, useConnectionState }: {
    readonly standard: HarnessStandardProps
-@@ -332,9 +336,9 @@ function HarnessChatNode({
+@@ -335,9 +339,9 @@ function HarnessChatNode({
    const nodeProps = { ...shared, ...owner, ...hooks }
    switch (owner.node.kind) {
      case 'user':
@@ -1751,10 +1751,10 @@ index 7a522be8ed..9607b65a30 100644
      const steeringRow = view.container.lastElementChild!
      expect(steeringRow.textContent).toContain('steer')
 diff --git a/packages/client/ui-conversation/src/client/apply.ts b/packages/client/ui-conversation/src/client/apply.ts
-index 3328e1e5da..6c47db759b 100644
+index 37420f7fc2..e37fd76890 100644
 --- a/packages/client/ui-conversation/src/client/apply.ts
 +++ b/packages/client/ui-conversation/src/client/apply.ts
-@@ -144,10 +144,8 @@ function scopedConversation(sessions: ISessions, id: SessionId): IConversation {
+@@ -145,10 +145,8 @@ function scopedConversation(sessions: ISessions, id: SessionId): IConversation {
  }
  
  /** Resolve package-internal attachment operations from the public service. */
@@ -1767,7 +1767,7 @@ index 3328e1e5da..6c47db759b 100644
  }
  
  /**
-@@ -375,9 +373,13 @@ export function apply(ctx: Context, config: Config = Config({})): void {
+@@ -377,9 +375,13 @@ export function apply(ctx: Context, config: Config = Config({})): void {
              if (binding === undefined) {
                throw new Error(`ui-conversation: session "${nextId}" resolved no binding`)
              }
@@ -1782,12 +1782,13 @@ index 3328e1e5da..6c47db759b 100644
              if (draft.text !== '') {
                next.setDraft(draft)
                from.setDraft('')
-@@ -474,26 +476,33 @@ export function apply(ctx: Context, config: Config = Config({})): void {
+@@ -477,28 +479,35 @@ export function apply(ctx: Context, config: Config = Config({})): void {
        'conversation.composer.dock': { kind: 'list', scope: 'session' },
      },
      inject: (sessionId: SessionId | undefined): ComposerBarInjected => {
 -      if (sessionId === undefined) {
 -        return {
+-          registerFileIntake: fileIntake,
 -          keyboard: undefined,
 -          addFiles: undefined,
 -          removeAttachment: undefined,
@@ -1795,6 +1796,7 @@ index 3328e1e5da..6c47db759b 100644
 -          retryFileUpload: undefined,
 -          toggleCommandMenu: undefined,
 -          stop: undefined,
+-          retry: undefined,
 -          hooks: {
 -            stopShortcut,
 -            busyEnter: submissionPolicy.busyEnter,
@@ -1806,6 +1808,7 @@ index 3328e1e5da..6c47db759b 100644
 -        }
 -      }
 +      const absent = (): ComposerBarInjected => ({
++        registerFileIntake: fileIntake,
 +        keyboard: undefined,
 +        addFiles: undefined,
 +        removeAttachment: undefined,
@@ -1813,6 +1816,7 @@ index 3328e1e5da..6c47db759b 100644
 +        retryFileUpload: undefined,
 +        toggleCommandMenu: undefined,
 +        stop: undefined,
++        retry: undefined,
 +        hooks: {
 +          stopShortcut,
 +          busyEnter: submissionPolicy.busyEnter,
@@ -1836,7 +1840,7 @@ index 3328e1e5da..6c47db759b 100644
        const inputTriggers = inputHub.inputTriggers(sessionId)
        const bridge = hostPathBridge()
 diff --git a/packages/client/ui-conversation/src/client/skeleton/ConversationContent.tsx b/packages/client/ui-conversation/src/client/skeleton/ConversationContent.tsx
-index 218082ae31..4cd39b7965 100644
+index 5c5d1149f8..181b34cf0b 100644
 --- a/packages/client/ui-conversation/src/client/skeleton/ConversationContent.tsx
 +++ b/packages/client/ui-conversation/src/client/skeleton/ConversationContent.tsx
 @@ -4,6 +4,7 @@ import type { WorkspaceId } from '@deepseek-ai/dsh-workspace/types'
@@ -1912,7 +1916,7 @@ index 218082ae31..4cd39b7965 100644
    // A raised block is the same inert posture with the blocker's own reason:
    // one disabled textarea, never a second tree. The no-workspace state wins
    // when both hold — picking a workspace is the earlier prerequisite.
-@@ -149,9 +164,9 @@ export function ConversationContent(props: ConversationContentProps) {
+@@ -150,9 +165,9 @@ export function ConversationContent(props: ConversationContentProps) {
      ...(inert
        ? {
          disabled: true,
@@ -1924,7 +1928,7 @@ index 218082ae31..4cd39b7965 100644
        }
        : blocked
          // `blocked`, not `disabled`: the bar refuses input either way, but a
-@@ -163,7 +178,7 @@ export function ConversationContent(props: ConversationContentProps) {
+@@ -164,7 +179,7 @@ export function ConversationContent(props: ConversationContentProps) {
  
    const composerBar = (
      <div className={clsx(css.composerStack, hero && css.composerHero)}>
@@ -1934,7 +1938,7 @@ index 218082ae31..4cd39b7965 100644
        {zone !== undefined && renderSlot('conversation.input.dock', zone)}
        {inputBar}
 diff --git a/packages/client/ui-conversation/src/client/skeleton/ConversationMainPanel.tsx b/packages/client/ui-conversation/src/client/skeleton/ConversationMainPanel.tsx
-index 674b644a9f..5fcd20627a 100644
+index dc82d99775..0d662564b0 100644
 --- a/packages/client/ui-conversation/src/client/skeleton/ConversationMainPanel.tsx
 +++ b/packages/client/ui-conversation/src/client/skeleton/ConversationMainPanel.tsx
 @@ -1,6 +1,7 @@
@@ -1945,7 +1949,7 @@ index 674b644a9f..5fcd20627a 100644
  import css from './ConversationRoot.module.css'
  
  const CONTENT_SLOTS = { widthControls: ConversationWidthControls }
-@@ -43,7 +44,7 @@ export function ConversationMainPanel(props: ConversationSlotProps) {
+@@ -35,7 +36,7 @@ export function ConversationMainPanel(props: ConversationSlotProps) {
    const phase = settling ? 'settling' : hero ? 'hero' : 'active'
  
    return (
@@ -1955,10 +1959,10 @@ index 674b644a9f..5fcd20627a 100644
        {renderFactorySlot('conversation.content', {
          variant: 'main',
 diff --git a/packages/client/ui-conversation/src/client/skeleton/ConversationRoot.module.css b/packages/client/ui-conversation/src/client/skeleton/ConversationRoot.module.css
-index cfe0953095..cefd7e30b2 100644
+index 39d6f62fef..b671ff65f3 100644
 --- a/packages/client/ui-conversation/src/client/skeleton/ConversationRoot.module.css
 +++ b/packages/client/ui-conversation/src/client/skeleton/ConversationRoot.module.css
-@@ -619,9 +619,26 @@
+@@ -639,9 +639,26 @@
    overflow-y: auto;
  }
  
@@ -2035,7 +2039,7 @@ index b46db926da..9c60cb7794 100644
      </button>
    )
 diff --git a/packages/client/ui-conversation/src/client/skeleton/HeroShell.module.css b/packages/client/ui-conversation/src/client/skeleton/HeroShell.module.css
-index 7d42d3c5bb..0ba9220205 100644
+index 7d42d3c5bb..520a8eab86 100644
 --- a/packages/client/ui-conversation/src/client/skeleton/HeroShell.module.css
 +++ b/packages/client/ui-conversation/src/client/skeleton/HeroShell.module.css
 @@ -182,6 +182,23 @@
@@ -2051,7 +2055,7 @@ index 7d42d3c5bb..0ba9220205 100644
 +  max-width: min(100%, 360px);
 +  min-height: 28px;
 +  padding: 0 8px;
-+  border-radius: 16px;
++  border-radius: var(--dsw-radius-lg);
 +  color: var(--dsw-alias-label-primary);
 +  font-size: 13px;
 +  line-height: 20px;
@@ -2142,10 +2146,10 @@ index 1a5f45d7ee..8fe87db0f3 100644
          const { message } = result.error
          this.store.update((state) => { state.error = message })
 diff --git a/packages/client/ui-settings-general/tests/components.client.spec.tsx b/packages/client/ui-settings-general/tests/components.client.spec.tsx
-index 56d4f93773..4201d0329f 100644
+index 5d88d4d73a..93a43153a4 100644
 --- a/packages/client/ui-settings-general/tests/components.client.spec.tsx
 +++ b/packages/client/ui-settings-general/tests/components.client.spec.tsx
-@@ -29,7 +29,11 @@ import { DesktopUpdateBadge } from '../src/client/DesktopUpdateIndicator.tsx'
+@@ -32,7 +32,11 @@ import { DesktopUpdateBadge } from '../src/client/DesktopUpdateIndicator.tsx'
  import { HostReleasePrompt, type HostReleasePromptProps } from '../src/client/HostReleasePrompt.tsx'
  import type { DesktopUpdateView } from '../src/types.ts'
  
@@ -2158,7 +2162,7 @@ index 56d4f93773..4201d0329f 100644
  
  // The seat's key domain is settings ∪ common; the stub answers from the
  // package dictionary and falls back to the key like the real chain.
-@@ -155,7 +159,31 @@ describe('SettingsDocumentAction', () => {
+@@ -164,7 +168,31 @@ describe('SettingsDocumentAction', () => {
      />)
      const action = await screen.findByRole('button', { name: 'Open configuration file' })
      fireEvent.click(action)
@@ -2226,10 +2230,10 @@ index 18c3d6937b..c4e0f831b3 100644
    ctx.uiSession.provide({
      hooks: ['conversation'],
 diff --git a/packages/client/ui-workspace/src/client/contract/slots.ts b/packages/client/ui-workspace/src/client/contract/slots.ts
-index edbce796de..c0cbea2684 100644
+index 7e53a43400..0dd5680016 100644
 --- a/packages/client/ui-workspace/src/client/contract/slots.ts
 +++ b/packages/client/ui-workspace/src/client/contract/slots.ts
-@@ -259,6 +259,12 @@ export type WorkspaceBrowserInjected = {
+@@ -255,6 +255,12 @@ export type WorkspaceBrowserInjected = {
      hostInfo: HostObservable<RemoteHostFacts>
      workspaceShortcuts: HostObservable<WorkspaceShortcutState>
      shortcuts: HostObservable<readonly ShortcutCatalogEntry[]>
@@ -2242,7 +2246,7 @@ index edbce796de..c0cbea2684 100644
    }
    /** Open the browser search and focus its input. */
    requestSearch: () => void
-@@ -384,6 +390,17 @@ export interface ArchiveSessionInjected {
+@@ -380,6 +386,17 @@ export interface ArchiveSessionInjected {
    unarchiveSession: (sessionId: SessionId) => void
  }
  
@@ -2261,7 +2265,7 @@ index edbce796de..c0cbea2684 100644
   * A stop-and-archive confirmation the archive action asked for: the Host
   * refused the plain archive because this work still runs.
 diff --git a/packages/client/ui-workspace/src/client/index.ts b/packages/client/ui-workspace/src/client/index.ts
-index ff7890aec5..bdf919a740 100644
+index 9b64c6332e..17b8958fea 100644
 --- a/packages/client/ui-workspace/src/client/index.ts
 +++ b/packages/client/ui-workspace/src/client/index.ts
 @@ -40,8 +40,8 @@ import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
@@ -2283,7 +2287,7 @@ index ff7890aec5..bdf919a740 100644
  import { derive } from './session-actions/derived.ts'
  import { registerSessionMenus } from './session-actions/context-menus.tsx'
  import { PinSessionRowButton } from './session-actions/PinSession.tsx'
-@@ -287,6 +288,32 @@ export function apply(ctx: Context): void {
+@@ -331,6 +332,32 @@ export function apply(ctx: Context): void {
        ? [{ id: 'delete', label: ctx.locale.bind(NS)('delete.workspace'), icon: { key: 'workspace.delete' }, danger: true, separatorBefore: true,
          run: () => { requestWorkspaceAction(workspaceId, displayTitle, 'delete') } }] : [],
    }), 'workspace: delete menu action')
@@ -2314,9 +2318,9 @@ index ff7890aec5..bdf919a740 100644
 +  }
 +  const deleteInjected = (): DeleteSessionInjected => ({ deleteSession })
    const browserInjected = (): WorkspaceBrowserInjected => ({
-     openWorkspaceMenu: (workspaceId, path, displayTitle, point, mode) => {
-       const target = ctx.contextMenus.active.getSnapshot()
-@@ -319,7 +346,7 @@ export function apply(ctx: Context): void {
+     settleWorkspaceAction: () => { workspaceActionRequest.set(null) },
+     // Explicit group actions keep their target; unscoped New Session inherits
+@@ -353,7 +380,7 @@ export function apply(ctx: Context): void {
      closeAddWorkspace: shortcutControls.closeAdd,
      setDirectoryBusy: shortcutControls.directoryBusy,
      hooks: { workspaceActionRequest, contextMenuTarget: ctx.contextMenus.active, directoryFlow: browserFlowSource, hostInfo,
@@ -2325,7 +2329,7 @@ index ff7890aec5..bdf919a740 100644
    })
    const pickerInjected = (): WorkspacePickerInjected => ({
      createWorkspace: input => workspaces.create(input),
-@@ -352,9 +379,17 @@ export function apply(ctx: Context): void {
+@@ -386,9 +413,17 @@ export function apply(ctx: Context): void {
    registerSessionMenus(ctx, {
      ...pinInjected(), ...archiveInjected(), ...renameInjected(), ...forkInjected(), ...sessionIdInjected(),
    })
@@ -2502,10 +2506,10 @@ index 42265f1af6..0acb4d89e5 100644
 +
  export { UiWorkspaceService }
 diff --git a/packages/client/ui-workspace/src/client/rows/Rows.tsx b/packages/client/ui-workspace/src/client/rows/Rows.tsx
-index 442e135649..fe1e8b88a3 100644
+index 04b56cb10c..6a6cf4a56f 100644
 --- a/packages/client/ui-workspace/src/client/rows/Rows.tsx
 +++ b/packages/client/ui-workspace/src/client/rows/Rows.tsx
-@@ -731,8 +731,10 @@ export function SessionNodeItem({
+@@ -730,8 +730,10 @@ export function SessionNodeItem({
        >
          {title}
        </span>
@@ -2519,7 +2523,7 @@ index 442e135649..fe1e8b88a3 100644
          <span className={css.rowResting}>
            <span
 diff --git a/packages/client/ui-workspace/src/client/rows/WorkspaceBrowser.tsx b/packages/client/ui-workspace/src/client/rows/WorkspaceBrowser.tsx
-index 44f3d56036..6310a1501e 100644
+index f7c7f1ff04..93d4b69b6a 100644
 --- a/packages/client/ui-workspace/src/client/rows/WorkspaceBrowser.tsx
 +++ b/packages/client/ui-workspace/src/client/rows/WorkspaceBrowser.tsx
 @@ -35,7 +35,7 @@ import type { WorkspaceBrowserProps } from '../contract/slots.ts'
@@ -2543,7 +2547,7 @@ index 44f3d56036..6310a1501e 100644
    revealSessionId?: SessionId | undefined
    /** Acknowledge that the chosen Session row has been revealed. */
 @@ -319,7 +323,7 @@ function SessionTree({
-   renderSlot, openSessionMenu, openWorkspaceMenu, useContextMenuTarget, useContextMenu,
+   renderSlot, renderFactorySlot, useContextMenuTarget, useContextMenu,
    insertWorkspaceBefore,
    nestWorkspaces, groupExpansion, setGroupExpanded,
 -  setSessionOrder, home, t,
@@ -2562,26 +2566,26 @@ index 44f3d56036..6310a1501e 100644
    )
    useEffect(() => {
      for (let key = revealGroup; key !== undefined; key = parents.get(key)) {
-@@ -682,7 +686,8 @@ function SessionTree({
+@@ -678,7 +682,8 @@ function SessionTree({
  function FlatList({
    list, sessionIds, rowState, onLeaveArchivedOnly, useSessionStatus, useSessionAccess, open, onSessionRenameRequest,
    usePanelInfo, setSessionOrder, workspaceReady, animationResetKey,
--  revealSessionId, onSessionRevealed, renderSlot, openSessionMenu, useContextMenuTarget, useContextMenu, home, t,
-+  revealSessionId, onSessionRevealed, renderSlot, openSessionMenu, useContextMenuTarget, useContextMenu,
+-  revealSessionId, onSessionRevealed, renderSlot, renderFactorySlot, useContextMenuTarget, useContextMenu, home, t,
++  revealSessionId, onSessionRevealed, renderSlot, renderFactorySlot, useContextMenuTarget, useContextMenu,
 +  scope, deletedSessionIds, home, t,
  }: Pick<
    SessionTreeProps,
    | 'useSessionStatus'
-@@ -691,6 +696,8 @@ function FlatList({
+@@ -687,6 +692,8 @@ function FlatList({
    | 'onSessionRenameRequest'
    | 'renderSlot'
-   | 'openSessionMenu' | 'useContextMenuTarget' | 'useContextMenu'
+   | 'renderFactorySlot' | 'useContextMenuTarget' | 'useContextMenu'
 +  | 'scope'
 +  | 'deletedSessionIds'
    | 'usePanelInfo'
    | 'setSessionOrder'
    | 'workspaceReady'
-@@ -708,8 +715,8 @@ function FlatList({
+@@ -704,8 +711,8 @@ function FlatList({
    const panelActive = usePanelInfo(info => info.activePanelId !== null)
    const statuses = useSessionStatus(s => s)
    const rows = useMemo(
@@ -2592,7 +2596,7 @@ index 44f3d56036..6310a1501e 100644
    )
    const [drag, setDrag] = useState<DragState | null>(null)
    const dropCommitted = useRef(false)
-@@ -805,6 +812,8 @@ function SearchResults({
+@@ -800,6 +807,8 @@ function SearchResults({
    workspaces,
    archivedSessionIds,
    archivedFilter,
@@ -2601,7 +2605,7 @@ index 44f3d56036..6310a1501e 100644
    query,
    remote,
    resultLimit,
-@@ -818,6 +827,10 @@ function SearchResults({
+@@ -813,6 +822,10 @@ function SearchResults({
    archivedFilter: ArchivedFilter
    /** Unarchive an archived result row in place. */
    onUnarchive: (id: SessionNode['id']) => void
@@ -2612,7 +2616,7 @@ index 44f3d56036..6310a1501e 100644
    query: string
    remote: RemoteSearchState
    resultLimit: number
-@@ -838,8 +851,10 @@ function SearchResults({
+@@ -833,8 +846,10 @@ function SearchResults({
        statuses,
        currentRemote,
        resultLimit,
@@ -2624,15 +2628,15 @@ index 44f3d56036..6310a1501e 100644
    )
    const pending = currentRemote.status === 'loading'
    const currentId = panelActive
-@@ -927,6 +942,7 @@ export function WorkspaceBrowser({
+@@ -921,6 +936,7 @@ export function WorkspaceBrowser({
    requestAddWorkspace,
    closeAddWorkspace,
    setDirectoryBusy,
 +  useDeletedSessions,
-   renderSlot, openSessionMenu, openWorkspaceMenu, useContextMenuTarget, useContextMenu,
+   renderSlot, renderFactorySlot, useContextMenuTarget, useContextMenu,
    t,
  }: WorkspaceBrowserProps) {
-@@ -952,6 +968,12 @@ export function WorkspaceBrowser({
+@@ -946,6 +962,12 @@ export function WorkspaceBrowser({
    const workspaceStreamState = useWorkspaces(state => state.state)
    const archivedSessionIds = useWorkspaces(state => state.archivedSessionIds)
    const pinnedSessionIds = useWorkspaces(state => state.pinnedSessionIds)
@@ -2655,7 +2659,7 @@ index 44f3d56036..6310a1501e 100644
                remote={remoteSearch}
                resultLimit={searchResultLimit}
 @@ -1388,6 +1412,8 @@ export function WorkspaceBrowser({
-                 openSessionMenu={openSessionMenu} useContextMenu={useContextMenu}
+                 renderFactorySlot={renderFactorySlot} useContextMenu={useContextMenu}
                  useContextMenuTarget={useContextMenuTarget}
                  setSessionOrder={saveSessionOrder}
 +                scope={scope}
@@ -2663,7 +2667,7 @@ index 44f3d56036..6310a1501e 100644
                  revealSessionId={revealSessionId}
                  onSessionRevealed={acknowledgeSessionReveal}
                  home={home}
-@@ -1413,6 +1439,8 @@ export function WorkspaceBrowser({
+@@ -1411,6 +1437,8 @@ export function WorkspaceBrowser({
                  workspaceReady={workspaceReady}
                  nestWorkspaces={groupBy === 'workspace-tree'}
                  animationResetKey={`${groupBy}/${orderBy}/${archivedFilter}`}
@@ -2972,10 +2976,10 @@ index 054c584d4b..8f7ebe699e 100644
  
    return {
 diff --git a/packages/client/ui-workspace/tests/apply.client.spec.ts b/packages/client/ui-workspace/tests/apply.client.spec.ts
-index 884f9664cb..982bbe6101 100644
+index d6c18cd763..39fb2093b7 100644
 --- a/packages/client/ui-workspace/tests/apply.client.spec.ts
 +++ b/packages/client/ui-workspace/tests/apply.client.spec.ts
-@@ -23,6 +23,7 @@ import {
+@@ -22,6 +22,7 @@ import {
  } from '../src/client/contract/slots.ts'
  import { WorkspaceBrowser } from '../src/client/rows/WorkspaceBrowser.tsx'
  import { ArchiveSessionRowButton, SessionArchiveConfirmDialog } from '../src/client/session-actions/ArchiveSession.tsx'
@@ -2983,7 +2987,7 @@ index 884f9664cb..982bbe6101 100644
  import { PinSessionRowButton } from '../src/client/session-actions/PinSession.tsx'
  import { SessionRenameDialog } from '../src/client/session-actions/RenameSession.tsx'
  import { RowActionToast } from '../src/client/session-actions/RowActionToast.tsx'
-@@ -305,8 +306,10 @@ describe('ui-workspace apply', () => {
+@@ -306,8 +307,10 @@ describe('ui-workspace apply', () => {
      await Promise.resolve()
      expect(after.slots.entries('conversation.hero.workspace')[0]!.component).toBe(WorkspacePicker)
      // The row actions follow the browser's own declaration, whenever it lands.
@@ -2996,7 +3000,7 @@ index 884f9664cb..982bbe6101 100644
      expect(after.slots.entries('shell.overlay')).toHaveLength(3)
    })
  
-@@ -325,10 +328,13 @@ describe('ui-workspace apply', () => {
+@@ -326,10 +329,13 @@ describe('ui-workspace apply', () => {
  
      const rows = (key: RowListName) => b.slots.entries(key)
        .map(registration => [registration.options.id, registration.options.order, registration.component, registration.locale])
@@ -3011,7 +3015,7 @@ index 884f9664cb..982bbe6101 100644
      ])
      expect(rows('shell.overlay')).toEqual([
        ['workspace.session-rename', undefined, SessionRenameDialog, 'workspace'],
-@@ -911,8 +917,8 @@ describe('ui-workspace apply', () => {
+@@ -912,8 +918,8 @@ describe('ui-workspace apply', () => {
      declare(b.slots, 'sidebar.workspaces', 'conversation.hero.workspace', 'conversation.empty.workspace', 'shell.overlay')
      const fiber = b.ctx.plugin({ inject: [...inject], apply })
      await fiber.await()
@@ -3023,10 +3027,10 @@ index 884f9664cb..982bbe6101 100644
      await fiber.dispose()
      expect(b.slots.entries('sidebar.workspaces')).toHaveLength(0)
 diff --git a/packages/client/ui-workspace/tests/rename-assembly.client.spec.tsx b/packages/client/ui-workspace/tests/rename-assembly.client.spec.tsx
-index 8cf72ecf54..6793aa9c05 100644
+index 8e747090c6..99ffddeb6e 100644
 --- a/packages/client/ui-workspace/tests/rename-assembly.client.spec.tsx
 +++ b/packages/client/ui-workspace/tests/rename-assembly.client.spec.tsx
-@@ -122,7 +122,7 @@ describe('session rename through the assembled browser', () => {
+@@ -123,7 +123,7 @@ describe('session rename through the assembled browser', () => {
      fireEvent.click(trigger)
      await view.findByRole('menuitem', { name: '置顶会话' })
      expect(view.getAllByRole('menuitem').map(item => item.textContent)).toEqual([
@@ -3036,18 +3040,18 @@ index 8cf72ecf54..6793aa9c05 100644
      expect(view.getAllByRole('separator')).toHaveLength(3)
      const last = view.getByRole('menuitem', { name: 'Last action' })
 diff --git a/packages/client/ui-workspace/tests/workspace-browser.client.spec.tsx b/packages/client/ui-workspace/tests/workspace-browser.client.spec.tsx
-index 9868443225..1cb5a9a994 100644
+index 5df4923b4f..d43ddcd6a3 100644
 --- a/packages/client/ui-workspace/tests/workspace-browser.client.spec.tsx
 +++ b/packages/client/ui-workspace/tests/workspace-browser.client.spec.tsx
-@@ -148,6 +148,8 @@ function mount(overrides: Partial<WorkspaceBrowserProps> = {}) {
+@@ -152,6 +152,8 @@ function mount(overrides: Partial<WorkspaceBrowserProps> = {}) {
      createWorkspace: vi.fn(async () => workspace('created', [])),
      useDirectoryFlow: bindSnapshotSelector({ getSnapshot: () => true, subscribe: () => () => {} }),
      useHostInfo: selector => selector({ home: undefined, isLoopback: true }),
 +    // dshui: no host-confirmed deletions in the stock fixtures.
 +    useDeletedSessions: selector => selector(new Set<SessionId>()),
      renderSlot: renderDirectoryFlowOnly,
+     renderFactorySlot: renderMenuButton,
      t,
-     ...overrides,
 diff --git a/packages/client/ui-workspace/tsdown.config.ts b/packages/client/ui-workspace/tsdown.config.ts
 index 7aa03cebc1..7f3b261154 100644
 --- a/packages/client/ui-workspace/tsdown.config.ts
@@ -3061,46 +3065,55 @@ index 7aa03cebc1..7f3b261154 100644
 +  pluginId: 'dshui-client-ui-workspace',
 +})
 diff --git a/packages/extensions/cordis-client-runner/src/client/slot-catalog.ts b/packages/extensions/cordis-client-runner/src/client/slot-catalog.ts
-index 11311bce07..c77316b12e 100644
+index 36cbd48ee7..a4f44c5310 100644
 --- a/packages/extensions/cordis-client-runner/src/client/slot-catalog.ts
 +++ b/packages/extensions/cordis-client-runner/src/client/slot-catalog.ts
-@@ -273,7 +273,7 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
+@@ -278,7 +278,7 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
      ],
      replaceRisk: 'none',
      example: 'return {\n  inject: [\'slots\'],\n  apply(ctx) {\n    ctx.slots.inject(\'conversation.chat.assistant-actions\', () => ctx.slots.register(\n      { name: \'conversation.chat.assistant-actions\', id: \'my-entry\', order: 100, label: \'My entry\' },\n      () => React.createElement(\'div\', null, \'hello\'),\n    ))\n  },\n}',
--    source: 'packages/client/ui-chat/src/client/contract/slots.ts:493',
-+    source: 'packages/client/ui-chat/src/client/contract/slots.ts:504',
+-    source: 'packages/client/ui-chat/src/client/contract/slots.ts:498',
++    source: 'packages/client/ui-chat/src/client/contract/slots.ts:509',
    },
    {
      key: 'conversation.chat.commandview',
-@@ -325,7 +325,7 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
-     occupants: [],
-     replaceRisk: 'none',
+@@ -332,7 +332,7 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
+     ],
+     replaceRisk: 'shadows-shipped-ui',
      example: 'return {\n  inject: [\'slots\'],\n  apply(ctx) {\n    ctx.slots.inject(\'conversation.chat.commandview\', () => ctx.slots.register(\n      { name: \'conversation.chat.commandview\', key: \'<one key the owner dispatches>\' },\n      () => React.createElement(\'div\', null, \'hello\'),\n    ))\n  },\n}',
--    source: 'packages/client/ui-chat/src/client/contract/slots.ts:475',
-+    source: 'packages/client/ui-chat/src/client/contract/slots.ts:486',
+-    source: 'packages/client/ui-chat/src/client/contract/slots.ts:480',
++    source: 'packages/client/ui-chat/src/client/contract/slots.ts:491',
    },
    {
      key: 'conversation.chat.flow',
-@@ -372,7 +372,7 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
+@@ -379,7 +379,7 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
      ],
      replaceRisk: 'shadows-shipped-ui',
      example: 'return {\n  inject: [\'slots\'],\n  apply(ctx) {\n    ctx.slots.inject(\'conversation.chat.flow\', () => ctx.slots.register(\n      { name: \'conversation.chat.flow\' },\n      () => React.createElement(\'div\', null, \'hello\'),\n    ))\n  },\n}',
--    source: 'packages/client/ui-chat/src/client/contract/slots.ts:431',
-+    source: 'packages/client/ui-chat/src/client/contract/slots.ts:442',
+-    source: 'packages/client/ui-chat/src/client/contract/slots.ts:436',
++    source: 'packages/client/ui-chat/src/client/contract/slots.ts:447',
+   },
+   {
+     key: 'conversation.chat.markdown.fence',
+@@ -445,7 +445,7 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
+     ],
+     replaceRisk: 'wraps-owner-content',
+     example: 'return {\n  inject: [\'slots\'],\n  apply(ctx) {\n    ctx.slots.inject(\'conversation.chat.markdown.fence\', () => ctx.slots.register(\n      { name: \'conversation.chat.markdown.fence\', id: \'my-layer\', order: 100 },\n      ({ children }) => React.createElement(\'div\', null, children),\n    ))\n  },\n}',
+-    source: 'packages/client/ui-chat/src/client/contract/slots.ts:433',
++    source: 'packages/client/ui-chat/src/client/contract/slots.ts:444',
    },
    {
      key: 'conversation.chat.message.images',
-@@ -419,7 +419,7 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
+@@ -492,7 +492,7 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
      ],
      replaceRisk: 'shadows-shipped-ui',
      example: 'return {\n  inject: [\'slots\'],\n  apply(ctx) {\n    ctx.slots.inject(\'conversation.chat.message.images\', () => ctx.slots.register(\n      { name: \'conversation.chat.message.images\' },\n      () => React.createElement(\'div\', null, \'hello\'),\n    ))\n  },\n}',
--    source: 'packages/client/ui-chat/src/client/contract/slots.ts:467',
-+    source: 'packages/client/ui-chat/src/client/contract/slots.ts:478',
+-    source: 'packages/client/ui-chat/src/client/contract/slots.ts:472',
++    source: 'packages/client/ui-chat/src/client/contract/slots.ts:483',
    },
    {
      key: 'conversation.chat.node',
-@@ -470,7 +470,7 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
+@@ -543,7 +543,7 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
      declaredBy: 'an entry in \'conversation.chat.flow\' (client-ui-chat), so it exists while that entry is mounted',
      occupants: [
        'client-ui-chat UserMessageNodeView key \'user\'',
@@ -3109,39 +3122,39 @@ index 11311bce07..c77316b12e 100644
        'client-ui-chat ContextMessageNodeView key \'context\'',
        'client-ui-chat TurnTriggerNodeView key \'turn-trigger\'',
        'client-ui-chat SystemPromptNodeView key \'system-prompt\'',
-@@ -491,7 +491,7 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
+@@ -564,7 +564,7 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
      ],
      replaceRisk: 'shadows-shipped-ui',
      example: 'return {\n  inject: [\'slots\'],\n  apply(ctx) {\n    ctx.slots.inject(\'conversation.chat.node\', () => ctx.slots.register(\n      { name: \'conversation.chat.node\', key: \'<one key the owner dispatches>\' },\n      () => React.createElement(\'div\', null, \'hello\'),\n    ))\n  },\n}',
--    source: 'packages/client/ui-chat/src/client/contract/slots.ts:443',
-+    source: 'packages/client/ui-chat/src/client/contract/slots.ts:454',
+-    source: 'packages/client/ui-chat/src/client/contract/slots.ts:448',
++    source: 'packages/client/ui-chat/src/client/contract/slots.ts:459',
    },
    {
      key: 'conversation.chat.reasoning.body',
-@@ -535,7 +535,7 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
+@@ -608,7 +608,7 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
      ],
      replaceRisk: 'shadows-shipped-ui',
      example: 'return {\n  inject: [\'slots\'],\n  apply(ctx) {\n    ctx.slots.inject(\'conversation.chat.reasoning.body\', () => ctx.slots.register(\n      { name: \'conversation.chat.reasoning.body\' },\n      () => React.createElement(\'div\', null, \'hello\'),\n    ))\n  },\n}',
--    source: 'packages/client/ui-chat/src/client/contract/slots.ts:481',
-+    source: 'packages/client/ui-chat/src/client/contract/slots.ts:492',
+-    source: 'packages/client/ui-chat/src/client/contract/slots.ts:486',
++    source: 'packages/client/ui-chat/src/client/contract/slots.ts:497',
    },
    {
      key: 'conversation.chat.text-interaction',
-@@ -587,7 +587,7 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
+@@ -660,7 +660,7 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
      ],
      replaceRisk: 'shadows-shipped-ui',
      example: 'return {\n  inject: [\'slots\'],\n  apply(ctx) {\n    ctx.slots.inject(\'conversation.chat.text-interaction\', () => ctx.slots.register(\n      { name: \'conversation.chat.text-interaction\', key: \'<one key the owner dispatches>\' },\n      () => React.createElement(\'div\', null, \'hello\'),\n    ))\n  },\n}',
--    source: 'packages/client/ui-chat/src/client/contract/slots.ts:428',
-+    source: 'packages/client/ui-chat/src/client/contract/slots.ts:439',
+-    source: 'packages/client/ui-chat/src/client/contract/slots.ts:431',
++    source: 'packages/client/ui-chat/src/client/contract/slots.ts:442',
    },
    {
      key: 'conversation.chat.turnTail',
-@@ -654,7 +654,69 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
+@@ -727,7 +727,69 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
      ],
      replaceRisk: 'none',
      example: 'return {\n  inject: [\'slots\'],\n  apply(ctx) {\n    ctx.slots.inject(\'conversation.chat.turnTail\', () => ctx.slots.register(\n      { name: \'conversation.chat.turnTail\', id: \'my-entry\', order: 100, label: \'My entry\' },\n      () => React.createElement(\'div\', null, \'hello\'),\n    ))\n  },\n}',
--    source: 'packages/client/ui-chat/src/client/contract/slots.ts:487',
-+    source: 'packages/client/ui-chat/src/client/contract/slots.ts:498',
+-    source: 'packages/client/ui-chat/src/client/contract/slots.ts:492',
++    source: 'packages/client/ui-chat/src/client/contract/slots.ts:503',
 +  },
 +  {
 +    key: 'conversation.chat.user-actions',
@@ -3203,29 +3216,29 @@ index 11311bce07..c77316b12e 100644
 +    occupants: [],
 +    replaceRisk: 'none',
 +    example: 'return {\n  inject: [\'slots\'],\n  apply(ctx) {\n    ctx.slots.inject(\'conversation.chat.user-actions\', () => ctx.slots.register(\n      { name: \'conversation.chat.user-actions\', id: \'my-entry\', order: 100, label: \'My entry\' },\n      () => React.createElement(\'div\', null, \'hello\'),\n    ))\n  },\n}',
-+    source: 'packages/client/ui-chat/src/client/contract/slots.ts:520',
++    source: 'packages/client/ui-chat/src/client/contract/slots.ts:525',
    },
    {
      key: 'conversation.chat.user.before',
-@@ -704,7 +766,7 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
+@@ -777,7 +839,7 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
      ],
      replaceRisk: 'none',
      example: 'return {\n  inject: [\'slots\'],\n  apply(ctx) {\n    ctx.slots.inject(\'conversation.chat.user.before\', () => ctx.slots.register(\n      { name: \'conversation.chat.user.before\', select: owner => null },\n      () => React.createElement(\'div\', null, \'hello\'),\n    ))\n  },\n}',
--    source: 'packages/client/ui-chat/src/client/contract/slots.ts:457',
-+    source: 'packages/client/ui-chat/src/client/contract/slots.ts:468',
+-    source: 'packages/client/ui-chat/src/client/contract/slots.ts:462',
++    source: 'packages/client/ui-chat/src/client/contract/slots.ts:473',
    },
    {
      key: 'conversation.chat.user.images',
-@@ -751,7 +813,7 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
+@@ -824,7 +886,7 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
      ],
      replaceRisk: 'shadows-shipped-ui',
      example: 'return {\n  inject: [\'slots\'],\n  apply(ctx) {\n    ctx.slots.inject(\'conversation.chat.user.images\', () => ctx.slots.register(\n      { name: \'conversation.chat.user.images\' },\n      () => React.createElement(\'div\', null, \'hello\'),\n    ))\n  },\n}',
--    source: 'packages/client/ui-chat/src/client/contract/slots.ts:469',
-+    source: 'packages/client/ui-chat/src/client/contract/slots.ts:480',
+-    source: 'packages/client/ui-chat/src/client/contract/slots.ts:474',
++    source: 'packages/client/ui-chat/src/client/contract/slots.ts:485',
    },
    {
      key: 'conversation.composer',
-@@ -2205,11 +2267,12 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
+@@ -2450,11 +2512,12 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
        'useAccess: (action: RemoteEndpoint) => boolean',
        'useTrajectory: UseTrajectory',
      ],
@@ -3239,16 +3252,16 @@ index 11311bce07..c77316b12e 100644
        'client-ui-conversation PlainUserText key \'text\'',
        'client-ui-conversation SessionReference key \'session\'',
        'client-ui-goal GoalCommandReference key \'command\'',
-@@ -3829,7 +3892,7 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
+@@ -4116,7 +4179,7 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
      ],
      replaceRisk: 'none',
      example: 'return {\n  inject: [\'slots\'],\n  apply(ctx) {\n    ctx.slots.inject(\'shell.quota-notice\', () => ctx.slots.register(\n      { name: \'shell.quota-notice\', select: owner => null },\n      () => React.createElement(\'div\', null, \'hello\'),\n    ))\n  },\n}',
--    source: 'packages/client/ui-chat/src/client/contract/slots.ts:501',
-+    source: 'packages/client/ui-chat/src/client/contract/slots.ts:512',
+-    source: 'packages/client/ui-chat/src/client/contract/slots.ts:506',
++    source: 'packages/client/ui-chat/src/client/contract/slots.ts:517',
    },
    {
      key: 'sidebar',
-@@ -5160,7 +5223,9 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
+@@ -5447,7 +5510,9 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
      hookContext: 'MenuOpenState',
      slotInject: '{ hooks: { menuOpenState: SlotHookFactory<\'sidebar.workspaces.session.menu.item\', UseMenuOpenState> shortcuts: HostObservable<readonly ShortcutCatalogEntry[]> } }',
      declaredBy: 'an entry in \'contextMenu.content\' (client-ui-workspace), so it exists while that entry is mounted',
@@ -3259,7 +3272,7 @@ index 11311bce07..c77316b12e 100644
      replaceRisk: 'none',
      example: 'return {\n  inject: [\'slots\'],\n  apply(ctx) {\n    const copyLabel = \'Copy session title\' // Localize in the contributing package.\n    ctx.slots.inject(\'sidebar.workspaces.session.menu.item\', () => ctx.slots.register(\n      { name: \'sidebar.workspaces.session.menu.item\', id: \'copy-session-title\', order: 500 },\n      ({ displayTitle, useMenuOpenState }) => {\n        const [, setMenuOpen] = useMenuOpenState()\n        return React.createElement(\n          \'button\',\n          {\n            type: \'button\', role: \'menuitem\',\n            onClick: () => { setMenuOpen(false); void navigator.clipboard.writeText(displayTitle) },\n          },\n          copyLabel,\n        )\n      },\n    ))\n  },\n}',
      source: 'packages/client/ui-workspace/src/client/contract/slots.ts:193',
-@@ -5216,6 +5281,7 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
+@@ -5503,6 +5568,7 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
      occupants: [
        'client-ui-workspace ArchiveSessionRowButton id \'archive\'',
        'client-ui-workspace PinSessionRowButton id \'pin\'',
@@ -3268,18 +3281,18 @@ index 11311bce07..c77316b12e 100644
      replaceRisk: 'none',
      example: 'return {\n  inject: [\'slots\'],\n  apply(ctx) {\n    ctx.slots.inject(\'sidebar.workspaces.session.row.action\', () => ctx.slots.register(\n      { name: \'sidebar.workspaces.session.row.action\', id: \'my-entry\', order: 100, label: \'My entry\' },\n      () => React.createElement(\'div\', null, \'hello\'),\n    ))\n  },\n}',
 diff --git a/packages/mcp/mcp-client/README.md b/packages/mcp/mcp-client/README.md
-index be3f250ebf..f710935e2f 100644
+index d91f5d1b9d..65ea85f04a 100644
 --- a/packages/mcp/mcp-client/README.md
 +++ b/packages/mcp/mcp-client/README.md
-@@ -61,6 +61,7 @@ Add one entry per server; nothing else is required. After the harness starts, th
- | `toolCallTimeoutMs` | `60,000` | Timeout per `tools/call` or resource request |
+@@ -64,6 +64,7 @@ Add one entry per server; nothing else is required. After the harness starts, th
+ | `expandTemplates` | `false` | Resolve `${credential:REF}` in transport strings at runtime and redact resolved values from diagnostics |
  | `maxInstructionBytes` | `32,768` | Maximum UTF-8 bytes of server instructions including attribution; an oversized value rejects the connection |
  | `failOnStartupError` | `false` | Reject plugin activation when the initial connection or tool synchronization fails |
 +| `startup` | `eager` | When to connect: `eager` waits for the initial connection + tool discovery before activation returns; `lazy` returns immediately and connects/registers tools in the background, so a slow remote server (e.g. one behind OAuth) never blocks startup |
  | `reconnect.enabled` | `true` | Reconnect automatically after a lost connection |
  | `reconnect.initialDelayMs` | `500` | First reconnect delay; doubles per consecutive failed attempt |
  | `reconnect.maxDelayMs` | `30,000` | Backoff ceiling; also the uptime after which the attempt budget resets |
-@@ -68,7 +69,7 @@ Add one entry per server; nothing else is required. After the harness starts, th
+@@ -71,7 +72,7 @@ Add one entry per server; nothing else is required. After the harness starts, th
  
  The generated [configuration catalog](../../../docs/config-catalog.md#deepseek-aidsh-mcp-client) is the exhaustive source for every accepted field.
  
@@ -3288,46 +3301,46 @@ index be3f250ebf..f710935e2f 100644
  
  ### Tool naming and coexistence
  
-@@ -88,7 +89,7 @@ Images are supported when the current model accepts image input and the harness
+@@ -91,7 +92,7 @@ Images are supported when the current model accepts image input and the harness
  
  ### Startup, updates, and reconnection
  
--The server's tools appear before the harness starts its first turn. When the server changes its tool list, the model's tool set updates automatically; if the update fails, the previous tool set keeps working.
-+The server's tools appear before the harness starts its first turn when `startup` is `eager` (the default); with `startup: lazy` they appear once the connection settles, and a slow server cannot block harness startup. When the server changes its tool list, the model's tool set updates automatically; if the update fails, the previous tool set keeps working.
+-The server's tools appear before the harness starts its first turn. Set `startupTimeoutMs` to bound each connection attempt, including template resolution and initial tool discovery; an omitted value adds no whole-attempt deadline. Tool-list notifications refresh the registered tools; discovery failures preserve the previous set, while registration conflicts close the connection and apply the reconnect policy.
++The server's tools appear before the harness starts its first turn when `startup` is `eager` (the default); with `startup: lazy` they appear once the connection settles, and a slow server cannot block harness startup. Set `startupTimeoutMs` to bound each connection attempt, including template resolution and initial tool discovery; an omitted value adds no whole-attempt deadline. Tool-list notifications refresh the registered tools; discovery failures preserve the previous set, while registration conflicts close the connection and apply the reconnect policy.
  
  When a server connection drops — for example a local server process crashes — the plugin reconnects automatically with delays that double from 500 ms up to 30 s and then refreshes the tool set; reconnect progress is visible in the logs. During an outage the last known tools stay listed but calls to them fail until the server recovers. After ten consecutive failed attempts the server's tools are removed and reconnection stops until you reload the configuration or restart the harness; a server that stays connected for a while resets that counter. Set `reconnect.enabled: false` to disable automatic reconnection — tools then stay listed but fail until you reload. Editing the configuration entry reloads the server connection in place, and unchanged names stay unchanged.
  
-@@ -124,7 +125,7 @@ The exported `createMcpToolDefinition(ctx, options)` adapts an upstream tool sch
+@@ -144,7 +145,7 @@ The exported `createMcpToolDefinition(ctx, options)` adapts an upstream tool sch
  
  ### Lifecycle and sync
  
 -`apply` resolves the reconnect policy, reserves the `serverName` inside the current registration scope, starts the supervisor, and awaits the initial connection plus discovery. Independent Agent scopes may reuse the same namespace because their tools and transports are isolated; a duplicate inside one scope fails at load. The supervisor serializes every sync — initial, notification, and reconnect — through one queue so two syncs can never interleave their dispose-previous/register-next swap. Disposal cancels pending reconnects, closes the negotiating transport or attached client, waits for the in-flight attempt and queued syncs to quiesce, and unregisters the current generation.
 +`apply` resolves the reconnect policy, reserves the `serverName` inside the current registration scope, and starts the supervisor. In the default `eager` mode it then awaits the initial connection plus discovery; in `lazy` mode it returns immediately and the supervisor connects and registers tools in the background. Independent Agent scopes may reuse the same namespace because their tools and transports are isolated; a duplicate inside one scope fails at load. The supervisor serializes every sync — initial, notification, and reconnect — through one queue so two syncs can never interleave their dispose-previous/register-next swap. Disposal cancels pending reconnects, closes the negotiating transport or attached client, waits for the in-flight attempt and queued syncs to quiesce, and unregisters the current generation.
  
- The SDK receives tool-list changes through legacy notifications or a modern subscription. The supervisor queues each re-sync; a fetch failure keeps the previous generation registered, while a registration conflict rolls back the attempted generation. Each outage shares one attempt budget: after `maxAttempts` consecutive failures the tools are unregistered and reconnection stops, and a connection that stays up past `maxDelayMs` resets the budget.
+ A manager composing instances (such as `dsh-mcp-manager`) observes one instance through `connectionStatusOf(fiber)`. The handle survives reloads of the same Fiber and retains the final connection and cleanup result after disposal; final disposal detaches its observers. Status observers may dispose the Fiber during a reload; cleanup still covers that connection attempt. `probeServer(ctx, config, options)` tests a server without reserving a name or registering tools. Its `timeoutMs` bounds template resolution, connection, and listing together, independently of runtime `startupTimeoutMs`; cleanup uses `closeTimeoutMs` and reports `closeConfirmed` separately. Confirmed transport closure can still carry a `cleanupError`; either unconfirmed closure or a cleanup error blocks replacement.
  
-@@ -206,7 +207,7 @@ Unchanged instructions retain identical prompt text. Updated or removed instruct
+@@ -230,7 +231,7 @@ Unchanged instructions retain identical prompt text. Updated or removed instruct
  These limits describe what you cannot do with this plugin and when it needs operational attention. They are current package constraints, not a comparison with other MCP clients or a task backlog.
  
  - **Resources are read on demand** — shipped profiles provide the [shared resource service](../mcp-resources/README.md); resource subscriptions and MCP prompt templates are unsupported.
--- **Startup and discovery timeouts are inherited from the MCP SDK** — the plugin exposes no separate connection or discovery timeout. Negotiation and discovery use the SDK's 60-second request default; discovery also uses its page limit. Plugin unload closes the transport to interrupt pending startup requests before awaiting teardown.
-+- **Startup and discovery timeouts are inherited from the MCP SDK** — the plugin exposes no separate connection or discovery timeout. Negotiation and discovery use the SDK's 60-second request default; discovery also uses its page limit. Plugin unload closes the transport to interrupt pending startup requests before awaiting teardown. Set `startup: lazy` to keep a slow server from delaying harness activation.
- - **Reconnect handles failed negotiation and transport close** — a failed initial probe or crashed stdio child uses the configured reconnect budget. Once HTTP is connected, request failures use the SDK transport's recovery rather than respawning the connection.
+-- **Whole-attempt startup budgets are opt-in** — `startupTimeoutMs` covers template resolution, negotiation, connect, and the initial tool sync when configured. A notification-driven re-sync's `tools/list` requests use the MCP SDK's 60-second request default and page limit. Plugin unload closes the transport to interrupt pending startup requests before awaiting teardown.
++- **Whole-attempt startup budgets are opt-in** — `startupTimeoutMs` covers template resolution, negotiation, connect, and the initial tool sync when configured. A notification-driven re-sync's `tools/list` requests use the MCP SDK's 60-second request default and page limit. Plugin unload closes the transport to interrupt pending startup requests before awaiting teardown. Set `startup: lazy` to keep a slow server from delaying harness activation.
+ - **Reconnect handles failed negotiation and transport close** — a failed initial connection or a crashed stdio child uses the configured reconnect budget. Ordinary HTTP request failures use the SDK transport's recovery; credential changes replace the connection.
  - **Image is the only durable rich-result bridge** — PNG, JPEG, WebP, and GIF enter Native context after exact capability proof. Audio and embedded-resource payloads remain execution-local with explicit diagnostics, while resource links preserve only their name and URI as text.
  - **Invalid protocol results or output schemas fail through the SDK** — the bridge does not accept legacy `toolResult` substitutes or bypass advertised schema validation.
 diff --git a/packages/mcp/mcp-client/README.zh.md b/packages/mcp/mcp-client/README.zh.md
-index 00612777e4..82fb4002b7 100644
+index 7f0466760d..bd8d5ddf07 100644
 --- a/packages/mcp/mcp-client/README.zh.md
 +++ b/packages/mcp/mcp-client/README.zh.md
-@@ -61,6 +61,7 @@ kind: "package-reference"
- | `toolCallTimeoutMs` | `60,000` | 每次 `tools/call` 或资源请求的超时 |
+@@ -64,6 +64,7 @@ kind: "package-reference"
+ | `expandTemplates` | `false` | 在运行时解析传输字符串中的 `${credential:REF}`，并在诊断中替换已解析的值 |
  | `maxInstructionBytes` | `32,768` | 包括服务器归属信息在内的服务器指令 UTF-8 字节上限；超出时连接失败 |
  | `failOnStartupError` | `false` | 初始连接或工具同步失败时拒绝插件激活 |
 +| `startup` | `eager` | 何时连接：`eager` 在激活返回前等待初始连接与工具发现完成；`lazy` 立即返回并在后台连接与注册工具，因此慢速远程服务器（例如需 OAuth 的）不会拖住启动 |
  | `reconnect.enabled` | `true` | 连接丢失后自动重新连接 |
  | `reconnect.initialDelayMs` | `500` | 首次重连延迟；每次连续失败尝试翻倍 |
  | `reconnect.maxDelayMs` | `30,000` | 退避上限；同时是重置尝试预算所需的正常运行时长 |
-@@ -68,7 +69,7 @@ kind: "package-reference"
+@@ -71,7 +72,7 @@ kind: "package-reference"
  
  生成的[配置目录](../../../docs/config-catalog.zh.md#deepseek-aidsh-mcp-client)是每个受支持字段的穷尽式真源。
  
@@ -3336,30 +3349,39 @@ index 00612777e4..82fb4002b7 100644
  
  ### 工具命名与共存
  
-@@ -124,7 +125,7 @@ kind: "package-reference"
+@@ -91,7 +92,7 @@ kind: "package-reference"
+ 
+ ### 启动、工具更新与重连
+ 
+-服务器的工具会在 harness 开始首个轮次之前出现。设置 `startupTimeoutMs` 可约束每次连接尝试，包括模板解析与初次工具发现；省略时不添加覆盖整次尝试的截止时间。工具列表通知会刷新已注册工具；发现失败保留上一组工具，注册冲突则关闭连接并按重连策略处理。
++服务器的工具会在 harness 开始首个轮次之前出现（默认 `startup: eager`）；设置 `startup: lazy` 时它们在连接就绪后出现，慢速服务器不会拖住 harness 启动。设置 `startupTimeoutMs` 可约束每次连接尝试，包括模板解析与初次工具发现；省略时不添加覆盖整次尝试的截止时间。工具列表通知会刷新已注册工具；发现失败保留上一组工具，注册冲突则关闭连接并按重连策略处理。
+ 
+ 服务器连接断开时——例如本地服务器进程崩溃——插件会以从 500 ms 起逐次翻倍、上限 30 s 的延迟自动重连，并刷新工具集；重连进度在日志中可见。中断期间最后已知的工具仍会列出，但对它们的调用会失败，直到服务器恢复。连续失败十次后，该服务器的工具会被移除，重连停止，直到你重载配置或重启 harness；服务器持续连接一段时间后，该计数会重置。设置 `reconnect.enabled: false` 可禁用自动重连——此时工具在断开后仍会列出，但调用失败，直到你重载。编辑配置项会在原地重载服务器连接，未变的名称保持不变。
+ 
+@@ -144,7 +145,7 @@ kind: "package-reference"
  
  ### 生命周期与同步
  
 -`apply` 解析重连策略、在当前注册作用域内预留 `serverName`、启动监督器，并等待初始连接加发现完成。独立 agent（智能体）作用域可以复用相同 namespace，因为其工具与传输彼此隔离；同一作用域内重复会在加载时失败。监督器把所有同步——初始、通知与重连——串行到同一条队列，因此两次同步绝不会交错执行各自的先 dispose 后注册交换。dispose 会取消待执行的重连、关闭协商中的传输或已绑定的客户端、等待进行中的尝试与排队同步完全停稳，然后注销当前世代。
 +`apply` 解析重连策略、在当前注册作用域内预留 `serverName`、启动监督器。默认 `eager` 模式下随后等待初始连接加发现完成；`lazy` 模式下立即返回，由监督器在后台连接并注册工具。独立 agent（智能体）作用域可以复用相同 namespace，因为其工具与传输彼此隔离；同一作用域内重复会在加载时失败。监督器把所有同步——初始、通知与重连——串行到同一条队列，因此两次同步绝不会交错执行各自的先 dispose 后注册交换。dispose 会取消待执行的重连、关闭协商中的传输或已绑定的客户端、等待进行中的尝试与排队同步完全停稳，然后注销当前世代。
  
- SDK 通过旧版通知或现代协议订阅接收工具列表变化。监督器将每次重新同步排队；获取失败时保留之前的注册代，注册冲突则回滚本次尝试。每次故障共享一个尝试预算：连续失败达到 `maxAttempts` 后注销工具并停止重连；连接持续超过 `maxDelayMs` 则重置预算。
+ 组合实例的管理器（如 `dsh-mcp-manager`）通过 `connectionStatusOf(fiber)` 观察单个实例。同一 Fiber 重载后句柄保持不变，dispose 后仍保留最终连接与清理结果；最终 dispose 会移除观察者。状态观察者可以在重载时销毁 Fiber；清理仍覆盖该轮连接尝试。`probeServer(ctx, config, options)` 测试服务器，不预留名称或注册工具。其 `timeoutMs` 共同约束模板解析、连接与列表查询，独立于运行时的 `startupTimeoutMs`；清理使用 `closeTimeoutMs`，并单独报告 `closeConfirmed`。传输关闭已确认时仍可能存在 `cleanupError`；关闭未确认或清理失败都会阻止替换。
  
-@@ -206,7 +207,7 @@ SDK 通过旧版通知或现代协议订阅接收工具列表变化。监督器
+@@ -230,7 +231,7 @@ SDK 通过旧版通知或现代协议订阅接收工具列表变化。监督器
  这些限制说明你无法用本插件做什么、以及何时需要运维注意。它们是当前包约束，不是与其他 MCP 客户端的对比，也不是任务积压。
  
  - **资源按需读取**——随附 profile 提供[共享资源服务](../mcp-resources/README.zh.md)；资源订阅与 MCP 提示词模板不受支持。
--- **启动与发现超时继承自 MCP SDK**——插件不暴露单独的连接或发现超时。协商与发现使用 SDK 默认的 60 秒请求超时；发现也使用 SDK 的页数上限。插件卸载先关闭传输以中断待处理的启动请求，再等待清理。
-+- **启动与发现超时继承自 MCP SDK**——插件不暴露单独的连接或发现超时。协商与发现使用 SDK 默认的 60 秒请求超时；发现也使用 SDK 的页数上限。插件卸载先关闭传输以中断待处理的启动请求，再等待清理。设置 `startup: lazy` 可让慢速服务器不拖住 harness 激活。
- - **重连处理协商失败与传输关闭**——初始探测失败或 stdio 子进程崩溃都会使用配置的重连预算。HTTP 建立连接后，请求失败使用 SDK 传输的恢复机制，而非重新创建连接。
+-- **整次启动尝试的预算需主动配置**——设置 `startupTimeoutMs` 后，它覆盖模板解析、协商、连接与初次工具同步。通知驱动的重同步发出的 `tools/list` 请求使用 MCP SDK 的 60 秒请求默认值及其页数上限。插件卸载先关闭传输以中断待处理的启动请求，再等待清理。
++- **整次启动尝试的预算需主动配置**——设置 `startupTimeoutMs` 后，它覆盖模板解析、协商、连接与初次工具同步。通知驱动的重同步发出的 `tools/list` 请求使用 MCP SDK 的 60 秒请求默认值及其页数上限。插件卸载先关闭传输以中断待处理的启动请求，再等待清理。设置 `startup: lazy` 可让慢速服务器不拖住 harness 激活。
+ - **重连处理协商失败与传输关闭**——初始连接失败或 stdio 子进程崩溃都会使用配置的重连预算。普通 HTTP 请求失败使用 SDK 传输的恢复机制；凭据变化则替换连接。
  - **图片是唯一的持久丰富结果桥接**——PNG、JPEG、WebP 与 GIF 在确切能力得到证明后进入 Native 上下文。音频与嵌入资源载荷仍只存在于执行局部并带明确诊断，资源链接只以文本保留名称与 URI。
  - **无效的协议结果或输出 schema 由 SDK 拒绝**——桥接器不接受旧式 `toolResult` 替代结果，也不绕过已声明的 schema 校验。
 diff --git a/packages/mcp/mcp-client/src/index.ts b/packages/mcp/mcp-client/src/index.ts
-index 3f89532b91..bc0a41df89 100644
+index d13119def6..fbd5bf4f49 100644
 --- a/packages/mcp/mcp-client/src/index.ts
 +++ b/packages/mcp/mcp-client/src/index.ts
-@@ -70,6 +70,18 @@ export interface StdioConfig {
-   toolCallTimeoutMs: number
+@@ -98,6 +98,18 @@ export interface StdioConfig {
+   expandTemplates: boolean
    /** Fail plugin activation when the initial connection or tool synchronization fails. */
    failOnStartupError: boolean
 +  /**
@@ -3377,8 +3399,8 @@ index 3f89532b91..bc0a41df89 100644
    /** Maximum UTF-8 bytes of attributed server instructions (default 32768). */
    maxInstructionBytes?: number
    /** Automatic reconnect policy after a lost connection; omission uses the defaults. */
-@@ -94,6 +106,18 @@ export interface StreamableHttpConfig {
-   toolCallTimeoutMs: number
+@@ -128,6 +140,18 @@ export interface StreamableHttpConfig {
+   expandTemplates: boolean
    /** Fail plugin activation when the initial connection or tool synchronization fails. */
    failOnStartupError: boolean
 +  /**
@@ -3396,46 +3418,46 @@ index 3f89532b91..bc0a41df89 100644
    /** Maximum UTF-8 bytes of attributed server instructions (default 32768). */
    maxInstructionBytes?: number
    /** Automatic reconnect policy after a lost connection; omission uses the defaults. */
-@@ -103,10 +127,10 @@ export interface StreamableHttpConfig {
+@@ -137,10 +161,10 @@ export interface StreamableHttpConfig {
  /** Configuration for one stdio or Streamable HTTP MCP server. */
  export type Config = StdioConfig | StreamableHttpConfig
  
--type StdioConfigInput = Omit<StdioConfig, 'args' | 'env' | 'cwd' | 'toolCallTimeoutMs' | 'failOnStartupError'>
--  & Partial<Pick<StdioConfig, 'args' | 'env' | 'cwd' | 'toolCallTimeoutMs' | 'failOnStartupError'>>
--type StreamableHttpConfigInput = Omit<StreamableHttpConfig, 'headers' | 'toolCallTimeoutMs' | 'failOnStartupError'>
--  & Partial<Pick<StreamableHttpConfig, 'headers' | 'toolCallTimeoutMs' | 'failOnStartupError'>>
-+type StdioConfigInput = Omit<StdioConfig, 'args' | 'env' | 'cwd' | 'toolCallTimeoutMs' | 'failOnStartupError' | 'startup'>
-+  & Partial<Pick<StdioConfig, 'args' | 'env' | 'cwd' | 'toolCallTimeoutMs' | 'failOnStartupError' | 'startup'>>
-+type StreamableHttpConfigInput = Omit<StreamableHttpConfig, 'headers' | 'toolCallTimeoutMs' | 'failOnStartupError' | 'startup'>
-+  & Partial<Pick<StreamableHttpConfig, 'headers' | 'toolCallTimeoutMs' | 'failOnStartupError' | 'startup'>>
+-type StdioConfigInput = Omit<StdioConfig, 'args' | 'env' | 'cwd' | 'toolCallTimeoutMs' | 'startupTimeoutMs' | 'failOnStartupError' | 'closeTimeoutMs' | 'expandTemplates'>
+-  & Partial<Pick<StdioConfig, 'args' | 'env' | 'cwd' | 'toolCallTimeoutMs' | 'startupTimeoutMs' | 'failOnStartupError' | 'closeTimeoutMs' | 'expandTemplates'>>
+-type StreamableHttpConfigInput = Omit<StreamableHttpConfig, 'headers' | 'toolCallTimeoutMs' | 'startupTimeoutMs' | 'failOnStartupError' | 'closeTimeoutMs' | 'expandTemplates'>
+-  & Partial<Pick<StreamableHttpConfig, 'headers' | 'toolCallTimeoutMs' | 'startupTimeoutMs' | 'failOnStartupError' | 'closeTimeoutMs' | 'expandTemplates'>>
++type StdioConfigInput = Omit<StdioConfig, 'args' | 'env' | 'cwd' | 'toolCallTimeoutMs' | 'startupTimeoutMs' | 'failOnStartupError' | 'closeTimeoutMs' | 'expandTemplates' | 'startup'>
++  & Partial<Pick<StdioConfig, 'args' | 'env' | 'cwd' | 'toolCallTimeoutMs' | 'startupTimeoutMs' | 'failOnStartupError' | 'closeTimeoutMs' | 'expandTemplates' | 'startup'>>
++type StreamableHttpConfigInput = Omit<StreamableHttpConfig, 'headers' | 'toolCallTimeoutMs' | 'startupTimeoutMs' | 'failOnStartupError' | 'closeTimeoutMs' | 'expandTemplates' | 'startup'>
++  & Partial<Pick<StreamableHttpConfig, 'headers' | 'toolCallTimeoutMs' | 'startupTimeoutMs' | 'failOnStartupError' | 'closeTimeoutMs' | 'expandTemplates' | 'startup'>>
  type ConfigInput = StdioConfigInput | StreamableHttpConfigInput
  
- const Reconnect: z<ReconnectConfig> = z.object({
-@@ -126,6 +150,7 @@ export const Config = z.union([
-     cwd: z.string().default(''),
-     toolCallTimeoutMs: z.number().default(DEFAULT_TOOL_CALL_TIMEOUT_MS),
+ /**
+@@ -171,6 +195,7 @@ export const Config = z.union([
+     closeTimeoutMs: z.number().min(1).max(MAX_TIMER_DELAY_MS).default(DEFAULT_CLOSE_TIMEOUT_MS),
+     expandTemplates: z.boolean().default(false),
      failOnStartupError: z.boolean().default(false),
 +    startup: z.union(['eager', 'lazy'] as const).default('eager'),
      maxInstructionBytes: z.number().step(1).min(1).default(DEFAULT_MAX_INSTRUCTION_BYTES),
-     reconnect: Reconnect,
+     reconnect: ReconnectSchema,
    }),
-@@ -136,6 +161,7 @@ export const Config = z.union([
-     headers: z.dict(String).default({}),
-     toolCallTimeoutMs: z.number().default(DEFAULT_TOOL_CALL_TIMEOUT_MS),
+@@ -184,6 +209,7 @@ export const Config = z.union([
+     closeTimeoutMs: z.number().min(1).max(MAX_TIMER_DELAY_MS).default(DEFAULT_CLOSE_TIMEOUT_MS),
+     expandTemplates: z.boolean().default(false),
      failOnStartupError: z.boolean().default(false),
 +    startup: z.union(['eager', 'lazy'] as const).default('eager'),
      maxInstructionBytes: z.number().step(1).min(1).default(DEFAULT_MAX_INSTRUCTION_BYTES),
-     reconnect: Reconnect,
+     reconnect: ReconnectSchema,
    }),
-@@ -191,13 +217,19 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
-   }, { global: true })
+@@ -251,13 +277,19 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
    ctx.effect(() => dispose, 'mcp-client.connection')
+   registerServerContext(ctx, config.serverName, connection)
  
 -  // Block plugin activation on the initial connection + tool discovery so
 -  // Cordis consumers observe the tools immediately after the fiber activates.
 -  // When failOnStartupError is true, a failed initial attempt rejects the
 -  // fiber (Cordis rolls it back); otherwise the error is logged and the
--  // supervisor enters its reconnect loop.
+-  // supervisor applies its reconnect or credential-wait policy.
 -  const outcome = await connection.ready
 -  if (outcome.error !== undefined && config.failOnStartupError) {
 -    throw new Error(`mcp-client(${config.serverName}): initial connection or tool synchronization failed`, { cause: outcome.error })
@@ -3456,169 +3478,192 @@ index 3f89532b91..bc0a41df89 100644
    }
  }
 diff --git a/packages/mcp/mcp-client/tests/apply.spec.ts b/packages/mcp/mcp-client/tests/apply.spec.ts
-index 57803aaf27..3182a8cc43 100644
+index 6d16cc4283..dc336ab0e8 100644
 --- a/packages/mcp/mcp-client/tests/apply.spec.ts
 +++ b/packages/mcp/mcp-client/tests/apply.spec.ts
-@@ -79,6 +79,7 @@ const stdioConfig: Config = {
-   cwd: '',
+@@ -103,6 +103,7 @@ const stdioConfig = ConfigSchema({
    toolCallTimeoutMs: 60_000,
+   startupTimeoutMs: 30_000,
    failOnStartupError: false,
 +  startup: 'eager',
- }
+ })
  
  // ---- Tests ----
-@@ -440,6 +441,7 @@ describe('apply (plugin lifecycle)', () => {
-       headers: { Authorization: 'Bearer x' },
+@@ -468,6 +469,7 @@ describe('apply (plugin lifecycle)', () => {
        toolCallTimeoutMs: 30_000,
-       failOnStartupError: false,
-+      startup: 'eager',
-     }
- 
-     await apply(ctx, httpConfig)
-diff --git a/packages/mcp/mcp-client/tests/mcp-client.e2e.ts b/packages/mcp/mcp-client/tests/mcp-client.e2e.ts
-index 0478bc7d16..87ea5113cd 100644
---- a/packages/mcp/mcp-client/tests/mcp-client.e2e.ts
-+++ b/packages/mcp/mcp-client/tests/mcp-client.e2e.ts
-@@ -108,6 +108,7 @@ describe('fixture server — controlled scenarios', () => {
-     cwd: packageDir,
-     toolCallTimeoutMs: 15_000,
-     failOnStartupError: false,
-+    startup: 'eager',
-   }
- 
-   beforeAll(async () => {
-@@ -207,6 +208,7 @@ describe('fixture server — duplicate serverName', () => {
-       cwd: packageDir,
-       toolCallTimeoutMs: 15_000,
-       failOnStartupError: false,
-+      startup: 'eager',
-     }
-     await apply(ctx, config)
- 
-@@ -229,6 +231,7 @@ describe('fixture server — disposal', () => {
-       cwd: packageDir,
-       toolCallTimeoutMs: 15_000,
+       startupTimeoutMs: 30_000,
        failOnStartupError: false,
 +      startup: 'eager',
      })
  
-     // Tools are registered before dispose.
-@@ -252,6 +255,7 @@ describe('fixture server — crash recovery', () => {
-       cwd: packageDir,
+     await apply(ctx, httpConfig)
+diff --git a/packages/mcp/mcp-client/tests/generation.spec.ts b/packages/mcp/mcp-client/tests/generation.spec.ts
+index 17da64fce1..b43f67a635 100644
+--- a/packages/mcp/mcp-client/tests/generation.spec.ts
++++ b/packages/mcp/mcp-client/tests/generation.spec.ts
+@@ -20,7 +20,7 @@ vi.mock('../src/transport.ts', () => ({ createTransport: mockTransport }))
+ const config: Config = {
+   transport: 'stdio', serverName: 'fixture', command: 'fixture', args: [], env: {}, cwd: '',
+   toolCallTimeoutMs: 60_000, startupTimeoutMs: 30, closeTimeoutMs: 5_000,
+-  expandTemplates: false, failOnStartupError: true,
++  expandTemplates: false, failOnStartupError: true, startup: 'eager',
+ }
+ 
+ it('unregisters tools when disposal interrupts the registration result', async () => {
+diff --git a/packages/mcp/mcp-client/tests/mcp-client.e2e.ts b/packages/mcp/mcp-client/tests/mcp-client.e2e.ts
+index ba9e6ab844..3cf6131743 100644
+--- a/packages/mcp/mcp-client/tests/mcp-client.e2e.ts
++++ b/packages/mcp/mcp-client/tests/mcp-client.e2e.ts
+@@ -109,7 +109,8 @@ describe('fixture server — controlled scenarios', () => {
+     toolCallTimeoutMs: 15_000,
+     startupTimeoutMs: 30_000,
+     failOnStartupError: false,
+-  })
++    startup: 'eager',
++    })
+ 
+   beforeAll(async () => {
+     home = await mkdtemp(join(tmpdir(), 'mcp-image-e2e-'))
+@@ -209,7 +210,8 @@ describe('fixture server — duplicate serverName', () => {
        toolCallTimeoutMs: 15_000,
+       startupTimeoutMs: 30_000,
+       failOnStartupError: false,
+-    })
++      startup: 'eager',
++      })
+     await apply(ctx, config)
+ 
+     await expect(apply(ctx, config)).rejects.toThrow(/serverName "dup" is already in use/)
+@@ -232,6 +234,7 @@ describe('fixture server — disposal', () => {
+       toolCallTimeoutMs: 15_000,
+       startupTimeoutMs: 30_000,
+       failOnStartupError: false,
++      startup: 'eager',
+     }))
+ 
+     // Tools are registered before dispose.
+@@ -256,6 +259,7 @@ describe('fixture server — crash recovery', () => {
+       toolCallTimeoutMs: 15_000,
+       startupTimeoutMs: 30_000,
        failOnStartupError: false,
 +      startup: 'eager',
        reconnect,
-     }
+     })
    }
-@@ -336,6 +340,7 @@ describe('server-everything — official test server', () => {
-     cwd: '',
+@@ -341,7 +345,8 @@ describe('server-everything — official test server', () => {
      toolCallTimeoutMs: 30_000,
+     startupTimeoutMs: 30_000,
      failOnStartupError: false,
+-  })
 +    startup: 'eager',
-   }
++    })
  
    beforeAll(async () => {
-@@ -405,6 +410,7 @@ describe('server-filesystem — real filesystem operations', () => {
-       cwd: '',
+     ctx = await mountRegistry()
+@@ -411,7 +416,8 @@ describe('server-filesystem — real filesystem operations', () => {
        toolCallTimeoutMs: 30_000,
+       startupTimeoutMs: 30_000,
        failOnStartupError: false,
+-    })
 +      startup: 'eager',
-     }
++      })
      await apply(ctx, config)
    }, 60_000)
-@@ -515,6 +521,7 @@ describe('streamable-http — in-process MCP server', () => {
-       headers: { Authorization: 'Bearer e2e-test-token' },
+ 
+@@ -522,7 +528,8 @@ describe('streamable-http — in-process MCP server', () => {
        toolCallTimeoutMs: 15_000,
+       startupTimeoutMs: 30_000,
        failOnStartupError: false,
+-    })
 +      startup: 'eager',
-     }
++      })
      await apply(ctx, config)
    }, 30_000)
+ 
 diff --git a/packages/mcp/mcp-client/tests/mcp-client.spec.ts b/packages/mcp/mcp-client/tests/mcp-client.spec.ts
-index 5507c58f36..a18d6312e7 100644
+index 9cac537309..f7634a4487 100644
 --- a/packages/mcp/mcp-client/tests/mcp-client.spec.ts
 +++ b/packages/mcp/mcp-client/tests/mcp-client.spec.ts
-@@ -1098,6 +1098,7 @@ describe('createTransport', () => {
-       cwd: '/tmp',
+@@ -1104,6 +1104,7 @@ describe('createTransport', () => {
        toolCallTimeoutMs: 60_000,
+       startupTimeoutMs: 30_000,
        failOnStartupError: false,
 +      startup: 'eager',
-     }
+     })
      const transport = createTransport(config)
      expect(transport).toBeDefined()
-@@ -1113,6 +1114,7 @@ describe('createTransport', () => {
-       headers: {},
+@@ -1120,6 +1121,7 @@ describe('createTransport', () => {
        toolCallTimeoutMs: 60_000,
+       startupTimeoutMs: 30_000,
        failOnStartupError: false,
 +      startup: 'eager',
-     }
+     })
      const transport = createTransport(config)
      expect(transport).toBeDefined()
-@@ -1128,6 +1130,7 @@ describe('createTransport', () => {
-       headers: { Authorization: 'Bearer token' },
+@@ -1136,6 +1138,7 @@ describe('createTransport', () => {
        toolCallTimeoutMs: 60_000,
+       startupTimeoutMs: 30_000,
        failOnStartupError: false,
 +      startup: 'eager',
-     }
+     })
      const transport = createTransport(config)
      expect(transport).toBeDefined()
-@@ -1152,6 +1155,7 @@ describe('createTransport', () => {
-         cwd: '',
+@@ -1161,6 +1164,7 @@ describe('createTransport', () => {
          toolCallTimeoutMs: 60_000,
+         startupTimeoutMs: 30_000,
          failOnStartupError: false,
 +        startup: 'eager',
-       }
+       })
        // StdioClientTransport keeps its env private; the observable contract is
        // that createTransport(config) returns a transport without throwing.
-@@ -1178,6 +1182,7 @@ describe('createTransport', () => {
-       cwd: '',
+@@ -1188,6 +1192,7 @@ describe('createTransport', () => {
        toolCallTimeoutMs: 60_000,
+       startupTimeoutMs: 30_000,
        failOnStartupError: false,
 +      startup: 'eager',
-     }
+     })
      const transport = createTransport(config)
      expect(transport).toBeDefined()
 diff --git a/packages/mcp/mcp-client/tests/negotiation-lifecycle.spec.ts b/packages/mcp/mcp-client/tests/negotiation-lifecycle.spec.ts
-index ed3291a494..db772816aa 100644
+index 5b9d281f0a..06013a5bfa 100644
 --- a/packages/mcp/mcp-client/tests/negotiation-lifecycle.spec.ts
 +++ b/packages/mcp/mcp-client/tests/negotiation-lifecycle.spec.ts
-@@ -20,7 +20,7 @@ vi.mock('../src/transport.ts', () => ({ createTransport: mockTransport }))
+@@ -21,7 +21,7 @@ vi.mock('../src/transport.ts', () => ({ createTransport: mockTransport }))
  
- const config: Config = {
+ const config = Config({
    transport: 'stdio', serverName: 'fixture', command: 'fixture', args: [], env: {}, cwd: '',
--  toolCallTimeoutMs: 60_000, failOnStartupError: false,
-+  toolCallTimeoutMs: 60_000, failOnStartupError: false, startup: 'eager',
- }
+-  toolCallTimeoutMs: 60_000, startupTimeoutMs: 30_000, failOnStartupError: false,
++  toolCallTimeoutMs: 60_000, startupTimeoutMs: 30_000, failOnStartupError: false, startup: 'eager',
+ })
  const fixture = fileURLToPath(new URL('./fixtures/negotiation-lifecycle.mjs', import.meta.url))
  
 diff --git a/packages/mcp/mcp-client/tests/protocol.spec.ts b/packages/mcp/mcp-client/tests/protocol.spec.ts
-index 85b9469473..fccda748cf 100644
+index cdab359047..f86d5fb748 100644
 --- a/packages/mcp/mcp-client/tests/protocol.spec.ts
 +++ b/packages/mcp/mcp-client/tests/protocol.spec.ts
-@@ -20,7 +20,7 @@ vi.mock('../src/transport.ts', () => ({ createTransport: mockTransport }))
+@@ -21,7 +21,7 @@ vi.mock('../src/transport.ts', () => ({ createTransport: mockTransport }))
  
- const config: Config = {
+ const config = Config({
    transport: 'stdio', serverName: 'fixture', command: 'fixture', args: [], env: {}, cwd: '',
--  toolCallTimeoutMs: 60_000, failOnStartupError: true,
-+  toolCallTimeoutMs: 60_000, failOnStartupError: true, startup: 'eager',
- }
+-  toolCallTimeoutMs: 60_000, startupTimeoutMs: 30_000, failOnStartupError: true,
++  toolCallTimeoutMs: 60_000, startupTimeoutMs: 30_000, failOnStartupError: true, startup: 'eager',
+ })
  
  async function connect(server: McpServer, options?: { resources: true }): Promise<Context> {
 diff --git a/packages/mcp/mcp-client/tests/reconnect.spec.ts b/packages/mcp/mcp-client/tests/reconnect.spec.ts
-index a25e1e8683..08b0aef2ff 100644
+index dc9c185ad5..54507aa298 100644
 --- a/packages/mcp/mcp-client/tests/reconnect.spec.ts
 +++ b/packages/mcp/mcp-client/tests/reconnect.spec.ts
-@@ -102,6 +102,7 @@ function stdioConfig(reconnect?: Config['reconnect']): Config {
-     cwd: '',
+@@ -134,6 +134,7 @@ function stdioConfig(reconnect?: Config['reconnect']): Config {
      toolCallTimeoutMs: 60_000,
+     startupTimeoutMs: 30_000,
      failOnStartupError: false,
 +    startup: 'eager',
      ...reconnect === undefined ? {} : { reconnect },
-   }
+   })
  }
 diff --git a/packages/util/native-command/src/path-opener.ts b/packages/util/native-command/src/path-opener.ts
-index 3994308d73..f8b9652f05 100644
+index abd9bcba42..c7857dbb9e 100644
 --- a/packages/util/native-command/src/path-opener.ts
 +++ b/packages/util/native-command/src/path-opener.ts
 @@ -28,6 +28,22 @@ export interface PathOpenerInternals {
@@ -3644,7 +3689,7 @@ index 3994308d73..f8b9652f05 100644
  }
  
  /** Documents a browser renders, as opposed to ones an editor merely edits. */
-@@ -164,6 +180,150 @@ async function openWslPath(path: string, signal: AbortSignal, run: PathOpenerRun
+@@ -157,6 +173,150 @@ async function openWslPath(path: string, signal: AbortSignal, run: PathOpenerRun
    await openWindowsPath(windowsPath, signal, run)
  }
  
@@ -3795,7 +3840,7 @@ index 3994308d73..f8b9652f05 100644
  /** Dispatch one shell-free platform command for the requested open intent. */
  async function openNativePathWithIntent(
    path: string,
-@@ -180,6 +340,18 @@ async function openNativePathWithIntent(
+@@ -173,6 +333,18 @@ async function openNativePathWithIntent(
      && await openInBrowser(path, signal, platform, run, env)) return
  
    if (platform === 'darwin') {

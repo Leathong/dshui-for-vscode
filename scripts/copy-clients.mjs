@@ -27,9 +27,12 @@ const copies = [
   ['ui-conversation', 'dshui-client-ui-conversation'],
 ]
 
-/** The id the bundle registers with `window.__ModuleLoader__.load({ id })`. */
+/**
+ * The id the bundle registers with `window.__ModuleLoader__.load({ id })`.
+ * The minifier re-quotes the banner, so accept any quote style and spacing.
+ */
 function registeredId(bundle) {
-  return /load\(\{\s*id:\s*"([^"]+)"/.exec(bundle)?.[1]
+  return /load\(\{\s*id:\s*["'`]([^"'`]+)["'`]/.exec(bundle)?.[1]
 }
 
 for (const [packageDir, pluginName] of copies) {
