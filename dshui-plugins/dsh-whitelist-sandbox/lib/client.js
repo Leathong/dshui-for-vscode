@@ -239,21 +239,28 @@ window.__ModuleLoader__.load({
 				style: {
 					display: "flex",
 					alignItems: "center",
-					gap: "8px",
-					padding: "4px 0"
+					gap: "4px",
+					minHeight: "24px"
 				},
 				children: [(0, react_jsx_runtime.jsx)("span", {
 					style: {
 						flex: "1",
 						overflowWrap: "anywhere",
-						fontFamily: "monospace",
-						fontSize: "12px"
+						fontFamily: "var(--ds-font-family-code)",
+						fontSize: "12px",
+						lineHeight: "16px"
 					},
 					children: value
 				}), (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Button, {
 					variant: "ghost",
 					size: "sm",
 					icon: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconTrashOutlineRegular, {}),
+					style: {
+						flex: "none",
+						width: "24px",
+						height: "24px",
+						padding: 0
+					},
 					"aria-label": props.removeLabel,
 					onClick: () => remove(index)
 				})]
@@ -262,13 +269,14 @@ window.__ModuleLoader__.load({
 				style: {
 					display: "flex",
 					flexDirection: "column",
-					gap: "8px"
+					gap: "6px"
 				},
 				children: [
 					(0, react_jsx_runtime.jsx)("h3", {
 						style: {
 							margin: 0,
-							fontSize: "13px"
+							fontSize: "13px",
+							lineHeight: "18px"
 						},
 						children: props.title
 					}),
@@ -277,7 +285,7 @@ window.__ModuleLoader__.load({
 							margin: 0,
 							color: "var(--dsw-alias-label-secondary)",
 							fontSize: "12px",
-							lineHeight: "1.6"
+							lineHeight: "18px"
 						},
 						children: props.hint
 					}),
@@ -299,7 +307,7 @@ window.__ModuleLoader__.load({
 					(0, react_jsx_runtime.jsxs)("div", {
 						style: {
 							display: "flex",
-							gap: "8px",
+							gap: "6px",
 							alignItems: "center"
 						},
 						children: [(0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Input, {
@@ -371,7 +379,7 @@ window.__ModuleLoader__.load({
 				style: {
 					display: "flex",
 					flexDirection: "column",
-					gap: "20px",
+					gap: "14px",
 					maxWidth: "720px"
 				},
 				children: [
@@ -380,7 +388,7 @@ window.__ModuleLoader__.load({
 							margin: 0,
 							color: "var(--dsw-alias-label-secondary)",
 							fontSize: "12px",
-							lineHeight: "1.6"
+							lineHeight: "18px"
 						},
 						children: t("hint")
 					}),
