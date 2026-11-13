@@ -1809,7 +1809,7 @@ function renderAuditHint(decision, options = {}) {
 //#region lib/types/guide.js
 /** The P1 scripting contract injected as a system-prompt section. */
 const SCRIPT_GUIDE = [
-	"Outside-sandbox bash (P1): a call is exempt only when every command word is a literal operator-whitelisted name (bare or absolute) and the whole call stays in this subset:",
+	"Outside-sandbox bash: a call is exempt only when every command word is a literal operator-whitelisted name (bare or absolute) and the whole call stays in this subset:",
 	"- allowed: `;`, `&&`, `||`, `|`, if/case/for/while, comments, literal/quoted args, `$NAME`/`${NAME}` without command substitution, heredocs, `cd`, redirects to `/dev/null` or to literal paths inside the workspace (absolute, or relative when no cd/pushd/popd runs);",
 	"- forbidden: `$(...)`, backticks, arithmetic, process substitution, eval/source/./exec/command/builtin, export/declare/set/hash/enable/trap/alias, function definitions, prefix assignments, background `&`, relative or dynamic command words/redirect targets.",
 	"Use `run_in_background` for long or live processes. If a sandboxed call is denied, the result explains why it was not exempt; rewrite it or ask the operator to whitelist the command. Escalation needs user approval."
