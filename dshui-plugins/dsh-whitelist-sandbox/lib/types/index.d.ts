@@ -160,5 +160,12 @@ export declare const Config: z<Schemastery.ObjectS<NoInfer<{
     extraWritableRoots: z<NoInfer<string[]>, NoInfer<string[]>, "volatile-defined">;
     unsandboxedCommands: z<NoInfer<string[]>, NoInfer<string[]>, "volatile-defined">;
 }>>, "plain">;
+/**
+ * Post-execute policy: when a sandboxed bash call was denied, recompute the P1
+ * audit decision for its command and append a short "why not exempt + rewrite /
+ * escalate" hint. Every other call and every successful/other failure is left
+ * untouched; the hint never grants anything.
+ */
+export declare function installDenialHint(ctx: Context, commands: CommandWhitelist, roots: WhitelistRoots, logger: WhitelistLogger): void;
 export declare function apply(ctx: Context, config: WhitelistConfig): void;
 export {};
