@@ -1,7 +1,7 @@
 {
   "name": "dsh-whitelist-sandbox",
   "description": "P1 static audit whitelist for the DSH bash sandbox: extra writable roots, an operator command whitelist with a conservative shell-subset auditor, failure hints, and a system-prompt scripting guide",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "type": "module",
   "main": "lib/index.js",
   "types": "lib/types/index.d.ts",

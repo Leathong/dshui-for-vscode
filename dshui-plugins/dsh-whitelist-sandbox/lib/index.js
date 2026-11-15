@@ -1058,7 +1058,7 @@ async function checkRedirectTarget(target, options) {
 			code: "redirect:parent-missing",
 			detail: target
 		};
-		const allowed = await collectWritableRoots(options.roots);
+		const allowed = options.allowedRoots ?? await collectWritableRoots(options.roots);
 		const candidate = join(physicalParent, name);
 		if (!isInsideWritableRoots(candidate, allowed)) return {
 			ok: false,
@@ -1566,6 +1566,267 @@ var Parser = class {
 	}
 };
 //#endregion
+//#region lib/types/audit/path-args.js
+/**
+* Argument-path analysis for the small, explicitly modelled set of
+* file-mutating utilities whose writes are fully determined by their literal
+* arguments (`mkdir`, `rm`, `cp`, `mv`, `touch`, `tee`).
+*
+* Why this exists: the static audit only confines the shell's redirection
+* targets. A whitelisted program's own file arguments are otherwise an
+* unconstrained write primitive, so `rm`/`cp` entries would silently grant
+* arbitrary host writes. The sandbox confines exactly `file-write*` (no runner
+* dialect fences reads), so for this small class "every write path is inside a
+* writable root" makes an unconfined run equivalent to the sandboxed one and
+* the line may stay exempt.
+*
+* Soundness depends on the program's write set being exactly the paths named
+* here. That is why the table is closed: unmodelled programs are never checked
+* (the operator trusts them explicitly), and modelled programs are accepted
+* only in a few restricted shapes. Any unknown option, unexpected positional
+* count, symbolic-link follow out of the roots, or dynamic/glob/tilde write
+* path refuses the exemption — the call falls back to the sandbox instead of
+* guessing.
+*/
+/**
+* The closed table of modelled programs. Each entry only lists the options the
+* restricted shape understands; every other invocation falls back to the
+* sandbox, which is the fail-closed direction.
+*/
+const POLICIES = new Map([
+	["mkdir", {
+		flags: "pv",
+		shape: "all",
+		role: "write-create",
+		minPositionals: 1
+	}],
+	["rm", {
+		flags: "rRfidv",
+		shape: "all",
+		role: "write-unlink",
+		minPositionals: 1
+	}],
+	["touch", {
+		flags: "cam",
+		shape: "all",
+		role: "write-follow",
+		minPositionals: 1
+	}],
+	["tee", {
+		flags: "a",
+		shape: "all",
+		role: "write-follow",
+		minPositionals: 1
+	}],
+	["cp", {
+		flags: "Rrafpvn",
+		shape: "sources-dest",
+		role: "read",
+		sourceRole: "read",
+		destRole: "write-follow",
+		minPositionals: 2
+	}],
+	["mv", {
+		flags: "fvn",
+		shape: "sources-dest",
+		role: "read",
+		sourceRole: "write-unlink",
+		destRole: "write-replace",
+		minPositionals: 2
+	}]
+]);
+function refusal(code, detail) {
+	return {
+		ok: false,
+		failure: {
+			code,
+			detail
+		}
+	};
+}
+/**
+* Check the write paths of one command word. Commands outside the closed table
+* are not inspected (they are the operator's explicit trust decision); modelled
+* commands must match a restricted shape and keep every write path inside the
+* physical writable roots.
+* @param words - the command's words (program first), quote-removed.
+* @param options - live workdir, cwd-mutator policy and physical writable roots.
+* @returns `{ ok: true }` when the invocation is exempt-safe, otherwise the
+*   first frozen `arg:*` refusal.
+*/
+async function checkPathArguments(words, options) {
+	const command = words[0];
+	if (command === void 0) return { ok: true };
+	const policy = POLICIES.get(basename(command.value).toLowerCase());
+	if (policy === void 0) return { ok: true };
+	const shape = parseInvocation(policy, words.slice(1));
+	if (!shape.ok) return shape;
+	for (const positional of shape.positionals) {
+		if (positional.role === "read") continue;
+		const failure = await checkWritePath(positional.word, positional.role, options);
+		if (failure !== void 0) return {
+			ok: false,
+			failure
+		};
+	}
+	return { ok: true };
+}
+/**
+* Classify one invocation against a policy's restricted shape.
+* @param policy - the modelled program.
+* @param args - the words after the program name.
+* @returns the raw positionals with their roles, or the first shape refusal.
+*/
+function parseInvocation(policy, args) {
+	const positionals = [];
+	let afterTerminator = false;
+	for (const word of args) {
+		const value = word.value;
+		if (!afterTerminator && value === "--") {
+			afterTerminator = true;
+			continue;
+		}
+		if (!afterTerminator && isOptionWord(value)) {
+			if (!usesOnlyFlags(value, policy.flags)) return refusal("arg:unknown-option", value);
+			continue;
+		}
+		positionals.push(word);
+	}
+	if (positionals.length < policy.minPositionals) return refusal("arg:shape", `${positionals.length} positional argument(s)`);
+	if (policy.shape === "all") {
+		const role = policy.role;
+		return {
+			ok: true,
+			positionals: positionals.map((word) => ({
+				word,
+				role
+			}))
+		};
+	}
+	const destination = positionals[positionals.length - 1];
+	const sourceRole = policy.sourceRole ?? "read";
+	const destRole = policy.destRole ?? "write-follow";
+	return {
+		ok: true,
+		positionals: [...positionals.slice(0, -1).map((word) => ({
+			word,
+			role: sourceRole
+		})), {
+			word: destination,
+			role: destRole
+		}]
+	};
+}
+/** Whether one word is option-looking (a lone `-` is an ordinary argument). */
+function isOptionWord(value) {
+	return value.length > 1 && value.startsWith("-");
+}
+/** Whether every character of a short-option word (or bundle) is allowed. */
+function usesOnlyFlags(value, allowed) {
+	if (value.startsWith("--")) return false;
+	for (const character of value.slice(1)) if (!allowed.includes(character)) return false;
+	return true;
+}
+/**
+* Validate one write path: literals only, relative paths only without a cwd
+* change, and a physical location (following existing symlinks) inside a
+* writable root. The final component is handled per role: `write-follow`
+* resolves a symlink to its target (a dangling link is refused), while
+* `write-unlink`/`write-replace` see the link itself and only need its parent
+* contained. A trailing slash forces follow semantics (POSIX resolves the
+* path as a directory), so `rm link/` cannot escape through a directory link.
+* @param word - the positional word.
+* @param role - how the program uses the path.
+* @param options - live workdir, cwd-mutator policy and physical writable roots.
+* @returns the refusal, or undefined when the write is contained.
+*/
+async function checkWritePath(word, role, options) {
+	const value = word.value;
+	if (value === "") return {
+		code: "arg:outside",
+		detail: "an empty path"
+	};
+	if (word.expanded) return {
+		code: "arg:dynamic",
+		detail: value
+	};
+	if (word.glob) return {
+		code: "arg:glob",
+		detail: value
+	};
+	if (word.tilde) return {
+		code: "arg:tilde",
+		detail: value
+	};
+	const relative = !isAbsolute(value);
+	if (relative && (!options.allowRelative || !isAbsolute(options.workdir))) return {
+		code: "arg:relative-cwd",
+		detail: value
+	};
+	const absolute = resolve(relative ? options.workdir : "/", value);
+	const name = basename(absolute);
+	if (name === "" || name === "." || name === "..") return {
+		code: "arg:outside",
+		detail: value
+	};
+	const trailingSlash = value.length > 1 && value.endsWith("/");
+	try {
+		if ((await entryInfo(absolute))?.isSymbolicLink() === true && !trailingSlash) {
+			if (role === "write-follow") {
+				let physical;
+				try {
+					physical = await realpath(absolute);
+				} catch (error) {
+					if (isMissing$1(error)) return {
+						code: "arg:symlink",
+						detail: value
+					};
+					throw error;
+				}
+				return isInsideWritableRoots(physical, options.roots) ? void 0 : {
+					code: "arg:outside",
+					detail: value
+				};
+			}
+			if (role === "write-unlink" || role === "write-replace") return isInsideWritableRoots(join(await resolvePhysical(dirname(absolute)), basename(absolute)), options.roots) ? void 0 : {
+				code: "arg:outside",
+				detail: value
+			};
+		}
+		return isInsideWritableRoots(await resolvePhysical(absolute), options.roots) ? void 0 : {
+			code: "arg:outside",
+			detail: value
+		};
+	} catch {
+		return {
+			code: "arg:fs-error",
+			detail: value
+		};
+	}
+}
+/**
+* Resolve the physical location of `path`, descending through the nearest
+* existing ancestor. Missing components are appended lexically (a later
+* `mkdir -p`/`cp` may create them); missing is not an error, every other
+* filesystem failure propagates so the caller reports `arg:fs-error`.
+* @param path - an absolute, resolved path.
+* @returns the physical path (realpath of the existing prefix + missing suffix).
+*/
+async function resolvePhysical(path) {
+	const missing = [];
+	let probe = path;
+	while (true) try {
+		const physical = await realpath(probe);
+		return missing.length === 0 ? physical : join(physical, ...missing);
+	} catch (error) {
+		if (!isMissing$1(error)) throw error;
+		const parent = dirname(probe);
+		if (parent === probe) throw error;
+		missing.unshift(basename(probe));
+		probe = parent;
+	}
+}
+//#endregion
 //#region lib/types/audit/index.js
 /**
 * P1 static audit for one `bash -c` source (`docs/script-audit-spec.md`).
@@ -1578,8 +1839,10 @@ var Parser = class {
 * Check order is fixed by the spec so the first, most actionable reason wins:
 *  1. parse refusals (whole source),
 *  2. command/entry checks in source order (assignments, command words,
-*     entries, denied programs, absolute-path physical checks),
-*  3. redirect checks in source order (literal, then physical containment).
+*     entries, denied programs, absolute-path physical checks) plus the
+*     argument-path containment for the modelled file-mutating utilities,
+*  3. redirect checks in source order (literal, then physical containment for
+*     writes; read-only `<` targets are not fenced by any sandbox dialect).
 */
 function failure(code, detail) {
 	return detail === void 0 ? {
@@ -1610,15 +1873,19 @@ async function auditCommand(command, context) {
 		return decisionFromError(error);
 	}
 	try {
-		const commandDecision = await auditSimpleCommands(program, context);
+		const pass = {
+			roots: await collectWritableRoots(context),
+			allowRelative: !program.commands.some((simple) => simple.words.length > 0 && isCwdMutator(simple.words[0]?.value ?? ""))
+		};
+		const commandDecision = await auditSimpleCommands(program, context, pass);
 		if (commandDecision !== void 0) return commandDecision;
-		return await auditRedirects(program, context);
+		return await auditRedirects(program, context, pass);
 	} catch (error) {
 		return decisionFromError(error);
 	}
 }
 /** Command/entry checks for every simple command, in source order. */
-async function auditSimpleCommands(program, context) {
+async function auditSimpleCommands(program, context, pass) {
 	for (const simple of program.commands) {
 		if (simple.words.length === 0) {
 			for (const assignment of simple.assignments) if (isSensitiveAssignmentName(assignment.name)) return failure("syntax:sensitive-assignment", assignment.name);
@@ -1626,9 +1893,21 @@ async function auditSimpleCommands(program, context) {
 			continue;
 		}
 		if (simple.assignments.length > 0) return failure("syntax:prefix-assignment", simple.assignments[0]?.name);
-		const decision = await auditCommandWord(simple.words, context);
+		const decision = await auditCommandWord(simple.words, context, pass.roots);
 		if (decision !== void 0) return decision;
+		const argumentDecision = await auditArguments(simple.words, context, pass);
+		if (argumentDecision !== void 0) return argumentDecision;
 	}
+}
+/** Argument-path containment for the modelled file-mutating utilities. */
+async function auditArguments(words, context, pass) {
+	const verdict = await checkPathArguments(words, {
+		workdir: typeof context.workdir === "string" ? context.workdir : "",
+		allowRelative: pass.allowRelative,
+		roots: pass.roots
+	});
+	if (verdict.ok) return void 0;
+	return failure(verdict.failure.code, verdict.failure.detail);
 }
 /** Whether one entry's literal token prefix equals the command's leading words. */
 function entryMatches(words, entry) {
@@ -1641,7 +1920,7 @@ function entryMatches(words, entry) {
 	return true;
 }
 /** Command-word checks for one simple command. */
-async function auditCommandWord(words, context) {
+async function auditCommandWord(words, context, roots) {
 	const word = words[0];
 	if (word.value === "") return failure("match:empty-program");
 	if (word.expanded) return failure("match:dynamic-command", word.value);
@@ -1657,29 +1936,29 @@ async function auditCommandWord(words, context) {
 	}
 	if (isDeniedProgram(word.value, args)) return failure("program:environment", word.value);
 	if (!matched) return failure("match:no-entry", word.value);
-	if (isAbsolute(word.value)) return checkAbsoluteCommand(word.value, context);
+	if (isAbsolute(word.value)) return checkAbsoluteCommand(word.value, roots);
 }
 /**
 * Physical checks for an absolute command word: it must exist as a regular
 * file and must not be model-writable, so an edited workspace script (or temp
 * script) can never be whitelisted by absolute path.
 */
-async function checkAbsoluteCommand(word, context) {
+async function checkAbsoluteCommand(word, roots) {
 	try {
 		const physical = await realpath(word);
 		if (!(await stat(physical)).isFile()) return failure("match:absolute-not-writable", word);
-		if (isInsideWritableRoots(physical, await collectWritableRoots(context))) return failure("match:absolute-model-writable", word);
+		if (isInsideWritableRoots(physical, roots)) return failure("match:absolute-model-writable", word);
 		return;
 	} catch {
 		return failure("match:absolute-not-writable", word);
 	}
 }
 /** Redirect checks for every file redirect, in source order. */
-async function auditRedirects(program, context) {
-	const mutatesCwd = program.commands.some((simple) => simple.words.length > 0 && isCwdMutator(simple.words[0]?.value ?? ""));
+async function auditRedirects(program, context, pass) {
 	const workdir = typeof context.workdir === "string" ? context.workdir : "";
 	for (const simple of program.commands) for (const redirect of simple.redirects) {
 		if (redirect.kind !== "file") continue;
+		if (redirect.operator === "<") continue;
 		const target = redirect.target;
 		if (target.expanded) return failure("redirect:dynamic", target.value);
 		if (target.glob) return failure("redirect:glob", target.value);
@@ -1687,7 +1966,8 @@ async function auditRedirects(program, context) {
 		const checked = await checkRedirectTarget(target.value, {
 			workdir,
 			roots: context,
-			allowRelative: !mutatesCwd
+			allowRelative: pass.allowRelative,
+			allowedRoots: pass.roots
 		});
 		if (!checked.ok) return failure(checked.code, checked.detail);
 	}
@@ -1733,6 +2013,15 @@ const SUMMARIES = {
 	"redirect:glob": "a glob in a redirect target is not allowed",
 	"redirect:tilde": "`~` in a redirect target is not allowed",
 	"redirect:fs-error": "the redirect target could not be verified",
+	"arg:unknown-option": "that option is not in the restricted exempt shape",
+	"arg:shape": "the arguments do not match the supported exempt shape",
+	"arg:dynamic": "a write path contains an expansion",
+	"arg:glob": "a glob in a write path is not allowed",
+	"arg:tilde": "`~` in a write path is not allowed",
+	"arg:relative-cwd": "a relative write path after a cwd change is not allowed",
+	"arg:outside": "the write path is outside the writable roots",
+	"arg:symlink": "the write path is a symbolic link that cannot be verified",
+	"arg:fs-error": "the write path could not be verified",
 	"program:dynamic-exec": "can execute arbitrary commands",
 	"program:environment": "can change shell or loader resolution",
 	"program:forwarder": "forwards arbitrary commands"
@@ -1772,6 +2061,15 @@ const REWRITES = {
 	"redirect:glob": "use a literal absolute path without glob characters.",
 	"redirect:tilde": "use an absolute path instead of `~`.",
 	"redirect:fs-error": "use an existing absolute path inside the workspace.",
+	"arg:unknown-option": "use the supported simple form (e.g. `mkdir -p DIR`, `rm -rf DIR`, `cp SRC DST`) or let it fall back to the sandbox.",
+	"arg:shape": "use the supported simple form: `mkdir [-p] DIR…`, `rm [-rf] PATH…`, `cp [-Rr] SRC… DST`, `mv SRC… DST`, `touch PATH…`, `tee [-a] FILE…`.",
+	"arg:dynamic": "write the path literally; dynamic write paths are not exempt (reads may be dynamic).",
+	"arg:glob": "list the paths explicitly instead of using a glob in a write position.",
+	"arg:tilde": "use an absolute path instead of `~`.",
+	"arg:relative-cwd": "use an absolute path, or remove the `cd`/`pushd`/`popd` from the call.",
+	"arg:outside": "keep the write path inside the workspace or an extra writable root.",
+	"arg:symlink": "write to a regular path, not a symbolic link (delete/replace operations may target a link itself).",
+	"arg:fs-error": "use an existing path inside the workspace or an extra writable root.",
 	"program:dynamic-exec": "use a different program; this one cannot be exempt.",
 	"program:environment": "use a different program; this one cannot be exempt.",
 	"program:forwarder": "call the target command directly instead of forwarding through this one."
@@ -1809,9 +2107,9 @@ function renderAuditHint(decision, options = {}) {
 //#region lib/types/guide.js
 /** The P1 scripting contract injected as a system-prompt section. */
 const SCRIPT_GUIDE = [
-	"Outside-sandbox bash: a call is exempt only when every command word is a literal operator-whitelisted name (bare or absolute) and the whole call stays in this subset:",
-	"- allowed: `;`, `&&`, `||`, `|`, if/case/for/while, comments, literal/quoted args, `$NAME`/`${NAME}` without command substitution, heredocs, `cd`, redirects to `/dev/null` or to literal paths inside the workspace (absolute, or relative when no cd/pushd/popd runs);",
-	"- forbidden: `$(...)`, backticks, arithmetic, process substitution, eval/source/./exec/command/builtin, export/declare/set/hash/enable/trap/alias, function definitions, prefix assignments, background `&`, relative or dynamic command words/redirect targets.",
+	"Outside-sandbox bash: a call is exempt only when every command word is a literal whitelisted name (bare or absolute) and the call stays in this subset:",
+	"- allowed: `;`, `&&`, `||`, `|`, if/case/for/while, literal/quoted args, `$NAME`/`${NAME}` without command substitution, heredocs, `cd`; redirects: `/dev/null`, reads (`<`) to any path, writes (`>`, `>>`, `<>`, `&>`) only to literal paths inside the workspace/extra writable roots/temp (relative writes need no cd); `mkdir`/`rm`/`cp`/`mv`/`touch`/`tee` only as `mkdir [-p] DIR…`, `rm [-rf] PATH…`, `cp [-Rr] SRC… DST`, `mv SRC… DST`, `touch PATH…`, `tee [-a] FILE…` with in-root literal write paths;",
+	"- forbidden: `$(...)`, backticks, arithmetic, process substitution, eval/source/./exec/command/builtin, export/declare/set/hash/enable/trap/alias, function definitions, prefix assignments, background `&`, relative/dynamic command words, dynamic write targets.",
 	"Use `run_in_background` for long or live processes. If a sandboxed call is denied, the result explains why it was not exempt; rewrite it or ask the operator to whitelist the command. Escalation needs user approval."
 ].join("\n");
 //#endregion
@@ -1854,12 +2152,16 @@ const SCRIPT_GUIDE = [
 * `sandbox_permissions` escalation channel behave exactly as stock.
 *
 * The whitelist is deliberately conservative: a compound line must be fully
-* covered (both sides of a pipe too), and expansions, comments, background
-* jobs, subshells, or escapes disqualify the whole line. Redirections with no
-* file effect (`/dev/null`, fd duplication/close) are always accepted; a FILE
-* redirect is accepted only on a single simple command whose physical target
-* resolves inside the workspace, an extra writable root, or a temp area (see
-* `redirect-targets.ts`). The
+* covered (both sides of a pipe too), and dynamic execution constructs, prefix
+* assignments, or background jobs disqualify the whole line. Redirects with no
+* file effect (`/dev/null`, fd duplication/close) are always accepted; a
+* read-only `<` target may be any path (no runner dialect fences reads), while
+* a file WRITE redirect must be a literal target whose physical location is
+* inside the workspace, an extra writable root, or a temp area (see
+* `redirect-targets.ts`). The file-mutating utilities `mkdir`/`rm`/`cp`/`mv`/
+* `touch`/`tee` are exempt only in restricted shapes whose write paths are
+* physically verified inside those same roots (`src/audit/path-args.ts`);
+* every other invocation falls back to the sandbox. The
 * stock `sandbox` provider and `sandboxPolicy` service stay mounted; the
 * plugin replaces only the two consuming rows (`bash-sandbox`, `fs-sandbox`)
 * via the composition patch (disabled rows + a fresh plugin row).
