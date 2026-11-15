@@ -234,6 +234,13 @@ window.__ModuleLoader__.load({
 					setSaving(false);
 				}
 			};
+			const valueText = {
+				minWidth: "0",
+				overflowWrap: "anywhere",
+				fontFamily: "var(--ds-font-family-code)",
+				fontSize: "12px",
+				lineHeight: "16px"
+			};
 			const row = (index, value) => (0, react_jsx_runtime.jsx)("li", {
 				key: index,
 				style: {
@@ -244,11 +251,8 @@ window.__ModuleLoader__.load({
 				},
 				children: [(0, react_jsx_runtime.jsx)("span", {
 					style: {
-						flex: "1",
-						overflowWrap: "anywhere",
-						fontFamily: "var(--ds-font-family-code)",
-						fontSize: "12px",
-						lineHeight: "16px"
+						...valueText,
+						flex: "1"
 					},
 					children: value
 				}), (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Button, {
@@ -260,6 +264,36 @@ window.__ModuleLoader__.load({
 						width: "24px",
 						height: "24px",
 						padding: 0
+					},
+					"aria-label": props.removeLabel,
+					onClick: () => remove(index)
+				})]
+			});
+			const chip = (index, value) => (0, react_jsx_runtime.jsx)("li", {
+				key: index,
+				style: {
+					display: "inline-flex",
+					alignItems: "center",
+					gap: "2px",
+					minWidth: "0",
+					maxWidth: "100%",
+					padding: "0 0 0 10px",
+					borderRadius: "999px",
+					background: "var(--dsw-alias-bg-module-platform)"
+				},
+				children: [(0, react_jsx_runtime.jsx)("span", {
+					style: valueText,
+					children: value
+				}), (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Button, {
+					variant: "ghost",
+					size: "sm",
+					icon: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconCloseOutlineRegular, { size: 14 }),
+					style: {
+						flex: "none",
+						width: "24px",
+						height: "24px",
+						padding: 0,
+						borderRadius: "999px"
 					},
 					"aria-label": props.removeLabel,
 					onClick: () => remove(index)
@@ -296,7 +330,20 @@ window.__ModuleLoader__.load({
 							fontSize: "12px"
 						},
 						children: props.emptyLabel
+					}) : props.layout === "chips" ? (0, react_jsx_runtime.jsx)("ul", {
+						role: "list",
+						style: {
+							listStyle: "none",
+							margin: 0,
+							padding: 0,
+							display: "flex",
+							flexWrap: "wrap",
+							alignItems: "center",
+							gap: "6px"
+						},
+						children: values.map((value, index) => chip(index, value))
 					}) : (0, react_jsx_runtime.jsx)("ul", {
+						role: "list",
 						style: {
 							listStyle: "none",
 							margin: 0,
@@ -409,6 +456,7 @@ window.__ModuleLoader__.load({
 						...common,
 						title: t("commandsTitle"),
 						hint: t("commandsHint"),
+						layout: "chips",
 						items: state.commands,
 						placeholder: t("commandAddPlaceholder"),
 						onSave: (values) => controller.saveCommands(values)
