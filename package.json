@@ -193,12 +193,12 @@
     }
   },
   "scripts": {
-    "compile": "tsc -p ./",
+    "compile": "node scripts/payload-rev.mjs && tsc -p ./",
     "copy:clients": "node scripts/copy-clients.mjs",
     "sync:dsh": "node scripts/sync-dsh.mjs",
     "verify:deps": "node scripts/verify-deps.mjs --installed",
     "preinstall": "node scripts/sync-dsh.mjs",
-    "vscode:prepublish": "npm run compile && node scripts/verify-overlay.mjs && npm run sync:dsh && npm run verify:deps && npm run copy:clients"
+    "vscode:prepublish": "npm run compile && node scripts/verify-overlay.mjs && npm run sync:dsh && npm run verify:deps && npm run copy:clients && node scripts/payload-rev.mjs"
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "1.4.0",

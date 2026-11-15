@@ -275,8 +275,10 @@ port and, if a dshui server is already there, reuses it instead of starting a ne
 its own folder through a marker in `$DSH_HOME/dshui-workspaces/`, and the webview connects with
 `?dshui_workspace=<folder>`; the host plugin resolves scope per connection. Lifecycle:
 `$DSH_HOME/dshui-server.json` records the pid of the window using the server, the server starts
-detached (it outlives the window that started it), the host plugin polls the registry and exits when no
-window is alive. An adopter that finds no registry yet (the owner window is still registering during
+detached (it outlives the window that started it), and the host plugin polls the registry and exits
+only after a grace period once no window is alive (15 min for a blocked extension host, 60 s for a
+restart). A stale lease whose process is still alive therefore counts as a stalled window, not a
+closed one, so a running agent turn is not reaped with the server. An adopter that finds no registry yet (the owner window is still registering during
 startup) creates it and registers itself instead of being silently dropped, and the owner's close-time
 check decides by the registry whether other windows are still using the server — the startup race no
 longer stops the shared server under the other windows. As a result, windows over the same or different
@@ -312,12 +314,15 @@ Notes:
   authentication does not redirect, so the scope survives). The lease heartbeat also re-registers
   this window after another window prunes its entry by TTL (registry and bridge table), so a shared
   server is not reaped while windows still use it — the reap is what changes the token.
-- **Build-aware rendezvous:** the registry also records each window's `clientRev` (extension version
-  plus bundled dsh version). A server started by the **previous** build — exactly what the first window
-  after an upgrade finds — renders the client payload that this window's activation has just
-  overwritten, so adopting it leaves the panel blank. A server whose `clientRev` differs (or is
-  missing, as older builds never wrote it) is killed, its port polled until free, and this build
-  spawns its own.
+- **Build-aware rendezvous:** the registry also records each window's `clientRev` (extension version,
+  bundled dsh version, and a content fingerprint of `dshui-plugins/` plus `patch.yml`). A server
+  started by the **previous** build — exactly what the first window after an upgrade finds, and also
+  what a `make sync` that changed host-plugin code without a version bump leaves behind — renders the
+  client payload and runs the plugin modules that this window's activation has just replaced, so
+  adopting it leaves the panel blank or keeps running the old code. A server whose `clientRev` differs
+  (or is missing, as older builds never wrote it) is killed, its port polled until free, and this build
+  spawns its own; an identical fingerprint is adopted, so a plain reload or short restart does not
+  interrupt a running turn.
 - **Per-window origin:** every window loads the shared server through an in-extension loopback proxy
   (`dshui.windowOrigin`, on by default), so the browser's **per-origin HTTP connection pool** and its
   localStorage/IndexedDB belong to that window alone. With one shared origin the whole VS Code
@@ -508,7 +513,7 @@ changes; base commit is pinned — see `patches/README.md` for the apply steps).
 | What to change | Where | Rebuild needed? |
 | --- | --- | --- |
 | Extension logic (server, webview, commands, settings) | `src/*.ts` | `npm run compile`, then F5 |
-| **Visual tweaks** (spacing, colors, bottom pinning, hidden elements) | `dshui-plugins/dshui-host-ensure-workspace/index.js` → the `CSS_OVERRIDES` list | **No** — just reload the window |
+| **Visual tweaks** (spacing, colors, bottom pinning, hidden elements) | `dshui-plugins/dshui-host-ensure-workspace/index.js` → the `CSS_OVERRIDES` list | **No** — `make sync`, then reload the window (a changed payload fingerprint restarts the server automatically) |
 | Client behavior (filtering, hero flow, component logic) | `.dsh-src/packages/client/ui-workspace` / `ui-conversation` (TypeScript; fetch the source per `patches/README.md` first) | Full client rebuild (below) |
 
 After editing the browser scripts injected into the page from
@@ -519,6 +524,14 @@ smoke tests before reloading the window:
 node scripts/check-reference-patch.mjs && node scripts/test-reference-patch.mjs
 node scripts/check-theme-patch.mjs && node scripts/test-theme-patch.mjs
 ```
+
+> `npm run compile` fingerprints the contents of `dshui-plugins/` and `patch.yml` into
+> `dshui-plugins/payload-rev.json` (generated, not committed) and the shared backend uses it for
+> build-aware rendezvous: after a `make sync` that changed host plugins, reloading a window reclaims
+> the port and restarts the server on the new payload (a running turn is interrupted); when the
+> distributed payload is unchanged the reload keeps the live process, so turns survive. With several
+> windows open, reload all of them (or close the others first) — otherwise the old and new payloads
+> reclaim the port from each other like mixed-version windows do.
 
 Day-to-day changes to extension logic or styles do **not** require the source checkout; only
 structural changes to the dsh client code need a full rebuild:

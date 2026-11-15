@@ -1271,8 +1271,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       // 共享后端：窗口关闭时不再由 owner 直接 stop。owner 直接 stop 与
       // 其他窗口的 probe→attach→register 之间存在无法消除的 TOCTOU 竞态，
       // 会误停掉刚 attach 但尚未写进 users 的窗口。这里只摘除自己的
-      // 注册项；detached server 的 host 插件在 5 个空轮询（约 10 秒）后
-      // 自行退出，因此不会泄漏，也不会误伤其他窗口。
+      // 注册项；detached server 的 host 插件在没有存活窗口时会先等重启宽限
+      // （约 70 秒，跨过窗口重载/扩展宿主重启的空窗）再判死退出，因此不会
+      // 泄漏，也不会误伤其他窗口；租约停摆但进程仍在的窗口另有卡顿宽限，
+      // 正在跑的 turn 不会随服务器被回收（见 host 插件的生命周期自检）。
       const serverIsShared = server !== null && (server.shared || server.lifecycleShared)
       const sharedUser = server !== null ? serverIsShared : registeredSharedUser
       if (server !== null) {

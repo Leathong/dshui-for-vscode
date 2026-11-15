@@ -40,9 +40,13 @@
  *   non-owner windows' folders become Workspaces, and self-exits once the
  *   lifecycle registry (`$DSH_HOME/dshui-server.json`) holds no live window
  *   pids — a detached server outlives its spawning window but never lingers
- *   after the last window closes. The self-check has a boot grace period
- *   (`SELF_EXIT_BOOT_GRACE_MS`): until this process has seen at least one
- *   live user, the stale entries of a previous session cannot justify an
+ *   after the last window closes. A stale lease whose process is still alive
+ *   is a blocked extension host, not a closed window, so the self-check waits
+ *   out a stall grace (`SELF_EXIT_STALL_GRACE_MS`) before reaping a server
+ *   that has a running turn, and a recovery grace (`SELF_EXIT_RECOVERY_MS`)
+ *   across a window reload or extension-host restart. It also has a boot grace
+ *   period (`SELF_EXIT_BOOT_GRACE_MS`): until this process has seen at least
+ *   one live user, the stale entries of a previous session cannot justify an
  *   exit, because the window that spawned this server may still be cold
  *   starting (its extension host is routinely unresponsive for tens of
  *   seconds, so its lease registration lands late).
@@ -71,6 +75,21 @@ const SELF_EXIT_GRACE_POLLS = 5
  * 只是晚一点。
  */
 const SELF_EXIT_BOOT_GRACE_MS = 90_000
+/**
+ * 租约过期 ≠ 窗口关闭：扩展宿主的事件循环被重负载卡住（大量文件事件、
+ * 长工具调用、冷启动）时租约同样会停摆。此时若照常回收，正在跑的 turn
+ * 会随服务器一起被 abort。真实关窗/崩溃时进程立即消失（isAlive 为假），
+ * 回收不受这段宽限影响；只有「进程还在、心跳停了」才会等待，且宽限用尽
+ * 仍回收，卡死的扩展宿主不会永久占住服务器。
+ */
+const SELF_EXIT_STALL_GRACE_MS = 15 * 60_000
+/**
+ * 见过存活窗口后所有租约都归零（扩展宿主崩溃、窗口重载）时的重启宽限：
+ * 重启后的扩展宿主在重负载下可能要几十秒才重新登记租约，只数空轮询
+ * （SELF_EXIT_GRACE_POLLS × SHARED_POLL_MS ≈ 10 秒）会把这段空窗当成
+ * 窗口已关闭。
+ */
+const SELF_EXIT_RECOVERY_MS = 60_000
 /** 启动宽限期的起点：本插件模块加载（≈ apply，dsh 启动时立即加载）时刻。 */
 const bootedAt = Date.now()
 
@@ -138,33 +157,57 @@ function processMarkers(ctx) {
 }
 
 let emptyPolls = 0
+/** 本轮「无存活用户」的起点（0 = 本轮尚未开始）。 */
+let emptySince = 0
+/** 本轮「租约停摆但窗口进程仍存活」的起点（0 = 本轮尚未开始）。 */
+let stalledSince = 0
 /**
  * 本进程是否见过至少一个存活用户。见过之后启动宽限期立即失效：否则「刚开一个
  * 窗口、马上关掉」会让空注册表的服务器白等满宽限期才回收。
  */
 let sawLiveUser = false
 
+function resetLivenessWindow() {
+  emptyPolls = 0
+  emptySince = 0
+  stalledSince = 0
+}
+
 /** 生命周期自检：注册表里没有存活窗口 pid 时自退出（最后窗口关闭后收尾）。 */
 function checkLiveness() {
   if (!sharedBackend) return
   let raw
-  try { raw = fs.readFileSync(registryFile, 'utf8') } catch { emptyPolls = 0; return }
+  try { raw = fs.readFileSync(registryFile, 'utf8') } catch { resetLivenessWindow(); return }
   let registry
-  try { registry = JSON.parse(raw) } catch { emptyPolls = 0; return }
-  if (registry === null || typeof registry !== 'object' || !Array.isArray(registry.users)) { emptyPolls = 0; return }
-  const live = registry.users.filter(isLiveUser)
-  if (live.length === 0) {
-    // 启动宽限期内且从未见过存活用户：注册表里的陈旧条目不能作为自杀依据
-    // （拉起本服务器的窗口可能还在冷启动，尚未登记租约）。
-    if (!sawLiveUser && Date.now() - bootedAt < SELF_EXIT_BOOT_GRACE_MS) return
-    emptyPolls += 1
-    if (emptyPolls >= SELF_EXIT_GRACE_POLLS) {
-      console.log('[dshui] no live windows using the shared server; exiting')
-      process.exit(0)
-    }
-  } else {
+  try { registry = JSON.parse(raw) } catch { resetLivenessWindow(); return }
+  if (registry === null || typeof registry !== 'object' || !Array.isArray(registry.users)) { resetLivenessWindow(); return }
+  const users = registry.users
+  const live = users.filter(isLiveUser)
+  if (live.length > 0) {
     sawLiveUser = true
-    emptyPolls = 0
+    resetLivenessWindow()
+    return
+  }
+  // 启动宽限期内且从未见过存活用户：注册表里的陈旧条目不能作为自杀依据
+  // （拉起本服务器的窗口可能还在冷启动，尚未登记租约）。
+  if (!sawLiveUser && Date.now() - bootedAt < SELF_EXIT_BOOT_GRACE_MS) return
+  const now = Date.now()
+  if (emptySince === 0) emptySince = now
+  // 任一登记窗口的进程还活着 = 扩展宿主卡顿，不是窗口关闭。只认 users 不认
+  // owner 字段：owner 可能是一个早已退出、pid 又被别的进程复用的旧窗口。
+  const processAlive = users.some((user) => user !== null && typeof user === 'object' && isAlive(user.pid))
+  if (processAlive) {
+    if (stalledSince === 0) stalledSince = now
+    if (now - stalledSince < SELF_EXIT_STALL_GRACE_MS) return
+  } else {
+    stalledSince = 0
+    // 进程已全部消失：先跨过重启宽限，再按空轮询次数判死。
+    if (now - emptySince < SELF_EXIT_RECOVERY_MS) return
+  }
+  emptyPolls += 1
+  if (emptyPolls >= SELF_EXIT_GRACE_POLLS) {
+    console.log('[dshui] no live windows using the shared server; exiting')
+    process.exit(0)
   }
 }
 

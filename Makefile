@@ -255,7 +255,8 @@ sync: compile
 	cp -R dshui-plugins "$$DEST/dshui-plugins" && \
 	cp -R media "$$DEST/media" && \
 	cp package.json patch.yml "$$DEST/" && \
-	echo "同步完成。重载窗口（Developer: Reload Window）使改动生效。"
+	echo "同步完成。重载窗口（Developer: Reload Window）使改动生效。" && \
+	echo "共享后端下：payload-rev 变化时重载会收回端口重起服务器（旧代码不会继续跑，正在跑的 turn 会被中断）。"
 
 clean:
 	rm -rf out $(VSIX)

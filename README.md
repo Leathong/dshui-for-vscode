@@ -248,7 +248,8 @@ VS Code 自身处理；非 http(s) 目的地（如 `javascript:`）不做拦截�
 （不再拉起新进程），并将自己的文件夹经 `$DSH_HOME/dshui-workspaces/` 的 marker 注册进共享服务器，
 webview 以 `?dshui_workspace=<folder>` 连接，host 插件按连接解析作用域。生命周期：
 `$DSH_HOME/dshui-server.json` 记录使用窗口的 pid，服务器 detached 启动（可存活于启动它的窗口之外），
-host 插件轮询注册表，无存活窗口时自行退出。采纳方即使遇到注册表尚未落盘（owner 窗口仍在启动登记中）
+host 插件轮询注册表，没有存活窗口时按宽限（卡顿 15 分钟 / 重启 60 秒）后自行退出——租约停摆但
+进程仍存活只算扩展宿主被卡住，不会把正在跑的 agent 任务随服务器一起回收。采纳方即使遇到注册表尚未落盘（owner 窗口仍在启动登记中）
 也会补建注册表并登记自己；owner 关闭时据注册表判断是否还有别的窗口在用——启动竞态下不再误停共享
 服务器、断掉其他窗口。由此，同一或不同工作区的窗口共享一个后端，`~/.dsh`
 始终只有一个进程写入，不再有 EADDRINUSE 冲突，也规避了 dsh 上游 README 关于多进程共享磁盘状态的
@@ -274,10 +275,12 @@ host 插件轮询注册表，无存活窗口时自行退出。采纳方即使遇
   上次缓存），只发送在跑服务器接受的 token，都不接受就不带 token 加载索引（cookie 认证不跳转，
   作用域照常保留）。续租心跳也会在条目被其他窗口按 TTL 清掉后重新登记自己（注册表与桥表），避免
   仍有窗口在用时共享服务器被误回收——回收换进程正是 token 失效的源头。
-- **按构建版本会合**：注册表额外记录窗口的 `clientRev`（扩展版本 + 内置 dsh 版本）。端口上的服务器
-  由**上一版**扩展拉起时（升级后重载的第一个窗口正是如此），它渲染的客户端载荷已被本窗口激活覆盖，
-  直接采纳只会得到空白面板。`clientRev` 不一致（含旧版没写该字段）的服务器会被先杀掉、轮询到端口
-  释放后再启动本构建自己的服务器。
+- **按构建版本会合**：注册表额外记录窗口的 `clientRev`（扩展版本 + 内置 dsh 版本 + `dshui-plugins/`
+  与 `patch.yml` 的内容指纹）。端口上的服务器由**上一版**扩展拉起时（升级后重载的第一个窗口正是如此，
+  `make sync` 改了宿主插件而版本号未变时同样如此），它渲染的客户端载荷与已加载的插件模块都落后于本
+  窗口激活时安装的载荷，直接采纳只会得到空白面板或继续跑旧代码。`clientRev` 不一致（含旧版没写该
+  字段）的服务器会被先杀掉、轮询到端口释放后再启动本构建自己的服务器；指纹相同（分发内容没变）才会
+  采纳，因此单纯重载窗口或短暂重启不会打断正在跑的 turn。
 - **每窗口独立 origin**：每个窗口经扩展内的 loopback 代理（`dshui.windowOrigin`，默认开）加载共享服务器，
   浏览器的**每 origin HTTP 连接池**与 localStorage/IndexedDB 因此归本窗口独有。共用一个 origin 时，
   整个 VS Code 实例只有 6 个 HTTP/1.1 连接槽：任一窗口占满或泄漏连接后，其它窗口的 `/api` 调用
@@ -436,7 +439,7 @@ webview 渲染的是**原版 dsh SPA**（deepseek-harness 仓库的上游代码�
 | 改什么 | 改哪里 | 需要重建？ |
 | --- | --- | --- |
 | 扩展逻辑（服务器、webview、命令、设置） | `src/*.ts` | `npm run compile` 后 F5 |
-| **视觉调整**（间距、颜色、贴底、隐藏元素） | `dshui-plugins/dshui-host-ensure-workspace/index.js` → `CSS_OVERRIDES` 列表 | **无需**——重载窗口即可 |
+| **视觉调整**（间距、颜色、贴底、隐藏元素） | `dshui-plugins/dshui-host-ensure-workspace/index.js` → `CSS_OVERRIDES` 列表 | **无需**——`make sync` 后重载窗口即可（载荷指纹变化会自动重起服务器） |
 | 客户端行为（过滤、hero 流程、组件逻辑） | `.dsh-src/packages/client/ui-workspace` / `ui-conversation`（TypeScript，需先按 `patches/README.md` 获取源码） | 完整客户端重建（见下） |
 
 修改 `dshui-host-ensure-workspace/index.js` 中注入页面的浏览器脚本（剪贴板/撤销重做、引用写入、
@@ -447,6 +450,12 @@ node scripts/check-clipboard-patch.mjs && node scripts/test-clipboard-patch.mjs
 node scripts/check-reference-patch.mjs && node scripts/test-reference-patch.mjs
 node scripts/check-theme-patch.mjs && node scripts/test-theme-patch.mjs
 ```
+
+> `npm run compile` 会把 `dshui-plugins/` 与 `patch.yml` 的内容算成载荷指纹写入
+> `dshui-plugins/payload-rev.json`（生成物，不入库），并参与共享后端的构建会合：`make sync`
+> 改了宿主插件后，重载窗口会因指纹变化自动收回端口、用新载荷重起服务器（正在跑的 turn 会中断）；
+> 分发内容没变时重载仍复用原进程，不会打断任务。多窗口下请把所有窗口一起重载（或先关掉其它窗口），
+> 否则新旧载荷会像混版本窗口一样互相收回端口。
 
 日常修改扩展逻辑或样式**不需要**源码检出；仅结构性修改 dsh 客户端代码才需要完整重建：
 
