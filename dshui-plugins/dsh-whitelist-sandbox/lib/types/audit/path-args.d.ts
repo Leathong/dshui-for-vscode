@@ -24,6 +24,14 @@ export interface ArgumentPathOptions {
     readonly roots: readonly string[];
 }
 /**
+ * Whether one command word names a modelled write utility (see {@link POLICIES}).
+ * The analyzer uses this to decide whether an unwhitelisted command may still be
+ * exempt through the write-path confinement alone.
+ * @param name - the command word as written.
+ * @returns true for the lowercased basename of a table entry.
+ */
+export declare function isModelledProgram(name: string): boolean;
+/**
  * Check the write paths of one command word. Commands outside the closed table
  * are not inspected (they are the operator's explicit trust decision); modelled
  * commands must match a restricted shape and keep every write path inside the

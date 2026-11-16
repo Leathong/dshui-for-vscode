@@ -1587,6 +1587,12 @@ var Parser = class {
 * count, symbolic-link follow out of the roots, or dynamic/glob/tilde write
 * path refuses the exemption — the call falls back to the sandbox instead of
 * guessing.
+*
+* The same equivalence is what lets the analyzer exempt a modelled program
+* even when the operator whitelisted no entry for it: "every write path is
+* inside a writable root" is exactly the condition under which skipping the
+* sandbox adds no file-write capability (see `auditCommandWord` in
+* `./index.ts`).
 */
 /**
 * The closed table of modelled programs. Each entry only lists the options the
@@ -1643,6 +1649,16 @@ function refusal(code, detail) {
 			detail
 		}
 	};
+}
+/**
+* Whether one command word names a modelled write utility (see {@link POLICIES}).
+* The analyzer uses this to decide whether an unwhitelisted command may still be
+* exempt through the write-path confinement alone.
+* @param name - the command word as written.
+* @returns true for the lowercased basename of a table entry.
+*/
+function isModelledProgram(name) {
+	return POLICIES.has(basename(name).toLowerCase());
 }
 /**
 * Check the write paths of one command word. Commands outside the closed table
@@ -1843,6 +1859,11 @@ async function resolvePhysical(path) {
 *     argument-path containment for the modelled file-mutating utilities,
 *  3. redirect checks in source order (literal, then physical containment for
 *     writes; read-only `<` targets are not fenced by any sandbox dialect).
+*
+* A modelled write utility (the closed table in `path-args.ts`) is exempt even
+* without an operator entry when its restricted shape keeps every write path
+* inside the physical writable roots under `workspace-write`: the sandbox only
+* fences `file-write*`, so such a call has exactly the sandboxed write set.
 */
 function failure(code, detail) {
 	return detail === void 0 ? {
@@ -1893,21 +1914,15 @@ async function auditSimpleCommands(program, context, pass) {
 			continue;
 		}
 		if (simple.assignments.length > 0) return failure("syntax:prefix-assignment", simple.assignments[0]?.name);
-		const decision = await auditCommandWord(simple.words, context, pass.roots);
+		const argumentVerdict = await checkPathArguments(simple.words, {
+			workdir: typeof context.workdir === "string" ? context.workdir : "",
+			allowRelative: pass.allowRelative,
+			roots: pass.roots
+		});
+		const decision = await auditCommandWord(simple.words, context, pass.roots, argumentVerdict);
 		if (decision !== void 0) return decision;
-		const argumentDecision = await auditArguments(simple.words, context, pass);
-		if (argumentDecision !== void 0) return argumentDecision;
+		if (!argumentVerdict.ok) return failure(argumentVerdict.failure.code, argumentVerdict.failure.detail);
 	}
-}
-/** Argument-path containment for the modelled file-mutating utilities. */
-async function auditArguments(words, context, pass) {
-	const verdict = await checkPathArguments(words, {
-		workdir: typeof context.workdir === "string" ? context.workdir : "",
-		allowRelative: pass.allowRelative,
-		roots: pass.roots
-	});
-	if (verdict.ok) return void 0;
-	return failure(verdict.failure.code, verdict.failure.detail);
 }
 /** Whether one entry's literal token prefix equals the command's leading words. */
 function entryMatches(words, entry) {
@@ -1920,7 +1935,7 @@ function entryMatches(words, entry) {
 	return true;
 }
 /** Command-word checks for one simple command. */
-async function auditCommandWord(words, context, roots) {
+async function auditCommandWord(words, context, roots, argumentVerdict) {
 	const word = words[0];
 	if (word.value === "") return failure("match:empty-program");
 	if (word.expanded) return failure("match:dynamic-command", word.value);
@@ -1935,7 +1950,31 @@ async function auditCommandWord(words, context, roots) {
 		return failure(denied.code, word.value);
 	}
 	if (isDeniedProgram(word.value, args)) return failure("program:environment", word.value);
-	if (!matched) return failure("match:no-entry", word.value);
+	if (!matched) return unwhitelistedDecision(word, argumentVerdict, context, roots);
+	if (isAbsolute(word.value)) return checkAbsoluteCommand(word.value, roots);
+}
+/**
+* Decision for a command word that matches no operator entry.
+*
+* Unmodelled programs always keep the sandbox (the operator's explicit trust is
+* the only exemption source). A modelled write utility (the closed table in
+* `path-args.ts`) is different: when its invocation stays in a restricted
+* shape and every write path is physically inside a writable root, the call's
+* file writes are exactly the sandboxed ones, so it is exempt even without an
+* entry. The argument verdict is reported on refusal because it is the
+* actionable reason (e.g. "the write path is outside the writable roots").
+* This entry-free path is limited to `workspace-write`: under `read-only` the
+* policy denies those writes, so skipping the sandbox would be a real grant.
+* @param word - the command word.
+* @param argumentVerdict - the precomputed argument-path verdict for the command.
+* @param context - the call's audit context (its `mode` gates the exemption).
+* @param roots - physical writable roots (for the absolute-command check).
+* @returns undefined when exempt, otherwise the first frozen refusal.
+*/
+async function unwhitelistedDecision(word, argumentVerdict, context, roots) {
+	if (!isModelledProgram(word.value)) return failure("match:no-entry", word.value);
+	if (!argumentVerdict.ok) return failure(argumentVerdict.failure.code, argumentVerdict.failure.detail);
+	if (context.mode !== "workspace-write") return failure("match:no-entry", word.value);
 	if (isAbsolute(word.value)) return checkAbsoluteCommand(word.value, roots);
 }
 /**
@@ -2107,10 +2146,10 @@ function renderAuditHint(decision, options = {}) {
 //#region lib/types/guide.js
 /** The P1 scripting contract injected as a system-prompt section. */
 const SCRIPT_GUIDE = [
-	"Outside-sandbox bash: a call is exempt only when every command word is a literal whitelisted name (bare or absolute) and the call stays in this subset:",
-	"- allowed: `;`, `&&`, `||`, `|`, if/case/for/while, literal/quoted args, `$NAME`/`${NAME}` without command substitution, heredocs, `cd`; redirects: `/dev/null`, reads (`<`) to any path, writes (`>`, `>>`, `<>`, `&>`) only to literal paths inside the workspace/extra writable roots/temp (relative writes need no cd); `mkdir`/`rm`/`cp`/`mv`/`touch`/`tee` only as `mkdir [-p] DIR…`, `rm [-rf] PATH…`, `cp [-Rr] SRC… DST`, `mv SRC… DST`, `touch PATH…`, `tee [-a] FILE…` with in-root literal write paths;",
-	"- forbidden: `$(...)`, backticks, arithmetic, process substitution, eval/source/./exec/command/builtin, export/declare/set/hash/enable/trap/alias, function definitions, prefix assignments, background `&`, relative/dynamic command words, dynamic write targets.",
-	"Use `run_in_background` for long or live processes. If a sandboxed call is denied, the result explains why it was not exempt; rewrite it or ask the operator to whitelist the command. Escalation needs user approval."
+	"Outside-sandbox bash: a call is exempt when every command word is a literal whitelisted name (bare or absolute) or a contained write tool, and stays in this subset:",
+	"- allowed: `;`, `&&`, `||`, `|`, if/case/for/while, literal args, `$NAME`/`${NAME}` without command substitution, heredocs, `cd`; redirects: `/dev/null`, reads (`<`) unrestricted, writes (`>`, `>>`, `<>`, `&>`) only to literal paths in workspace/extra roots/temp (no cd for relative); `mkdir`/`rm`/`cp`/`mv`/`touch`/`tee` as `mkdir [-p] DIR…`, `rm [-rf] PATH…`, `cp [-Rr] SRC… DST`, `mv SRC… DST`, `touch PATH…`, `tee [-a] FILE…` are entry-free under workspace-write when write paths are literal, in-root;",
+	"- forbidden: `$(...)`, backticks, arithmetic, process substitution, eval/source/./exec/command/builtin, export/declare/set/hash/enable/trap/alias, functions, prefix assignments, background `&`, relative/dynamic command words, dynamic write targets.",
+	"Use `run_in_background` for long or live processes. If a sandboxed call is denied, the result explains why it was not exempt; rewrite it or ask the operator to whitelist it. Escalation needs user approval."
 ].join("\n");
 //#endregion
 //#region lib/types/index.js
@@ -2159,9 +2198,12 @@ const SCRIPT_GUIDE = [
 * a file WRITE redirect must be a literal target whose physical location is
 * inside the workspace, an extra writable root, or a temp area (see
 * `redirect-targets.ts`). The file-mutating utilities `mkdir`/`rm`/`cp`/`mv`/
-* `touch`/`tee` are exempt only in restricted shapes whose write paths are
-* physically verified inside those same roots (`src/audit/path-args.ts`);
-* every other invocation falls back to the sandbox. The
+* `touch`/`tee` are handled the same way (`src/audit/path-args.ts`): their
+* restricted shapes only verify the write paths, and because the sandbox only
+* fences `file-write*`, such a call is write-equivalent to the sandboxed one.
+* That equivalence is why these utilities are exempt in a contained shape even
+* WITHOUT an operator entry — under `workspace-write` only; every other
+* invocation falls back to the sandbox. The
 * stock `sandbox` provider and `sandboxPolicy` service stay mounted; the
 * plugin replaces only the two consuming rows (`bash-sandbox`, `fs-sandbox`)
 * via the composition patch (disabled rows + a fresh plugin row).
@@ -2394,31 +2436,33 @@ var WhitelistBashExecutor = class extends SandboxBashExecutor {
 		this.logger = logger;
 	}
 	/**
-	* Route one resolved call. A command line wholly covered by the command
-	* whitelist runs on the inherited local executor — the same code path the
-	* stock executor uses under `danger-full-access` — so it is genuinely
-	* unconfined and its result carries no `sandbox` facts. A line with file
-	* redirects must additionally pass the writable-root target check. Everything
-	* else, including every mode the whitelist does not cover, keeps the stock
-	* confinement and its result facts.
+	* Route one resolved call. A line the static audit exempts — every command
+	* either matches an operator entry or is a contained write utility, and every
+	* file redirect points into a writable area — runs on the inherited local
+	* executor, i.e. the same code path the stock executor uses under
+	* `danger-full-access`, so it is genuinely unconfined and its result carries
+	* no `sandbox` facts. Everything else keeps the stock confinement and its
+	* result facts.
 	* @param spec - the fully-specified spec from {@link SandboxBashExecutor.resolve}.
 	* @returns the prepared handle from whichever side runs the command.
 	*/
 	async execute(spec) {
 		const policy = spec.sandboxPolicy;
 		if (policy !== void 0 && policy.mode !== "danger-full-access" && await this.exemptFromSandbox(spec, policy)) {
-			this.logger?.debug?.(`dsh-whitelist-sandbox: running ${JSON.stringify(spec.command)} outside the sandbox (whitelisted command)`);
+			this.logger?.debug?.(`dsh-whitelist-sandbox: running ${JSON.stringify(spec.command)} outside the sandbox (audited exempt call)`);
 			return LocalBashExecutor.prototype.execute.call(this, spec);
 		}
 		return super.execute(spec);
 	}
 	/**
 	* Decide whether one call may run outside the sandbox: every simple command
-	* must match an entry, and every file redirect must point into a writable
-	* area. Effect-free redirects (`/dev/null`, fd duplication/close) are always
-	* fine; a file redirect is only judged on a single simple command, because a
-	* compound line's earlier segments could create a symlink or change the cwd
-	* before the redirecting segment runs.
+	* must match an entry or be a contained write utility (a modelled
+	* `mkdir`/`rm`/`cp`/`mv`/`touch`/`tee` with every write path inside the
+	* physical writable roots, `workspace-write` only), and every file redirect
+	* must point into a writable area. Effect-free redirects (`/dev/null`, fd
+	* duplication/close) are always fine; a file redirect is only judged on a
+	* single simple command, because a compound line's earlier segments could
+	* create a symlink or change the cwd before the redirecting segment runs.
 	* @param spec - the resolved call.
 	* @param policy - the call's sandbox policy (workspace root and extra roots).
 	* @returns true when the whole line is exempt.
@@ -2429,7 +2473,8 @@ var WhitelistBashExecutor = class extends SandboxBashExecutor {
 			workdir: spec.workdir,
 			workspaceRoot: policy.workspaceRoot,
 			extraWritableRoots: this.rootsSource.roots,
-			additionalWritableRoots: policy.additionalWritableRoots
+			additionalWritableRoots: policy.additionalWritableRoots,
+			mode: policy.mode
 		});
 		if (!decision.exempt) this.logger?.debug?.(`dsh-whitelist-sandbox: not exempt (${decision.code}${decision.detail === void 0 ? "" : `: ${decision.detail}`})`);
 		return decision.exempt;
@@ -2559,7 +2604,8 @@ function installDenialHint(ctx, commands, roots, logger) {
 				workdir,
 				workspaceRoot: policy.workspaceRoot,
 				extraWritableRoots: roots.roots,
-				additionalWritableRoots: policy.additionalWritableRoots
+				additionalWritableRoots: policy.additionalWritableRoots,
+				mode: policy.mode
 			});
 			if (audit.exempt) return decision;
 			const hint = renderAuditHint(audit, { escalation: true });

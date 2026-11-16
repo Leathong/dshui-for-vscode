@@ -16,6 +16,8 @@ export interface AuditDecision {
     /** Optional detail for the hint: command word, target, variable name, … */
     readonly detail?: string;
 }
+/** The sandbox modes a call can run under (mirrors the stock policy shape). */
+export type AuditMode = 'read-only' | 'workspace-write' | 'danger-full-access';
 /** The command-word entry shape the audit consumes (see `CommandEntry`). */
 export interface AuditEntry {
     readonly source: string;
@@ -33,4 +35,13 @@ export interface AuditContext {
     readonly extraWritableRoots: readonly string[];
     /** Extra roots already present on the resolved sandbox policy, if any. */
     readonly additionalWritableRoots?: readonly string[];
+    /**
+     * The call's sandbox mode when known. The entry-free exemption of the
+     * modelled write utilities (see `path-args.ts`) requires
+     * `workspace-write`: that is the mode whose policy actually permits writes
+     * inside the writable roots, so only there is the in-root call truly
+     * write-equivalent to the sandboxed one. An absent mode keeps the fail-closed
+     * default (no entry-free exemption).
+     */
+    readonly mode?: AuditMode;
 }
