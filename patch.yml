@@ -83,6 +83,14 @@
     - id: dshui-host-ensure-workspace
       name: dshui-host-ensure-workspace
 
+    # Publishes completed / failed top-level turn boundaries into
+    # `$DSH_HOME/dshui-turn-events-<port>.json`. The extension polls that file
+    # and raises a VS Code notification (`dshui.notifyOnTurnComplete`): the
+    # extension host cannot see dsh's in-process events, and the dsh page
+    # inside the webview cannot call the VS Code API.
+    - id: dshui-host-turn-notify
+      name: dshui-host-turn-notify
+
     # Empty stand-in for the disabled `workspace-changes` row's
     # `workspaceChanges` service (see the pairing comment above).
     - id: dshui-workspace-changes-stub

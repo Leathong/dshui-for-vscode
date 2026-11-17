@@ -187,6 +187,29 @@ VS Code 的**输出面板**（View → Output → 下拉选择 **dsh UI**，或�
 | `dshui.openFilesInVscode` | `true` | 聊天中的文件链接在**当前 VS Code** 中打开（经扩展内桥接，无系统弹窗），而非系统默认编辑器 |
 | `dshui.checkDshUpdates` | `true` | 启动时异步查询 npm 上的最新 dsh 版本，内置版本过旧时通知（24 小时节流，同一新版本仅提示一次；可关闭） |
 | `dshui.windowOrigin` | `true` | 每个窗口经**自己的 loopback origin**（扩展内代理）加载共享服务器：浏览器的每 origin 连接池与 localStorage/IndexedDB 归本窗口独有，窗口之间既不会互相挤占连接、也不会串工作区状态；工作区作用域由代理写入页面，不再依赖可被跳转丢弃的 URL 查询。关闭则所有窗口直接共用 `127.0.0.1:<port>` 这一个 origin |
+| `dshui.notifyOnTurnComplete` | `unfocused` | 轮次完成通知。`unfocused` = 仅当本窗口失焦时通知（默认）；`always` = 始终通知；`off` = 关闭。完成的轮次发普通系统通知，出错的轮次发「出错」通知（取消/阻塞的轮次不通知）；只提醒本窗口工作区的会话 |
+
+### 完成通知
+
+dsh 自身没有「一轮答完」的提醒：扩展把随包分发的 host 插件 `dshui-host-turn-notify` 挂进宿主，它在服务端监听 `session/event` 的 `turn/end`（真正结束的轮次才写，被中断/取消的轮次不写），把边界（会话、工作区、结束原因）发布到 `$DSH_HOME/dshui-turn-events-<port>.json`；扩展宿主轮询该文件，按**本窗口工作区**过滤后发出**系统通知**（macOS 走 `osascript`，Linux 走 `notify-send`），系统通道不可用时回退到 VS Code 应用内通知（目前是 Windows）。共享后端下多个窗口共用一个服务器，各窗口只提醒自己文件夹里的会话。
+
+VSCode 扩展 API 只提供应用内通知；VS Code 自己的「Chat 响应完成 / 任务完成」系统通知走内部通道，不对扩展开放，因此系统通知由扩展宿主调用系统命令发出。macOS 默认走 `osascript`（AppleScript Standard Additions 的 `display notification`）：通知中心显示为 **Script Editor**，点击不会聚焦 VS Code。可选安装 [`terminal-notifier`](https://github.com/julienXX/terminal-notifier)（当前 3.x）：
+
+```sh
+brew install terminal-notifier
+cp -R "$(brew --prefix terminal-notifier)/terminal-notifier.app" ~/Applications/   # macOS 只在该位置为它登记通知授权
+test -d ~/Applications/terminal-notifier.app && terminal-notifier -diagnose          # authorization 应为 authorized
+```
+
+首次发送时会弹出系统授权提示。扩展探测到后自动改用：通知显示为 terminal-notifier，点击可跳回 VS Code；从 terminal-notifier 3.0 起 macOS 不允许伪造发送者身份与图标（`-sender`/`-appIcon` 已移除），所以图标无法变成 VS Code。
+
+点击定位到**具体窗口**走本扩展自己的 URI：通知点击打开 `vscode://leathong.dshui-for-vscode/focus?folder=<工作区>`，VS Code 把 URI 交给扩展的 URI handler；handler 用 `code <folder>`（CLI 打开上下文，**不会**触发「外部应用打开本地路径」确认框）聚焦已打开该文件夹的窗口，URI 正好落在目标窗口时还会顺带展开 dsh 侧边栏。信任范围只涉及本扩展：首次点击时 VS Code 会问 **Allow 'dsh UI for VS Code' extension to open this URI?**，勾选 **Do not ask me again for this extension** 并点 **Open** 即可；也可以直接在用户设置里信任本扩展：
+
+```json
+"extensions.confirmedUriHandlerExtensionIds": ["leathong.dshui-for-vscode"]
+```
+
+不需要放宽 `security.promptForLocalFileProtocolHandling`（那是全局信任所有外部应用）。看不到通知时：在「系统设置 → 通知」允许对应 app，或用 `terminal-notifier -diagnose` 查看授权 / Focus / 摘要状态，必要时 `tccutil reset UserNotification fr.julienxx.oss.terminal-notifier` 重置授权。
 
 ### 引用文件与代码片段
 
@@ -382,6 +405,9 @@ VS Code 侧边栏视图（webview）
     重做 = Shift+Cmd/Ctrl+Z 或 Cmd/Ctrl+Y）、Cmd/Ctrl+N 新建
     会话处理器（拦截 workbench 的「新窗口」快捷键，改走侧边栏「新建会话」按钮），以及文件/代码
     引用写入处理器（接收扩展右键菜单经 webview 外壳转发的引用消息，写入 composer 草稿）；
+  - `dshui-host-turn-notify`——host 插件：监听 `session/event` 的 `turn/end`，把完成（或出错）轮次的
+    边界发布到 `$DSH_HOME/dshui-turn-events-<port>.json`，扩展据此弹 VS Code 完成通知
+    （见 [完成通知](#完成通知)）；
   - `dshui-client-ui-workspace` / `dshui-client-ui-conversation`——两个原版客户端包的**重新构建产物**
     （补丁把这两个包的 tsdown bundle id 改成 dshui 名；`patch.yml` 停用原生 `ui-workspace` /
     `ui-conversation` 行，再插入同名新行，产物经 `scripts/copy-clients.mjs` 拷入 `dshui-plugins/`）。

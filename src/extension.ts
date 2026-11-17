@@ -7,6 +7,7 @@
  * picker). The dshui plugin overlay scopes the sidebar to that workspace's
  * sessions and pins the input box to the bottom.
  */
+import { execFile } from 'node:child_process'
 import * as fs from 'node:fs'
 import * as https from 'node:https'
 import * as path from 'node:path'
@@ -27,7 +28,9 @@ import {
   buildSnippetReference,
   type ReferencePayload,
 } from './reference'
+import { FOCUS_URI_PATH, folderFromFocusQuery } from './focusUri'
 import { findSubagentSessionDirs } from './sessionLineage'
+import { TurnNotifier } from './turnNotifier'
 
 const VIEW_ID = 'dshui.view'
 
@@ -1355,6 +1358,55 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // deliver (see `watchSharedServer`).
   serverWatch = setInterval(() => { void watchSharedServer() }, SERVER_WATCH_MS)
   serverWatch.unref()
+
+  // Turn-completion notifications. The dsh host plugin
+  // (`dshui-plugins/dshui-host-turn-notify`) republishes every completed or
+  // failed top-level turn into a per-server file in the dsh home; this window
+  // reports only its own workspace's turns, and only while it is out of focus
+  // unless `dshui.notifyOnTurnComplete` says otherwise.
+  context.subscriptions.push(new TurnNotifier({
+    dshHome,
+    workspacePath: currentWorkspace,
+    serverPort: () => {
+      if (server === null || server.port === undefined) return undefined
+      return server.cwd === currentWorkspace() ? server.port : undefined
+    },
+    workspaceFolder: () => vscode.workspace.workspaceFolders?.[0]?.uri.fsPath,
+    extensionId: context.extension.id,
+  }))
+
+  /**
+   * Focus the window that has the focus URI's folder open.
+   *
+   * A notification click arrives as `vscode://<extension-id>/focus?folder=…`;
+   * VS Code hands the URI to whichever window's extension host is active, which
+   * need not be the window that raised the notification. The `code` CLI runs
+   * from here (extension host, not an external app), so its window manager
+   * focuses the window already showing the folder without any protocol-open
+   * confirmation. When the URI did land on the right window, reveal its dsh
+   * sidebar as well.
+   * @param uri - the system-wide extension URI.
+   */
+  function focusWorkspaceWindow(uri: vscode.Uri): void {
+    if (uri.path !== FOCUS_URI_PATH) return
+    const folder = folderFromFocusQuery(uri.query)
+    if (folder === undefined) return
+    let isDirectory = false
+    try { isDirectory = fs.statSync(folder).isDirectory() } catch { isDirectory = false }
+    if (!isDirectory) return
+    const folderAsOpened = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
+    if (folderAsOpened === folder || currentWorkspace() === folder) {
+      void vscode.commands.executeCommand('dshui.open')
+    }
+    execFile(codeCli, [folder], { timeout: 15_000, windowsHide: true }, (error) => {
+      if (error !== null) logger.warn(`[dshui] could not focus the workspace window for ${folder}:`, error)
+      else logger.info(`[dshui] focused the workspace window for ${folder}`)
+    })
+  }
+
+  context.subscriptions.push(vscode.window.registerUriHandler({
+    handleUri: (uri: vscode.Uri) => { focusWorkspaceWindow(uri) },
+  }))
 
   // Auto-open the sidebar view at startup when a folder is open (unless disabled).
   const autoOpen = vscode.workspace.getConfiguration('dshui').get<boolean>('autoOpen') ?? true

@@ -199,6 +199,29 @@ fingerprint`): install Node.js ≥ 22.19 (or point `dshui.server.nodePath` at a 
 | `dshui.openFilesInVscode` | `true` | Open file links from chat in **the current VS Code** window (via the extension's bridge, no system popup) instead of the OS default editor |
 | `dshui.checkDshUpdates` | `true` | Check the npm registry for newer dsh releases at startup and notify when the bundled version is outdated (throttled to once per 24h; each new version is announced once; can be disabled) |
 | `dshui.windowOrigin` | `true` | Load the shared server through a **per-window loopback origin** (an in-extension proxy): the browser's per-origin connection pool and localStorage/IndexedDB belong to that window alone, so windows never starve each other's requests or leak workspace state into each other, and the workspace scope is pinned into the served page instead of a droppable URL query. Disable to make every window use `127.0.0.1:<port>` directly |
+| `dshui.notifyOnTurnComplete` | `unfocused` | Turn-completion notifications. `unfocused` = notify only while this window is out of focus (default); `always` = notify on every turn; `off` = disabled. A completed turn raises an informational desktop notification, a failed turn an error one (cancelled or blocked turns are never announced); only sessions in this window's workspace are reported |
+
+### Turn-Completion Notifications
+
+dsh itself has no "a turn just finished" reminder. The extension mounts the bundled host plugin `dshui-host-turn-notify`, which listens to `session/event` → `turn/end` on the server (only turns that really ended are written; interrupted or cancelled turns are not), publishes each boundary (session, workspace, end reason) to `$DSH_HOME/dshui-turn-events-<port>.json`, and the extension host polls that file and raises a **desktop notification** for this window's workspace (macOS: `osascript`; Linux: `notify-send`), falling back to an in-app VS Code toast where no system channel is available (Windows today). Under the shared backend every window talks to one server but only reports sessions in its own folder.
+
+VS Code's extension API offers in-app notifications only: VS Code's own "chat response received / task completed" system notifications use an internal channel that extensions cannot reach, so the extension host posts through the OS notification command. macOS uses `osascript` (AppleScript Standard Additions' `display notification`) by default: the banner appears as **Script Editor** and clicking it does not focus VS Code. Optionally install [`terminal-notifier`](https://github.com/julienXX/terminal-notifier) (currently 3.x):
+
+```sh
+brew install terminal-notifier
+cp -R "$(brew --prefix terminal-notifier)/terminal-notifier.app" ~/Applications/   # macOS only registers its notification authorization from there
+test -d ~/Applications/terminal-notifier.app && terminal-notifier -diagnose          # authorization should be "authorized"
+```
+
+The first notification triggers the system permission prompt. The extension detects terminal-notifier and uses it: the banner appears as terminal-notifier and clicking it jumps back to VS Code; since terminal-notifier 3.0 the sender identity and icon can no longer be overridden (`-sender`/`-appIcon` were removed), so the icon cannot become VS Code. On macOS the app bundle must also live in `~/Applications` for the notification authorization prompt to appear. If no banner appears, allow the app under System Settings → Notifications, or run `terminal-notifier -diagnose` for the authorization / Focus / Scheduled Summary state, and `tccutil reset UserNotification fr.julienxx.oss.terminal-notifier` to reset the grant.
+
+Focusing the **exact window** uses this extension's own URI: a click opens `vscode://leathong.dshui-for-vscode/focus?folder=<workspace>`, VS Code hands the URI to the extension's URI handler, and the handler runs `code <folder>` (a CLI open, which does **not** trigger the "an external application wants to open a local path" confirmation) to focus the window that already has that folder open; when the URI lands on the right window it also reveals the dsh sidebar. Trust is scoped to this extension: the first click asks **Allow 'dsh UI for VS Code' extension to open this URI?** — tick **Do not ask me again for this extension** and press **Open**, or trust it up front in user settings:
+
+```json
+"extensions.confirmedUriHandlerExtensionIds": ["leathong.dshui-for-vscode"]
+```
+
+No need to relax `security.promptForLocalFileProtocolHandling` (which would trust every external application). If no banner appears, allow the app under System Settings → Notifications, or run `terminal-notifier -diagnose` for the authorization / Focus / Scheduled Summary state, and `tccutil reset UserNotification fr.julienxx.oss.terminal-notifier` to reset the grant.
 
 ### Referencing Files and Code Selections
 
@@ -441,6 +464,10 @@ VS Code sidebar view (webview)
     session handler (intercepts the workbench "New Window" shortcut and routes it to the sidebar "New
     Session" button), and a file/code reference writer (receives reference messages forwarded by the
     webview shell from the extension's context-menu commands and writes them into the composer draft).
+  - `dshui-host-turn-notify` — the host plugin that listens to `session/event` → `turn/end` and
+    publishes each completed or failed turn boundary to `$DSH_HOME/dshui-turn-events-<port>.json`,
+    which the extension polls to raise VS Code turn-completion notifications (see
+    [Turn-Completion Notifications](#turn-completion-notifications)).
   - `dshui-client-ui-workspace` / `dshui-client-ui-conversation` — **rebuilt artifacts** of the two
     stock client packages (the patch renames their tsdown bundle id to the dshui name; `patch.yml`
     disables the stock `ui-workspace` / `ui-conversation` rows and inserts fresh rows under those
