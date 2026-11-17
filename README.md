@@ -170,6 +170,12 @@ VS Code 的**输出面板**（View → Output → 下拉选择 **dsh UI**，或�
 同一份日志（时间戳 + 级别前缀）还会追加写入 `~/.dsh/dshui-logs/extension.log`（dsh home 下），
 便于命令行/无头环境排查；扩展宿主内部的未捕获异常与未处理的 Promise rejection 也会记录到输出面板。
 
+内嵌服务器自身的 stdout/stderr 另有独立落点：`~/.dsh/dshui-logs/server-<port>.log`（
+`dshui.server.port = 0` 时为 `server-auto-<pid>.log`；超过 4 MB 在下次启动时轮转为 `.log.1`）。固定端口的共享
+服务器会活过拉起它的窗口，因此窗口重载后这份文件仍是唯一能看到服务器输出与崩溃原因的地方（dsh 的
+failLoud 只往 stderr 写一行致命诊断）。服务器崩溃时该日志尾部会一并写入 `extension.log`，并弹出带
+**查看日志** 按钮的提示。
+
 启动日志里的 `launching dsh web with system Node.js v… (…)` 记录了本次实际使用的 Node；若本机没有
 可用 Node，会先出现 `no system Node.js >= 22.19.0 found …` 告警，随后 dsh 报
 `host preparation failed: node-addon-require-builtin unsupported: Unsupported/no-realm`（原生插件

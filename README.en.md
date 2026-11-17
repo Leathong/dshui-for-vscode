@@ -182,6 +182,13 @@ The same log lines (timestamp + level prefix) are also appended to
 `~/.dsh/dshui-logs/extension.log` (under your dsh home) for headless/CLI debugging, and uncaught
 exceptions and unhandled promise rejections inside the extension host are recorded as well.
 
+The embedded server's own stdout/stderr has a separate durable sink:
+`~/.dsh/dshui-logs/server-<port>.log` (`server-auto-<pid>.log` when `dshui.server.port = 0`, rolled to
+`.log.1` on the next launch once past 4 MB). A fixed-port shared server outlives the window that spawned it, so this file is the
+only place its output and crash reason survive a window reload (dsh's failLoud handler writes a single
+fatal line to stderr). On a crash the tail is also copied into `extension.log` and a notification with a
+**View Logs** action appears.
+
 The startup line `launching dsh web with system Node.js v… (…)` names the Node actually used. When no
 usable Node is installed, a `no system Node.js >= 22.19.0 found …` warning appears first and dsh then
 fails with `host preparation failed: node-addon-require-builtin unsupported: Unsupported/no-realm`

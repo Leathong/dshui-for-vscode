@@ -10,6 +10,14 @@
  * probing the port); a spawn that loses a fixed-port race adopts the winner
  * instead of failing; and the child is detached so it survives its spawning
  * window and keeps serving the other windows until the last one closes.
+ *
+ * Because the detached child outlives its spawning window, its stdout/stderr
+ * cannot stay on that window's pipes: the pipes die with the window, and dsh
+ * reports a fatal crash exactly once (its failLoud handler writes a single
+ * `dsh: fatal uncaught exception: …` line to stderr). The child therefore
+ * logs to a durable file (`$DSH_HOME/dshui-logs/server-<port>.log`, see
+ * {@link serverLogPath}) that any window — or a human afterwards — can read;
+ * pipes remain only the fallback for when the file cannot be opened.
  */
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process'
 import * as fs from 'node:fs'
@@ -377,36 +385,65 @@ export function probeDshuiMarker(port: number, timeoutMs = 2500): Promise<boolea
 /** Maximum automatic restarts before the server stays down. */
 const MAX_RESTARTS = 2
 
-/** Wait for a line matching the URL pattern on the child's stdout. */
-function waitForUrl(child: ChildProcess, timeoutMs: number): Promise<BootUrl> {
-  return new Promise((resolve, reject) => {
-    let buffer = ''
-    const timer = setTimeout(() => {
-      cleanup()
-      reject(new Error(`dsh web did not print its URL within ${timeoutMs}ms`))
-    }, timeoutMs)
-    const onData = (chunk: Buffer): void => {
-      buffer += chunk.toString('utf8')
-      const match = URL_LINE.exec(buffer)
-      if (match === null) return
-      const url = new URL(match[1])
-      const port = Number(url.port)
-      const token = url.searchParams.get('token') ?? ''
-      cleanup()
-      resolve({ port, token })
+/** How often the durable log file is polled for new bytes. */
+const LOG_POLL_MS = 200
+
+/** Roll the durable log aside once it reaches this size (per server). */
+const SERVER_LOG_MAX_BYTES = 4 * 1024 * 1024
+
+/**
+ * Absolute path of the durable log of a dsh server launched on `port`.
+ *
+ * Fixed-port servers get one stable file per port, so a server that outlived
+ * its spawning window (and later crashed) can still be read by any window or
+ * by a human; OS-assigned ports get one file per extension host, since every
+ * window then owns a private server and must not interleave with another's.
+ * @param dshHome - the dsh home directory.
+ * @param port - the requested port (0 = OS-assigned).
+ * @returns the absolute log file path.
+ */
+export function serverLogPath(dshHome: string, port: number): string {
+  const name = port !== 0 ? `server-${port}` : `server-auto-${process.pid}`
+  return path.join(dshHome, 'dshui-logs', `${name}.log`)
+}
+
+/**
+ * Last `lines` non-empty lines of a server log, for the crash path: dsh's
+ * failLoud handler prints the fatal diagnostic to stderr once, so the tail is
+ * the only surviving evidence of why a detached server died.
+ * @param logPath - absolute server log path.
+ * @param lines - how many trailing non-empty lines to return.
+ * @returns the tail text, or '' when the file is missing or unreadable.
+ */
+export function readLogTail(logPath: string, lines = 40): string {
+  try {
+    const size = fs.statSync(logPath).size
+    if (size === 0) return ''
+    // Never read a whole multi-megabyte log to show 40 lines.
+    const window = Math.min(size, 64 * 1024)
+    const fd = fs.openSync(logPath, 'r')
+    try {
+      const buffer = Buffer.allocUnsafe(window)
+      fs.readSync(fd, buffer, 0, window, size - window)
+      const found = buffer.toString('utf8').split(/\r?\n/).filter((line) => line.trim() !== '')
+      return found.slice(-lines).join('\n')
+    } finally {
+      fs.closeSync(fd)
     }
-    const onExit = (code: number | null): void => {
-      cleanup()
-      reject(new Error(`dsh web exited before binding (code ${String(code)})`))
-    }
-    const cleanup = (): void => {
-      clearTimeout(timer)
-      child.stdout?.off('data', onData)
-      child.off('exit', onExit)
-    }
-    child.stdout?.on('data', onData)
-    child.on('exit', onExit)
-  })
+  } catch {
+    return ''
+  }
+}
+
+/** Keep one durable log bounded: roll the live file aside when it gets big. */
+function rotateServerLog(logPath: string): void {
+  try {
+    if (fs.statSync(logPath).size <= SERVER_LOG_MAX_BYTES) return
+  } catch {
+    return
+  }
+  try { fs.rmSync(`${logPath}.1`, { force: true }) } catch { /* best-effort */ }
+  try { fs.renameSync(logPath, `${logPath}.1`) } catch { /* keep appending */ }
 }
 
 export class DshServer {
@@ -419,6 +456,20 @@ export class DshServer {
   private startDiagnostics = ''
   /** The dsh launch token for the bound server (empty when attached via probe). */
   private launchToken = ''
+  /** Durable log file of the last spawned child (undefined when the launch used pipes). */
+  private logPath: string | undefined
+  /** Poller forwarding new log-file bytes to {@link onData}, alive while the child is. */
+  private logPoll: NodeJS.Timeout | null = null
+  /** Synchronous one-shot drain of the log file (also used while waiting for boot). */
+  private logDrain: (() => void) | null = null
+  /** Offset of the next unread byte in {@link logPath}. */
+  private logOffset = 0
+  /** Text read since spawn, searched for the readiness URL. */
+  private bootText = ''
+  /** Incomplete trailing line of the forwarded stream. */
+  private lineRemainder = ''
+  /** Detaches the stdout/stderr listeners of a pipe-launched child. */
+  private detachStdio: (() => void) | null = null
 
   constructor(options: DshServerOptions) {
     this.options = options
@@ -449,6 +500,21 @@ export class DshServer {
   /** The dsh launch token the server prints on its readiness URL. */
   get launchTokenValue(): string {
     return this.launchToken
+  }
+
+  /** Durable log file of the last spawned child (null when the launch used pipes). */
+  get logFile(): string | null {
+    return this.logPath ?? null
+  }
+
+  /**
+   * Last `lines` non-empty lines of this server's durable log.
+   * Used by the crash path, where the child's stderr is already gone.
+   * @param lines - how many trailing lines to return.
+   * @returns the tail text, or '' when this handle owns no child or no log.
+   */
+  recentLogTail(lines = 40): string {
+    return this.logPath === undefined ? '' : readLogTail(this.logPath, lines)
   }
 
   /** The port requested at construction (0 means OS-assigned). */
@@ -495,6 +561,8 @@ export class DshServer {
   }
 
   private spawn(requestedPort: number): Promise<number> {
+    // A restarted child must not inherit the previous child's forwarder.
+    this.stopLogForwarding()
     this.stopping = false
     const runtime = resolveDshRuntime(this.options.nodePath)
     const args = [
@@ -527,59 +595,97 @@ export class DshServer {
     } else {
       logger.info(`[dshui] launching dsh web with system Node.js v${String(runtime.version)} (${String(runtime.nodePath)})`)
     }
-    const child = spawn(runtime.command, args, {
-      cwd: this.options.cwd,
-      // Detached: the server must survive its spawning window (a shared
-      // backend outlives the owner while other windows still use it). The
-      // host plugin self-exits once the lifecycle registry has no live users.
-      detached: true,
-      env,
-      stdio: ['ignore', 'pipe', 'pipe'],
-    })
-    // Unref so the extension host never waits on the server at exit; the
-    // stdout pipe keeps the URL-read listener alive while this host lives.
+    // Durable log first: the detached child may outlive this window, so its
+    // stdout/stderr must not stay on this host's pipes (see the file header).
+    const log = this.openLog(requestedPort)
+    const stdio: Array<'ignore' | 'pipe' | number> = log === null
+      ? ['ignore', 'pipe', 'pipe']
+      : ['ignore', log.fd, log.fd]
+    let child: ChildProcess
+    try {
+      child = spawn(runtime.command, args, {
+        cwd: this.options.cwd,
+        // Detached: the server must survive its spawning window (a shared
+        // backend outlives the owner while other windows still use it). The
+        // host plugin self-exits once the lifecycle registry has no live users.
+        detached: true,
+        env,
+        stdio,
+      })
+    } catch (error) {
+      // spawn() can throw synchronously (bad options); release the log handle.
+      if (log !== null) {
+        try { fs.closeSync(log.fd) } catch { /* already closed */ }
+      }
+      throw error
+    }
+    // The child inherited the descriptor; this process must drop its copy or
+    // the file stays locked and rotation fails.
+    if (log !== null) {
+      try { fs.closeSync(log.fd) } catch { /* already closed */ }
+    }
+    // Unref so the extension host never waits on the server at exit.
     child.unref()
     this.child = child
     this.startDiagnostics = ''
-    const rememberDiagnostic = (chunk: Buffer): void => {
-      this.startDiagnostics = `${this.startDiagnostics}${chunk.toString('utf8')}`.slice(-16_384)
-    }
-    child.stdout?.on('data', (chunk: Buffer) => {
-      rememberDiagnostic(chunk)
-      for (const line of chunk.toString('utf8').split('\n')) {
-        if (line.trim() !== '' && this.onData !== null) this.onData(line)
-      }
-    })
-    child.stderr?.on('data', (chunk: Buffer) => {
-      rememberDiagnostic(chunk)
-      if (this.onData !== null) this.onData(chunk.toString('utf8'))
-    })
+    this.bootText = ''
+    this.lineRemainder = ''
+    if (log !== null) this.startLogForwarding(log.path, log.offset)
+    else this.startStdioForwarding(child)
 
-    return waitForUrl(child, 60_000).then((boot) => {
+    const exitState: {
+      exited: boolean
+      code: number | null
+      signal: NodeJS.Signals | null
+      finalized: boolean
+    } = { exited: false, code: null, signal: null, finalized: false }
+    /**
+     * Post-boot exit: release the tailer, report, and retry on the configured
+     * port. The listener is attached before the boot promise settles so a
+     * child that binds and dies in the same tick is still reported as an exit
+     * instead of leaving a healthy-looking handle on a dead port.
+     */
+    const finalizeExit = (code: number | null, signal: NodeJS.Signals | null): void => {
+      if (exitState.finalized) return
+      exitState.finalized = true
+      // Flush the last (possibly partial) line while the handle still owns it.
+      this.stopLogForwarding()
+      this.child = null
+      this.boundPort = undefined
+      this.options.onExit?.(code, signal)
+      if (this.stopping) return
+      // Unexpected exit: retry on the configured port, never a random
+      // fallback. A fixed port that is occupied will surface the same
+      // "change dshui.server.port" error as the initial spawn.
+      if (code !== 0 && this.restarts < MAX_RESTARTS) {
+        this.restarts += 1
+        this.spawn(this.options.port).then(this.options.onReady).catch((error) => {
+          this.options.onExit?.(null, null)
+          logger.error('[dshui] dsh web restart failed:', error)
+        })
+      }
+    }
+    child.once('exit', (code, signal) => {
+      exitState.exited = true
+      exitState.code = code
+      exitState.signal = signal
+      // Before binding this is a start failure (waitForBoot still reads the
+      // tail to recover a URL printed just before the exit, then rejects and
+      // releases the tailer itself); only a bound server reports a
+      // crash/restart through the post-boot path.
+      if (this.boundPort !== undefined) finalizeExit(code, signal)
+    })
+    return this.waitForBoot(child).then((boot) => {
       this.boundPort = boot.port
       this.launchToken = boot.token
-      child.on('exit', (code, signal) => {
-        this.child = null
-        this.boundPort = undefined
-        this.options.onExit?.(code, signal)
-        if (this.stopping) return
-        // Unexpected exit: retry on the configured port, never a random
-        // fallback. A fixed port that is occupied will surface the same
-        // "change dshui.server.port" error as the initial spawn.
-        if (code !== 0 && this.restarts < MAX_RESTARTS) {
-          this.restarts += 1
-          this.spawn(this.options.port).then(this.options.onReady).catch((error) => {
-            this.options.onExit?.(null, null)
-            logger.error('[dshui] dsh web restart failed:', error)
-          })
-        }
-      })
+      if (exitState.exited) finalizeExit(exitState.code, exitState.signal)
       return boot.port
     }).catch(async (error) => {
       if (this.child !== null && this.child.exitCode === null) {
         // Never bound and still alive: kill before any retry/adoption.
         try { child.kill('SIGTERM') } catch { /* already gone */ }
       }
+      this.stopLogForwarding()
       // Fixed-port spawn race: another window's dshui server may now hold the
       // port (this child exited with EADDRINUSE). Adopt the winner instead of
       // failing; this is still the same configured port and the same shared
@@ -626,12 +732,164 @@ export class DshServer {
     })
   }
 
+  /**
+   * Open (and rotate when oversized) the durable log for a child about to be
+   * spawned. Falls back to the historical pipes when the file cannot be
+   * opened: booting the server matters more than durable diagnostics.
+   * @param requestedPort - the port passed to the child (0 = OS-assigned).
+   * @returns the file path, an open descriptor the child inherits, and the
+   * offset of new content (existing generations are kept in the same file), or
+   * null when pipes must be used instead.
+   */
+  private openLog(requestedPort: number): { path: string; fd: number; offset: number } | null {
+    const logPath = serverLogPath(this.options.dshHome, requestedPort)
+    try {
+      fs.mkdirSync(path.dirname(logPath), { recursive: true })
+      rotateServerLog(logPath)
+      const fd = fs.openSync(logPath, 'a')
+      let offset = 0
+      try { offset = fs.fstatSync(fd).size } catch { offset = 0 }
+      this.logPath = logPath
+      return { path: logPath, fd, offset }
+    } catch (error) {
+      this.logPath = undefined
+      logger.warn(
+        `[dshui] could not open the dsh server log (${logPath}); keeping the child's output on a pipe: ${String(error)}`,
+      )
+      return null
+    }
+  }
+
+  /**
+   * Tail the durable log into {@link ingest}. Kept alive for the child's whole
+   * lifetime (not just boot), so the "dsh UI" output channel keeps showing
+   * server output exactly as the old stdout pipe did.
+   * @param logPath - absolute log file path.
+   * @param offset - byte offset of the new generation's first line.
+   */
+  private startLogForwarding(logPath: string, offset: number): void {
+    this.stopLogForwarding()
+    this.logOffset = offset
+    const drain = (): void => {
+      let chunk = ''
+      try {
+        const size = fs.statSync(logPath).size
+        if (size > this.logOffset) {
+          const length = Math.min(size - this.logOffset, 256 * 1024)
+          const fd = fs.openSync(logPath, 'r')
+          try {
+            const buffer = Buffer.allocUnsafe(length)
+            const read = fs.readSync(fd, buffer, 0, length, this.logOffset)
+            chunk = buffer.subarray(0, read).toString('utf8')
+            this.logOffset += read
+          } finally {
+            fs.closeSync(fd)
+          }
+        }
+      } catch {
+        // The file can be transiently unreadable (roll/rotation): next poll retries.
+      }
+      if (chunk !== '') this.ingest(chunk)
+    }
+    this.logDrain = drain
+    drain()
+    this.logPoll = setInterval(drain, LOG_POLL_MS)
+    this.logPoll.unref()
+  }
+
+  /**
+   * Pipe fallback for when the durable log could not be opened: forward
+   * stdout/stderr chunks into the same {@link ingest} path.
+   * @param child - the spawned child.
+   */
+  private startStdioForwarding(child: ChildProcess): void {
+    const onChunk = (chunk: Buffer): void => {
+      this.ingest(chunk.toString('utf8'))
+    }
+    child.stdout?.on('data', onChunk)
+    child.stderr?.on('data', onChunk)
+    this.detachStdio = () => {
+      child.stdout?.off('data', onChunk)
+      child.stderr?.off('data', onChunk)
+    }
+  }
+
+  /**
+   * Feed raw server output: keep the boot window for the readiness URL, and
+   * forward complete lines to the listener. A partial last line is buffered
+   * until its newline arrives (or {@link stopLogForwarding} flushes it).
+   * @param chunk - raw text read from the log file or a pipe.
+   */
+  private ingest(chunk: string): void {
+    this.startDiagnostics = `${this.startDiagnostics}${chunk}`.slice(-16_384)
+    this.bootText = `${this.bootText}${chunk}`.slice(-8_192)
+    this.lineRemainder += chunk
+    const lines = this.lineRemainder.split('\n')
+    this.lineRemainder = lines.pop() ?? ''
+    for (const line of lines) {
+      if (line.trim() !== '' && this.onData !== null) this.onData(line)
+    }
+  }
+
+  /** Stop the poller/pipe listeners and flush the trailing partial line. */
+  private stopLogForwarding(): void {
+    this.logDrain = null
+    if (this.logPoll !== null) {
+      clearInterval(this.logPoll)
+      this.logPoll = null
+    }
+    if (this.detachStdio !== null) {
+      this.detachStdio()
+      this.detachStdio = null
+    }
+    if (this.lineRemainder.trim() !== '' && this.onData !== null) this.onData(this.lineRemainder)
+    this.lineRemainder = ''
+    this.bootText = ''
+  }
+
+  /**
+   * Wait for the readiness URL to appear in the forwarded output. Reading from
+   * the durable log (or the pipe fallback) keeps one code path for both.
+   * @param child - the spawned child, watched for a pre-bind exit.
+   * @returns the bound port and launch token.
+   */
+  private async waitForBoot(child: ChildProcess): Promise<BootUrl> {
+    const timeoutMs = 60_000
+    const deadline = Date.now() + timeoutMs
+    /** Read the log now and answer the URL it printed last, if any. */
+    const readBootUrl = (): BootUrl | null => {
+      this.logDrain?.()
+      const match = URL_LINE.exec(this.bootText)
+      if (match === null) return null
+      const url = new URL(match[1])
+      return { port: Number(url.port), token: url.searchParams.get('token') ?? '' }
+    }
+    for (;;) {
+      // Drain synchronously: a URL printed just before an exit must not be
+      // lost to the 200ms forwarding poll.
+      const boot = readBootUrl()
+      if (boot !== null) return boot
+      if (child.exitCode !== null || child.signalCode !== null) {
+        const late = readBootUrl()
+        if (late !== null) return late
+        throw new Error(`dsh web exited before binding (code ${String(child.exitCode)})`)
+      }
+      if (Date.now() > deadline) {
+        throw new Error(`dsh web did not print its URL within ${timeoutMs}ms`)
+      }
+      await sleepMs(100)
+    }
+  }
+
   /** Stop the child process. */
   async stop(): Promise<void> {
     this.stopping = true
     const child = this.child
     this.child = null
-    if (child === null || child.exitCode !== null) return
+    if (child === null || child.exitCode !== null) {
+      this.stopLogForwarding()
+      return
+    }
     await new Promise<void>((resolve) => {
       const timer = setTimeout(() => {
         try { child.kill('SIGKILL') } catch { /* already gone */ }
@@ -642,6 +900,7 @@ export class DshServer {
       })
       try { child.kill('SIGTERM') } catch { /* already gone */ }
     })
+    this.stopLogForwarding()
   }
 
   /** True when the server is bound and usable (owned child alive, or adopted). */

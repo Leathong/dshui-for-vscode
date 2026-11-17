@@ -12,7 +12,9 @@ import * as fs from 'node:fs'
 import * as https from 'node:https'
 import * as path from 'node:path'
 import * as vscode from 'vscode'
-import { bundledCliPath, DshServer, probeDshuiMarker, probeDshuiServer, verifyLaunchToken } from './dshServer'
+import {
+  bundledCliPath, DshServer, probeDshuiMarker, probeDshuiServer, readLogTail, serverLogPath, verifyLaunchToken,
+} from './dshServer'
 import { installCrashHandlers, logger, setLogFile } from './logger'
 import { killProcessOnPort } from './killPort'
 import { OpenBridge } from './openBridge'
@@ -482,6 +484,54 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   }
 
   /**
+   * Report a server crash with the reason it left behind.
+   *
+   * dsh reports a fatal failure exactly once, as one `dsh: fatal uncaught
+   * exception: …` line on stderr, then disposes its runtime (aborting every
+   * in-flight turn) and exits non-zero. That stderr is gone once the server
+   * outlived its spawning window, so its durable log tail is the only evidence:
+   * copy it into the extension log and point the user at it.
+   * @param handle - the crashed own-child handle.
+   * @param code - the exit code.
+   * @param signal - the terminating signal, when it was killed.
+   */
+  function reportServerCrash(
+    handle: DshServer,
+    code: number,
+    signal: NodeJS.Signals | null,
+  ): void {
+    const tail = handle.recentLogTail(40)
+    const logFile = handle.logFile
+    const where = logFile === null ? '' : ` (log: ${logFile})`
+    const outcome = `dsh server crashed (code ${String(code)})`
+    const detail = signal === null ? '' : `, signal ${String(signal)}`
+    if (tail === '') {
+      logger.error(`[dshui] ${outcome}${detail}; no server output was captured${where}`)
+    } else {
+      logger.error(`[dshui] ${outcome}${detail}${where}; last output:\n${tail}`)
+    }
+    void vscode.window.showWarningMessage(
+      `dsh UI: ${outcome}。正在运行的任务会被中断，会话数据已持久化。`,
+      '查看日志',
+    ).then((choice) => {
+      if (choice === '查看日志') logger.show()
+    })
+  }
+
+  /**
+   * A shared server this window merely adopted reports no child exit, so when
+   * the watchdog finds it gone, salvage the fatal line from its durable log
+   * before another window respawns on the same port (same file name).
+   * @param port - the adopted server's port.
+   */
+  function reportLostSharedServer(port: number): void {
+    const logFile = serverLogPath(dshHome, port)
+    const tail = readLogTail(logFile, 60)
+    if (!/fatal uncaught exception|fatal load failure|Shutting down/i.test(tail)) return
+    logger.error(`[dshui] shared server on port ${port} died (log: ${logFile}); last output:\n${tail}`)
+  }
+
+  /**
    * (Re)start the server for the given workspace, reusing a live one bound to
    * the same folder. An adopted (child-less) handle can outlive the process it
    * points at; every URL built for such a handle resolves the launch token
@@ -669,6 +719,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
           if (server === created) serverStart = null
           // 主动 stop()（重载窗口、dshui.restartServer 重启自有服务器）不算意外退出。
           if (deactivating || created.stoppingRequested) return
+          // 非 0 退出 = 崩溃：dsh 的 failLoud 先 dispose（中断所有正在跑的 turn）
+          // 再 exit(1)。把持久日志尾部写进扩展日志并提示，崩溃原因就不再依赖
+          // 「拉起服务器的窗口还活着」这个前提。code 为 null 是重启失败的
+          // 哨兵回调（不是崩溃），不在这里报。
+          if (code !== null && code !== 0) reportServerCrash(created, code, signal)
           // 共享服务器在本窗口仍存活时被回收：延迟重新会合（probe 命中别的窗口
           // 重新拉起的服务就直接采纳，否则本窗口成为新 owner）。只接管干净的
           // 退出（code 0 = host 插件的空注册表自回收）；崩溃/被信号杀死由
@@ -849,6 +904,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       return
     }
     logger.warn(`[dshui] shared server on port ${port} is gone; re-rendezvousing`)
+    reportLostSharedServer(port)
     if (active.shared && server === active) {
       // Adopted handle whose process died: dropping it makes the next
       // startServer probe/attach/spawn instead of reusing the dead port.
