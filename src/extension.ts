@@ -27,6 +27,7 @@ import {
   buildSnippetReference,
   type ReferencePayload,
 } from './reference'
+import { findSubagentSessionDirs } from './sessionLineage'
 
 const VIEW_ID = 'dshui.view'
 
@@ -182,14 +183,21 @@ function sessionDirPath(dshHome: string, sessionId: string, cwd: string): string
 interface DeleteSessionResult {
   ok: boolean
   error?: string
+  /** Subagent sessions removed together with the deleted session (best effort). */
+  removedSubagents?: number
 }
 
 /**
- * Delete a session's persisted directory through the VS Code file API
- * (`workspace.fs.delete`). The request carries the session's own cwd (from
- * its list summary), so ungrouped sessions resolve too; the encoded path is
- * guaranteed to stay inside the dsh sessions root. A missing directory
- * counts as success — the goal, the session being gone, already holds.
+ * Delete one session's persisted directory and the subagent sessions it
+ * spawned. The request carries the session's own cwd (from its list summary),
+ * so ungrouped sessions resolve too; the encoded path is guaranteed to stay
+ * inside the dsh sessions root. A missing directory counts as success — the
+ * goal, the session being gone, already holds.
+ *
+ * The session list hides subagent sessions, so the children a deleted session
+ * spawned would otherwise stay behind as directories no UI can reach again.
+ * They are resolved from the persisted headers (`origin: 'subagent'` plus
+ * `parentSession`, see `sessionLineage.ts`) and removed after the parent.
  * @param dshHome - the dsh home directory.
  * @param sessionId - the session id.
  * @param cwd - the session's project directory.
@@ -203,12 +211,52 @@ async function deleteSessionFile(dshHome: string, sessionId: string, cwd: string
   }
   try {
     await vscode.workspace.fs.delete(vscode.Uri.file(target), { recursive: true })
-    return { ok: true }
   } catch (error) {
     const code = (error as { code?: unknown })?.code
-    if (code === 'FileNotFound' || code === 'ENOENT') return { ok: true }
-    return { ok: false, error: error instanceof Error ? error.message : String(error) }
+    if (code !== 'FileNotFound' && code !== 'ENOENT') {
+      return { ok: false, error: error instanceof Error ? error.message : String(error) }
+    }
+    // The session is already gone; still sweep children an earlier delete left behind.
   }
+  const removedSubagents = await deleteSubagentSessionDirs(sessionsRoot, sessionId)
+  if (removedSubagents > 0) {
+    logger.info(`[dshui] deleted session ${sessionId} with ${String(removedSubagents)} subagent session(s)`)
+  }
+  return { ok: true, removedSubagents }
+}
+
+/**
+ * Remove the persisted directories of every subagent session one session
+ * spawned, transitively (see `findSubagentSessionDirs`). Each directory is
+ * independent, so one failure must not stop the rest; a directory that is
+ * already gone counts as removed, because the goal holds for it.
+ * @param sessionsRoot - the dsh home's `sessions` directory.
+ * @param sessionId - the session being deleted.
+ * @returns how many subagent session directories are gone.
+ */
+async function deleteSubagentSessionDirs(sessionsRoot: string, sessionId: string): Promise<number> {
+  let dirs: string[]
+  try {
+    dirs = await findSubagentSessionDirs(sessionsRoot, sessionId)
+  } catch (error) {
+    logger.warn(`[dshui] failed to look up subagent sessions of ${sessionId}:`, error)
+    return 0
+  }
+  let removed = 0
+  for (const dir of dirs) {
+    try {
+      await vscode.workspace.fs.delete(vscode.Uri.file(dir), { recursive: true })
+      removed += 1
+    } catch (error) {
+      const code = (error as { code?: unknown })?.code
+      if (code === 'FileNotFound' || code === 'ENOENT') {
+        removed += 1
+        continue
+      }
+      logger.warn(`[dshui] failed to delete subagent session directory ${dir}:`, error)
+    }
+  }
+  return removed
 }
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
@@ -929,9 +977,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         webviewView.webview.options = { enableScripts: true }
         // Session deletion from the embedded dsh UI: the workspace plugin
         // posts { type: 'dshui:deleteSession', sessionId, cwd } (relayed by
-        // the shell); the host removes the session's persisted directory
-        // through the VS Code file API and answers with
-        // { type: 'dshui:sessionDeleted', sessionId, ok, error? }.
+        // the shell); the host removes the session's persisted directory plus
+        // the subagent sessions it spawned through the VS Code file API and
+        // answers with
+        // { type: 'dshui:sessionDeleted', sessionId, ok, error?, removedSubagents? }.
         webviewView.webview.onDidReceiveMessage((message: unknown) => {
           const data = message as { type?: unknown; sessionId?: unknown; cwd?: unknown; url?: unknown; path?: unknown; modificationId?: unknown; listId?: unknown; change?: unknown } | null
           if (data === null || typeof data !== 'object' || typeof data.type !== 'string') return

@@ -54,7 +54,8 @@ agentic coding 框架，主张「一切皆插件」）的 Web UI 嵌入 VS Code 
    所见即当前文件夹。
 3. **输入框常驻底部**。移除居中的「新会话」hero，composer 在任意状态下都固定在底部。
 4. **会话可直接删除**（菜单里同时保留 dsh 自带的「归档」）。删除操作由扩展宿主经 VS Code 文件 API
-   直接移除 `~/.dsh/sessions/...` 下的会话日志（不经 dsh 的归档 RPC，dsh 自身行为不变）。
+   直接移除 `~/.dsh/sessions/...` 下的会话日志，并一并清掉该会话派生过的子 agent 会话（不经 dsh 的
+   归档 RPC，dsh 自身行为不变）。
 5. **用户消息中的 markdown 链接可点击**。`[label](url)` 形式的 http/https/mailto 链接在系统浏览器
    打开；相对路径（如 `[Makefile](Makefile)`）按会话 cwd 解析并在当前窗口打开对应文件，家目录路径
    （如 `~/.dsh/profiles/web/cordis.patch.yml`，含 `../~/.dsh/...` 这类写法）解析到账号家目录。
@@ -412,8 +413,12 @@ VS Code 侧边栏视图（webview）
   携带会话 id 与其工作区目录），外壳转发给扩展宿主；宿主按 dsh 的会话路径规则
   （`$DSH_HOME/sessions/<工作区目录编码>/<会话 id>/`，与 `dsh-session-persistence-jsonl` 的
   `projectKey`/`encodeSegment` 一致）定位会话目录，用 **VS Code 文件 API**
-  （`vscode.workspace.fs.delete`，递归）删除其日志文件，再经外壳回传结果
-  （`dshui:sessionDeleted`）；插件收到确认后隐藏该行（下次 `session.list` 重拉时该会话已不存在），
+  （`vscode.workspace.fs.delete`，递归）删除其日志文件。会话列表不显示子 agent 会话
+  （`origin: 'subagent'`），父会话删掉后这些子会话再没有入口，因此宿主随后扫描
+  `$DSH_HOME/sessions` 下每个会话目录的首条记录（zstd 压缩时只解压首个帧），按 `parentSession`
+  递归找出该会话派生过的子会话目录一并删除（`src/sessionLineage.ts`）；单个子会话读不出或删不掉
+  只记日志，不改变本次删除结果。结果经外壳回传（`dshui:sessionDeleted`，含清掉的子会话数
+  `removedSubagents`）；插件收到确认后隐藏该行（下次 `session.list` 重拉时该会话已不存在），
   若删除的是当前会话则回到「新会话」视图。非 VS Code 环境（如在系统浏览器中打开）或宿主无响应
   （15 秒超时）时删除失败并保留该行。
 - **主题跟随**：webview iframe 内的 `prefers-color-scheme` 本跟随操作系统，与 VS Code 主题

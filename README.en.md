@@ -61,7 +61,8 @@ Compared with the stock browser UI, this extension differs in five main ways:
    composer is fixed at the bottom in every state, like an active session.
 4. **Sessions can be deleted directly** (dsh's own archive action stays available in the same menu).
    Deleting is performed by the extension host via the VS Code file API, which removes the session log
-   files under `~/.dsh/sessions/...` directly (bypassing dsh's archive RPC; dsh itself is unchanged).
+   files under `~/.dsh/sessions/...` plus the subagent sessions that session spawned (bypassing dsh's
+   archive RPC; dsh itself is unchanged).
 5. **Markdown links in user messages are clickable.** `[label](url)` links over http/https/mailto open
    in the system browser; relative paths (e.g. `[Makefile](Makefile)`) resolve against the session cwd
    and open the file in the current window, while home paths (e.g.
@@ -481,11 +482,17 @@ VS Code sidebar view (webview)
   and its workspace directory), and the shell forwards it to the extension host. The host resolves the
   session directory using dsh's session path rules (`$DSH_HOME/sessions/<encoded workspace dir>/<session
   id>/`, matching the `projectKey`/`encodeSegment` of `dsh-session-persistence-jsonl`) and deletes its
-  log files with the **VS Code file API** (`vscode.workspace.fs.delete`, recursive), then reports the
-  result back through the shell (`dshui:sessionDeleted`). On confirmation the plugin hides the row (the
-  session is gone by the next `session.list`); if the deleted session was the current one, it returns
-  to the "new session" view. Outside VS Code (e.g. opened in a system browser) or when the host is
-  unresponsive (15-second timeout), deletion fails and the row is kept.
+  log files with the **VS Code file API** (`vscode.workspace.fs.delete`, recursive). The session list
+  hides the subagent sessions (`origin: 'subagent'`) a session spawned, which would be unreachable
+  once the parent is gone, so the host then scans each session directory's first record under
+  `$DSH_HOME/sessions` (decompressing only the first zstd frame when compressed), follows
+  `parentSession` transitively, and removes those subagent sessions too (`src/sessionLineage.ts`);
+  an unreadable or undeletable child is only logged and never changes the request's outcome. The
+  result (including `removedSubagents`) is reported back through the shell
+  (`dshui:sessionDeleted`). On confirmation the plugin hides the row (the session is gone by the next
+  `session.list`); if the deleted session was the current one, it returns to the "new session" view.
+  Outside VS Code (e.g. opened in a system browser) or when the host is unresponsive (15-second
+  timeout), deletion fails and the row is kept.
 - **Theme following:** `prefers-color-scheme` inside the webview iframe normally follows the OS, which
   may disagree with the VS Code theme (`workbench.colorTheme`). On every view load and theme change,
   the extension passes the current color scheme (Dark/HighContrast → dark, everything else → light) to
