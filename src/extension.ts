@@ -1429,6 +1429,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     },
     workspaceFolder: () => vscode.workspace.workspaceFolders?.[0]?.uri.fsPath,
     extensionId: context.extension.id,
+    // The bundled macOS helper carries the dsh icon and the system notification
+    // sound; the icon also names the app on Linux notify-send.
+    assets: {
+      macosNotifier: path.join(extensionRoot, 'resources', 'dshui-notifier.app', 'Contents', 'MacOS', 'dshui-notifier'),
+      icon: path.join(extensionRoot, 'media', 'icon.png'),
+    },
   }))
 
   /**

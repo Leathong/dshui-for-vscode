@@ -197,17 +197,9 @@ failLoud 只往 stderr 写一行致命诊断）。服务器崩溃时该日志尾
 
 ### 完成通知
 
-dsh 自身没有「一轮答完」的提醒：扩展把随包分发的 host 插件 `dshui-host-turn-notify` 挂进宿主，它在服务端监听 `session/event` 的 `turn/end`（真正结束的轮次才写，被中断/取消的轮次不写），把边界（会话、工作区、结束原因）发布到 `$DSH_HOME/dshui-turn-events-<port>.json`；扩展宿主轮询该文件，按**本窗口工作区**过滤后发出**系统通知**（macOS 走 `osascript`，Linux 走 `notify-send`），系统通道不可用时回退到 VS Code 应用内通知（目前是 Windows）。共享后端下多个窗口共用一个服务器，各窗口只提醒自己文件夹里的会话。
+dsh 自身没有「一轮答完」的提醒：扩展把随包分发的 host 插件 `dshui-host-turn-notify` 挂进宿主，它在服务端监听 `session/event` 的 `turn/end`（真正结束的轮次才写，被中断/取消的轮次不写），把边界（会话、工作区、结束原因）发布到 `$DSH_HOME/dshui-turn-events-<port>.json`；扩展宿主轮询该文件，按**本窗口工作区**过滤后发出**系统通知**，系统通道不可用时回退到 VS Code 应用内通知（Windows；macOS 上通知授权被拒或 helper 不可用时同样回退）。共享后端下多个窗口共用一个服务器，各窗口只提醒自己文件夹里的会话。
 
-VSCode 扩展 API 只提供应用内通知；VS Code 自己的「Chat 响应完成 / 任务完成」系统通知走内部通道，不对扩展开放，因此系统通知由扩展宿主调用系统命令发出。macOS 默认走 `osascript`（AppleScript Standard Additions 的 `display notification`）：通知中心显示为 **Script Editor**，点击不会聚焦 VS Code。可选安装 [`terminal-notifier`](https://github.com/julienXX/terminal-notifier)（当前 3.x）：
-
-```sh
-brew install terminal-notifier
-cp -R "$(brew --prefix terminal-notifier)/terminal-notifier.app" ~/Applications/   # macOS 只在该位置为它登记通知授权
-test -d ~/Applications/terminal-notifier.app && terminal-notifier -diagnose          # authorization 应为 authorized
-```
-
-首次发送时会弹出系统授权提示。扩展探测到后自动改用：通知显示为 terminal-notifier，点击可跳回 VS Code；从 terminal-notifier 3.0 起 macOS 不允许伪造发送者身份与图标（`-sender`/`-appIcon` 已移除），所以图标无法变成 VS Code。
+VSCode 扩展 API 只提供应用内通知；VS Code 自己的「Chat 响应完成 / 任务完成」系统通知走内部通道，不对扩展开放，因此系统通知由扩展宿主调用系统命令发出。macOS 走随包分发的 `resources/dshui-notifier.app`（源码在 `native/notifier/`，`make notifier` 用 Xcode 命令行工具重建；产物已入库）：通知带 **dsh 图标**、播放系统通知提示音，点击回到 VS Code。macOS 只允许发送方 app bundle 决定通知图标（`osascript` 显示为 Script Editor，terminal-notifier 显示为它的终端图标），所以图标只能由自带的 helper 提供。首次通知时系统会询问是否允许「dsh UI」发送通知（需手动允许；60 秒内未响应则本轮回退应用内通知）；看不到通知时到「系统设置 → 通知 → dsh UI」允许即可。helper 缺失或无法执行（安装不完整）时退回 `osascript`（显示为 Script Editor，点击不聚焦）。Linux 走 `notify-send`（带 dsh 图标）。
 
 点击定位到**具体窗口**走本扩展自己的 URI：通知点击打开 `vscode://leathong.dshui-for-vscode/focus?folder=<工作区>`，VS Code 把 URI 交给扩展的 URI handler；handler 用 `code <folder>`（CLI 打开上下文，**不会**触发「外部应用打开本地路径」确认框）聚焦已打开该文件夹的窗口，URI 正好落在目标窗口时还会顺带展开 dsh 侧边栏。信任范围只涉及本扩展：首次点击时 VS Code 会问 **Allow 'dsh UI for VS Code' extension to open this URI?**，勾选 **Do not ask me again for this extension** 并点 **Open** 即可；也可以直接在用户设置里信任本扩展：
 
@@ -215,7 +207,7 @@ test -d ~/Applications/terminal-notifier.app && terminal-notifier -diagnose     
 "extensions.confirmedUriHandlerExtensionIds": ["leathong.dshui-for-vscode"]
 ```
 
-不需要放宽 `security.promptForLocalFileProtocolHandling`（那是全局信任所有外部应用）。看不到通知时：在「系统设置 → 通知」允许对应 app，或用 `terminal-notifier -diagnose` 查看授权 / Focus / 摘要状态，必要时 `tccutil reset UserNotification fr.julienxx.oss.terminal-notifier` 重置授权。
+不需要放宽 `security.promptForLocalFileProtocolHandling`（那是全局信任所有外部应用）。看不到通知时：确认「系统设置 → 通知 → dsh UI」已允许、未开专注模式；没声音时检查「系统设置 → 声音 → 提醒音量」不为 0（通知提示音受它控制）以及 dsh UI 的「播放声音」开关；扩展日志 `$DSH_HOME/dshui-logs/extension.log` 记录成功（`turn completed system notification`）与失败（带 helper 的 stderr，如授权被拒、无 GUI 会话），也可直接运行随包分发的 `resources/dshui-notifier.app/Contents/MacOS/dshui-notifier --status` 查看授权状态。授权状态错乱（如扩展升级后 helper 重建）可重置后重试：`tccutil reset UserNotification com.leathong.dshui-notifier`。
 
 ### 引用文件与代码片段
 
@@ -654,7 +646,7 @@ npm run compile && npx @vscode/vsce package
   补丁（曾导出过 3447 文件 / 15.2 MB，而正常是 61 文件 / 约 217 KB）。
 - **`scripts/sync-dsh.mjs`**：拷贝 `@deepseek-ai/dsh` 运行时闭包含的包；若某包在 `.dsh-src`
   未构建出 `lib/`，脚本会告警列名，此时不要打包发布。
-- **升级 dsh 版本后不能只用 `make sync`**：`make sync` 只覆盖 `out/`、`dshui-plugins/`、`patch.yml`、
+- **升级 dsh 版本后不能只用 `make sync`**：`make sync` 只覆盖 `out/`、`dshui-plugins/`、`resources/`、`patch.yml`、
   `package.json`，**不动 `node_modules/@deepseek-ai`**。宿主闭包仍是旧版时，新版客户端 bundle 会加载
   失败（浏览器报 `Failed to load plugins`，例如 `settingsNumberField is not a function`）。请改用
   `make deploy` 完整重装。`make install` 末尾会自动运行 `scripts/clean-profile-links.mjs`，清掉旧版

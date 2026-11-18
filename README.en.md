@@ -210,17 +210,9 @@ fingerprint`): install Node.js ≥ 22.19 (or point `dshui.server.nodePath` at a 
 
 ### Turn-Completion Notifications
 
-dsh itself has no "a turn just finished" reminder. The extension mounts the bundled host plugin `dshui-host-turn-notify`, which listens to `session/event` → `turn/end` on the server (only turns that really ended are written; interrupted or cancelled turns are not), publishes each boundary (session, workspace, end reason) to `$DSH_HOME/dshui-turn-events-<port>.json`, and the extension host polls that file and raises a **desktop notification** for this window's workspace (macOS: `osascript`; Linux: `notify-send`), falling back to an in-app VS Code toast where no system channel is available (Windows today). Under the shared backend every window talks to one server but only reports sessions in its own folder.
+dsh itself has no "a turn just finished" reminder. The extension mounts the bundled host plugin `dshui-host-turn-notify`, which listens to `session/event` → `turn/end` on the server (only turns that really ended are written; interrupted or cancelled turns are not), publishes each boundary (session, workspace, end reason) to `$DSH_HOME/dshui-turn-events-<port>.json`, and the extension host polls that file and raises a **desktop notification** for this window's workspace, falling back to an in-app VS Code toast where no system channel is available (Windows today, and on macOS when the notification permission is denied or the helper is unusable). Under the shared backend every window talks to one server but only reports sessions in its own folder.
 
-VS Code's extension API offers in-app notifications only: VS Code's own "chat response received / task completed" system notifications use an internal channel that extensions cannot reach, so the extension host posts through the OS notification command. macOS uses `osascript` (AppleScript Standard Additions' `display notification`) by default: the banner appears as **Script Editor** and clicking it does not focus VS Code. Optionally install [`terminal-notifier`](https://github.com/julienXX/terminal-notifier) (currently 3.x):
-
-```sh
-brew install terminal-notifier
-cp -R "$(brew --prefix terminal-notifier)/terminal-notifier.app" ~/Applications/   # macOS only registers its notification authorization from there
-test -d ~/Applications/terminal-notifier.app && terminal-notifier -diagnose          # authorization should be "authorized"
-```
-
-The first notification triggers the system permission prompt. The extension detects terminal-notifier and uses it: the banner appears as terminal-notifier and clicking it jumps back to VS Code; since terminal-notifier 3.0 the sender identity and icon can no longer be overridden (`-sender`/`-appIcon` were removed), so the icon cannot become VS Code. On macOS the app bundle must also live in `~/Applications` for the notification authorization prompt to appear. If no banner appears, allow the app under System Settings → Notifications, or run `terminal-notifier -diagnose` for the authorization / Focus / Scheduled Summary state, and `tccutil reset UserNotification fr.julienxx.oss.terminal-notifier` to reset the grant.
+VS Code's extension API offers in-app notifications only: VS Code's own "chat response received / task completed" system notifications use an internal channel that extensions cannot reach, so the extension host posts through the OS notification command. On macOS the notification comes from the bundled `resources/dshui-notifier.app` (source in `native/notifier/`, rebuilt with `make notifier` and the Xcode command line tools; the built app is committed): it shows the **dsh icon**, plays the system notification sound, and focuses VS Code when clicked. macOS only lets the sending app bundle choose a notification's icon (`osascript` appears as Script Editor and terminal-notifier as its terminal icon), so the icon requires this helper. The first notification asks whether "dsh UI" may send notifications (answer it manually; after 60 seconds without an answer that turn falls back to the in-app toast); if no banner appears, allow it under System Settings → Notifications → dsh UI. When the helper is missing or cannot run (incomplete install) the extension falls back to `osascript` (appears as Script Editor, no click action). Linux uses `notify-send` with the dsh icon.
 
 Focusing the **exact window** uses this extension's own URI: a click opens `vscode://leathong.dshui-for-vscode/focus?folder=<workspace>`, VS Code hands the URI to the extension's URI handler, and the handler runs `code <folder>` (a CLI open, which does **not** trigger the "an external application wants to open a local path" confirmation) to focus the window that already has that folder open; when the URI lands on the right window it also reveals the dsh sidebar. Trust is scoped to this extension: the first click asks **Allow 'dsh UI for VS Code' extension to open this URI?** — tick **Do not ask me again for this extension** and press **Open**, or trust it up front in user settings:
 
@@ -228,7 +220,7 @@ Focusing the **exact window** uses this extension's own URI: a click opens `vsco
 "extensions.confirmedUriHandlerExtensionIds": ["leathong.dshui-for-vscode"]
 ```
 
-No need to relax `security.promptForLocalFileProtocolHandling` (which would trust every external application). If no banner appears, allow the app under System Settings → Notifications, or run `terminal-notifier -diagnose` for the authorization / Focus / Scheduled Summary state, and `tccutil reset UserNotification fr.julienxx.oss.terminal-notifier` to reset the grant.
+No need to relax `security.promptForLocalFileProtocolHandling` (which would trust every external application). If no banner appears, allow dsh UI under System Settings → Notifications, make sure Focus is off, and if it appears silently check System Settings → Sound → Alert volume (notification sounds follow it) and the dsh UI "Play sound" toggle; check `$DSH_HOME/dshui-logs/extension.log` for a `turn completed system notification` line or a `system notification ... failed` line carrying the helper's stderr (denied authorization, no GUI session); you can also run the bundled `resources/dshui-notifier.app/Contents/MacOS/dshui-notifier --status` to inspect the authorization state. If that state is stale (for example after an extension upgrade rebuilt the helper), reset it and try again: `tccutil reset UserNotification com.leathong.dshui-notifier`.
 
 ### Referencing Files and Code Selections
 
@@ -748,7 +740,7 @@ Other drift-prone spots to check after every upgrade:
   rejects the whole patch; exporting against a stale base swallows the entire upstream delta (it
   once came out as 3447 files / 15.2 MB, where the correct size is 61 files / ~217 KB).
 - **A dsh version bump needs `make deploy`, not just `make sync`:** `make sync` only copies `out/`,
-  `dshui-plugins/`, `patch.yml`, and `package.json` — it **does not touch
+  `dshui-plugins/`, `resources/`, `patch.yml`, and `package.json` — it **does not touch
   `node_modules/@deepseek-ai`**. With the old host closure in place the new client bundles fail to
   load (`Failed to load plugins` in the browser, e.g. `settingsNumberField is not a function`). Use
   `make deploy` for a full reinstall; `make install` now also runs

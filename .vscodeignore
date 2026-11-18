@@ -16,6 +16,9 @@ patches/**
 .vscode/**
 tsconfig.json
 
+# macOS 通知 helper 的源码；构建产物 resources/dshui-notifier.app 才随包分发。
+native/**
+
 # node_modules 内运行时绝不会加载的内容（node 只解析编译后的 .js/.mjs/.cjs）：
 # 1) 类型声明 .d.ts/.d.mts/.d.cts —— 仅编译期使用；
 # 2) TypeScript 源码 .ts/.mts/.cts —— 各包运行时入口均指向 dist/lib/esm 的编译产物，
@@ -49,4 +52,5 @@ node_modules/sherpa-onnx-node/**
 node_modules/sherpa-onnx-*/**
 
 # Keep: out/ (compiled extension), dshui-plugins/ (dshui plugin packages),
-# patch.yml, scripts/, media/, README.md, and node_modules/ (the bundled dsh runtime).
+# resources/ (the signed macOS notification helper), patch.yml, scripts/, media/,
+# README.md, and node_modules/ (the bundled dsh runtime).

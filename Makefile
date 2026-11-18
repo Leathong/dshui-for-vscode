@@ -10,6 +10,7 @@
 #   make dsh-gen-patch （漂移后）重新导出 patches/dshui-bundles.patch
 #   make sync-dsh   （可选）从 .dsh-src 构建产物同步 @deepseek-ai/* 到 node_modules
 #   make sync       快速同步运行产物到已安装副本（改 src/*.ts / dshui-plugins/ 后免打包）
+#   make notifier   重新构建随包分发的 macOS 通知 helper（改 native/notifier/ 后运行，需 Xcode CLT）
 #   make login      登录 VS Code 市场（发布前一次性操作，或导出 VSCE_PAT 代替）
 #   make publish    发布到 VS Code 市场（默认不递增版本，BUMP=... 时递增）
 #   make publish-vsix    直接上传当前 vsix（不递增版本）
@@ -58,13 +59,19 @@ AUTH_FLAG := $(if $(AZURE),--azure-credential,$(if $(VSCE_PAT),--pat '$(VSCE_PAT
 GH_TAG    ?= v$(VERSION)
 GH_REPO   ?=
 
-.PHONY: all deploy package install compile dsh-build dsh-apply-patch dsh-gen-patch sync-dsh \
+.PHONY: all deploy package install compile notifier dsh-build dsh-apply-patch dsh-gen-patch sync-dsh \
         verify-deps sync clean help login verify-pat publish publish-vsix publish-ovsx release unpublish
 
 all: deploy
 
 compile:
 	npm run compile
+
+# 重新构建随包分发的 macOS 通知 helper（terminal 图标 → dsh 图标 + 提示音）。
+# 需要 Xcode 命令行工具（clang/iconutil/codesign）；产物 resources/dshui-notifier.app
+# 已入库，普通打包与安装不需要它。改了 native/notifier/ 下的源码后才要跑。
+notifier:
+	sh native/notifier/build.sh
 
 # ---- dsh 源码构建 ----
 # .dsh-src 是 deepseek-harness 的上游源码检出（不入库），扩展的 @deepseek-ai/* 运行时由它
@@ -243,16 +250,17 @@ unpublish:
 
 # 开发期快速同步：把运行产物拷入已安装副本，免重新打包 vsix。
 # 同步内容：out/（扩展主程序）、dshui-plugins/（host 插件 + 被替换的 UI 客户端
-# bundle）、patch.yml、media/、package.json。注意：node_modules/@deepseek-ai
+# bundle）、resources/（macOS 通知 helper）、patch.yml、media/、package.json。注意：node_modules/@deepseek-ai
 # 不在同步范围，依赖变更后请改用 make deploy 完整重装。
 sync: compile
 	@test -d "$(EXT_DIR)" || (echo "错误：未找到已安装副本 $(EXT_DIR)，请先 make install" && exit 1)
 	@node scripts/verify-overlay.mjs
 	@DEST="$(EXT_DIR)" && \
 	echo "同步到 $$DEST ..." && \
-	rm -rf "$$DEST/out" "$$DEST/dshui-plugins" && \
+	rm -rf "$$DEST/out" "$$DEST/dshui-plugins" "$$DEST/resources" && \
 	cp -R out "$$DEST/out" && \
 	cp -R dshui-plugins "$$DEST/dshui-plugins" && \
+	cp -R resources "$$DEST/resources" && \
 	cp -R media "$$DEST/media" && \
 	cp package.json patch.yml "$$DEST/" && \
 	echo "同步完成。重载窗口（Developer: Reload Window）使改动生效。" && \
@@ -268,6 +276,7 @@ help:
 	@echo "  make package    只重新打包 vsix"
 	@echo "  make install    打包并覆盖安装"
 	@echo "  make compile    只编译 TypeScript"
+	@echo "  make notifier   重新构建 macOS 通知 helper（仅改了 native/notifier/ 时需要）"
 	@echo "  make dsh-build  从 dsh 源码构建 .dsh-src（clone+切基提交+套补丁+install+build）"
 	@echo "  make dsh-apply-patch  （子步骤）准备 .dsh-src 检出并套补丁；RESET=1 重置到基提交重套"
 	@echo "  make dsh-gen-patch   （漂移后）从基提交重新导出 patches/dshui-bundles.patch"

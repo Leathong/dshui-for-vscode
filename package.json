@@ -203,7 +203,7 @@
             "Notify on every completed or failed turn, also while the window is focused."
           ],
           "default": "unfocused",
-          "description": "Raise a desktop notification when a dsh turn finishes in this window's workspace (completed, or failed with an error). The extension host posts it to the OS notification center (macOS: Script Editor via osascript, or terminal-notifier when installed — its click opens this extension's vscode:// focus URI, which focuses the window of that workspace after trusting this extension once, either through VS Code's \"Allow 'dsh UI for VS Code' extension to open this URI?\" dialog or by listing it in extensions.confirmedUriHandlerExtensionIds; Linux: notify-send) and falls back to an in-app VS Code toast where no system channel is available (Windows). Turn completion is detected by the bundled dsh host plugin in the dsh home; cancelled and blocked turns are never announced."
+          "description": "Raise a desktop notification when a dsh turn finishes in this window's workspace (completed, or failed with an error). macOS: the bundled dsh notifier app shows the dsh icon and plays the system notification sound — the first notification asks for notification permission, and clicking the banner opens this extension's vscode:// focus URI, which focuses the window of that workspace after trusting this extension once (VS Code's \"Allow 'dsh UI for VS Code' extension to open this URI?\" dialog, or extensions.confirmedUriHandlerExtensionIds). Linux: notify-send. Windows: in-app VS Code toast. Turn completion is detected by the bundled dsh host plugin in the dsh home; cancelled and blocked turns are never announced."
         }
       }
     }

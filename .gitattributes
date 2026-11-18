@@ -1,0 +1,3 @@
+# 已签名的 macOS 通知 helper 产物：按二进制保存，换行/文本转换会破坏 codesign
+# 的资源哈希，Windows 检出（core.autocrlf）尤其如此。
+resources/dshui-notifier.app/** binary

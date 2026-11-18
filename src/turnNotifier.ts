@@ -17,7 +17,7 @@ import * as path from 'node:path'
 import * as vscode from 'vscode'
 import { focusUri } from './focusUri'
 import { logger } from './logger'
-import { sendSystemNotification } from './systemNotifier'
+import { sendSystemNotification, type NotificationAssets } from './systemNotifier'
 import {
   advanceTurnEventCursor,
   parseTurnEventFeed,
@@ -63,6 +63,8 @@ export interface TurnNotifierOptions {
   readonly workspaceFolder?: () => string | undefined
   /** This extension's id; the click deeplink authority and its trust entry. */
   readonly extensionId: string
+  /** Notification commands plus the assets (notifier helper, icon) they need. */
+  readonly assets: NotificationAssets
 }
 
 /**
@@ -179,7 +181,8 @@ export class TurnNotifier implements vscode.Disposable {
    *
    * The OS notification center is the primary channel; the in-app toast is
    * only the fallback for platforms or hosts where no system command works
-   * (Windows today, a missing notify-send, or a failed spawn).
+   * (Windows today, a denied notification permission, a missing notify-send,
+   * or a failed spawn).
    * @param outcome - `completed` or `failed` reading of the boundary.
    * @param workspacePath - this window's workspace root (its folder names the message).
    */
@@ -203,7 +206,7 @@ export class TurnNotifier implements vscode.Disposable {
     // then focuses the window that has this folder open.
     const focusFolder = this.options.workspaceFolder?.() ?? workspacePath
     const uri = focusUri(this.options.extensionId, focusFolder)
-    if (await sendSystemNotification({ title: 'dsh', body, focusUri: uri })) {
+    if (await sendSystemNotification({ title: 'dsh', body, focusUri: uri }, this.options.assets)) {
       logger.info(`[dshui] turn ${outcome} system notification for ${folder}`)
       return
     }
